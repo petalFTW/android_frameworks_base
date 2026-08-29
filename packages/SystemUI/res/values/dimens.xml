@@ -2299,4 +2299,33 @@
     <dimen name="tile_details_entry_start_margin">16dp</dimen>
     <!-- Tile Details end -->
 
+    <!-- Liquid-drop dynamic island (PETAL-ISLAND) -->
+    <dimen name="island_chip_size">26dp</dimen>
+    <dimen name="island_capsule_height">30dp</dimen>
+    <dimen name="island_capsule_min_width">64dp</dimen>
+    <dimen name="island_capsule_max_width">176dp</dimen>
+    <dimen name="island_call_capsule_width">96dp</dimen>
+    <dimen name="island_expanded_max_width">420dp</dimen>
+    <dimen name="island_expanded_side_margin">12dp</dimen>
+    <dimen name="island_expanded_height_notif">92dp</dimen>
+    <dimen name="island_expanded_height_call">108dp</dimen>
+    <dimen name="island_expanded_height_media">160dp</dimen>
+    <dimen name="island_expanded_height_media_max">192dp</dimen>
+    <dimen name="island_top_offset">4dp</dimen>
+    <dimen name="island_corner_capsule">15dp</dimen>
+    <dimen name="island_corner_expanded">28dp</dimen>
+    <dimen name="island_elevation">10dp</dimen>
+    <dimen name="island_capsule_padding_start">6dp</dimen>
+    <dimen name="island_capsule_padding_end">10dp</dimen>
+    <dimen name="island_icon_size">18dp</dimen>
+    <dimen name="island_capsule_gap">6dp</dimen>
+    <dimen name="island_expanded_padding">14dp</dimen>
+    <dimen name="island_art_size">64dp</dimen>
+    <dimen name="island_art_radius">14dp</dimen>
+    <dimen name="island_equalizer_bar_width">2.5dp</dimen>
+    <dimen name="island_equalizer_gap">2dp</dimen>
+    <dimen name="island_equalizer_radius">1.25dp</dimen>
+    <dimen name="island_equalizer_max_height">12dp</dimen>
+    <dimen name="island_equalizer_max_height_expanded">18dp</dimen>
+    <dimen name="island_droplet_base_radius">14dp</dimen>
 </resources>

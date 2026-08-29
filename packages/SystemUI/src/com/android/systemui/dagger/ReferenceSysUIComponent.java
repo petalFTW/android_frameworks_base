@@ -17,6 +17,7 @@
 package com.android.systemui.dagger;
 
 import com.android.systemui.controls.dagger.StartControlsStartableModule;
+import com.android.systemui.island.dagger.IslandModule;
 import com.android.systemui.keyguard.CustomizationProvider;
 import com.android.systemui.settings.MultiUserUtilsModule;
 import com.android.systemui.statusbar.NotificationInsetsModule;
@@ -34,6 +35,7 @@ import dagger.Subcomponent;
 @Subcomponent(modules = {
         DefaultComponentBinder.class,
         DependencyProvider.class,
+        IslandModule.class,
         MultiUserUtilsModule.class,
         NotificationInsetsModule.class,
         QsFrameTranslateModule.class,
