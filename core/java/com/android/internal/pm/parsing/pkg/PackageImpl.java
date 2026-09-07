@@ -78,6 +78,7 @@ import com.android.internal.pm.pkg.component.ParsedServiceImpl;
 import com.android.internal.pm.pkg.component.ParsedUsesPermission;
 import com.android.internal.pm.pkg.component.ParsedUsesPermissionImpl;
 import com.android.internal.pm.pkg.parsing.ParsingPackage;
+import com.android.internal.pm.ext.PackageIdResolver;
 import com.android.internal.pm.pkg.parsing.ParsingPackageHidden;
 import com.android.internal.pm.pkg.parsing.ParsingPackageUtils;
 import com.android.internal.pm.pkg.parsing.ParsingUtils;
@@ -2632,6 +2633,7 @@ public class PackageImpl implements ParsedPackage, AndroidPackageInternal,
 
     public ApplicationInfo toAppInfoWithoutStateWithoutFlags() {
         ApplicationInfo appInfo = new ApplicationInfo();
+        appInfo.setExt(PackageIdResolver.resolve(this));
 
         // Lines that are commented below are state related and should not be assigned here.
         // They are left in as placeholders, since there is no good backwards compatible way to

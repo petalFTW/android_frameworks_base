@@ -48,8 +48,11 @@ object PaletteTinter {
         val accent = ColorUtils.HSLToColor(hsl)
 
         // tintOnBg: white if it meets 4.5:1 contrast against the tinted background, else dark.
+        // calculateContrast rejects translucent backgrounds, so composite the tinted background
+        // over the island's black base first.
+        val opaqueBackground = ColorUtils.compositeColors(background, Color.BLACK)
         val onBackground =
-            if (ColorUtils.calculateContrast(Color.WHITE, background) >= 4.5f) {
+            if (ColorUtils.calculateContrast(Color.WHITE, opaqueBackground) >= 4.5f) {
                 Color.WHITE
             } else {
                 0xFF101012.toInt()

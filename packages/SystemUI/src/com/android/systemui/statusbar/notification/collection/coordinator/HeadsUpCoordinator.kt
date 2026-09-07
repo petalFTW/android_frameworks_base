@@ -98,6 +98,7 @@ constructor(
     private val mFlags: NotifPipelineFlags,
     private val statusBarNotificationChipsInteractor: StatusBarNotificationChipsInteractor,
     private val statusBarChipsUiEventLogger: StatusBarChipsUiEventLogger,
+    private val islandSettings: com.android.systemui.island.settings.IslandSettings,
     @IncomingHeader private val mIncomingHeaderController: NodeController,
     @Main private val mExecutor: DelayableExecutor,
 ) : Coordinator {
@@ -187,8 +188,13 @@ constructor(
     }
 
     private fun onHeadsUpViewBound(entry: NotificationEntry, isPinnedByUser: Boolean) {
-        mHeadsUpManager.showNotification(entry, isPinnedByUser)
         mEntriesBindingUntil.remove(entry.key)
+        // Replacement may have been enabled while the heads-up view was inflating.
+        if (shouldSuppressHeadsUpForIsland()) {
+            mHeadsUpViewBinder.unbindHeadsUpView(entry)
+            return
+        }
+        mHeadsUpManager.showNotification(entry, isPinnedByUser)
     }
 
     /**
@@ -414,6 +420,13 @@ constructor(
             cleanUpEntryTimes()
         }
 
+    /**
+     * Island replacement owns banner presentation, including group summaries and notifications
+     * filtered by the island. Per-key tracking lets those stock banners slip through.
+     */
+    private fun shouldSuppressHeadsUpForIsland(): Boolean =
+        islandSettings.isEnabled() && islandSettings.replaceHeadsUp()
+
     private fun isDisqualifiedChild(entry: NotificationEntry): Boolean {
         if (entry.channel == null || entry.channel.id == null) {
             return false
@@ -488,6 +501,15 @@ constructor(
 
     private fun handlePostedEntry(posted: PostedEntry, hunMutator: HunMutator, scenario: String) {
         mLogger.logPostedEntryWillEvaluate(posted, scenario)
+
+        // Re-check after group alert transfers, which can force shouldHeadsUpEver back to true.
+        if (shouldSuppressHeadsUpForIsland()) {
+            cancelHeadsUpBind(posted.entry)
+            if (posted.isHeadsUpEntry) {
+                hunMutator.removeNotification(posted.key, /* releaseImmediately= */ true)
+            }
+            return
+        }
 
         if (posted.wasAdded) {
             if (posted.shouldHeadsUpEver) {
@@ -595,9 +617,10 @@ constructor(
                 // makeAndLogHeadsUpDecision includes check for whether this notification should be
                 // filtered
                 val shouldHeadsUpEver =
-                    mVisualInterruptionDecisionProvider
-                        .makeAndLogHeadsUpDecision(entry)
-                        .shouldInterrupt
+                    !shouldSuppressHeadsUpForIsland() &&
+                        mVisualInterruptionDecisionProvider
+                            .makeAndLogHeadsUpDecision(entry)
+                            .shouldInterrupt
                 mPostedEntries[entry.key] =
                     PostedEntry(
                         entry,
@@ -620,9 +643,10 @@ constructor(
              */
             override fun onEntryUpdated(entry: NotificationEntry) {
                 val shouldHeadsUpEver =
-                    mVisualInterruptionDecisionProvider
-                        .makeAndLogHeadsUpDecision(entry)
-                        .shouldInterrupt
+                    !shouldSuppressHeadsUpForIsland() &&
+                        mVisualInterruptionDecisionProvider
+                            .makeAndLogHeadsUpDecision(entry)
+                            .shouldInterrupt
                 val shouldHeadsUpAgain = shouldHunAgain(entry)
                 val isHeadsUpEntry = mHeadsUpManager.isHeadsUpEntry(entry.key)
                 val isBinding = isEntryBinding(entry)

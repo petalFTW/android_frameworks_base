@@ -518,26 +518,40 @@ public class DeviceAdapterTest {
 
     @Test
     @DisableFlags(Flags.FLAG_PRIMITIVE_COMPOSITION_ABSOLUTE_DELAY)
-    public void testUnsupportedPrimitives_withoutFlag_returnsOriginal() {
+    public void testUnsupportedPrimitives_withoutFlag_returnsWaveform() {
         VibrationEffect.Composed effect = new VibrationEffect.Composed(Arrays.asList(
                 new PrimitiveSegment(PRIMITIVE_TICK, 1, 10),
                 new PrimitiveSegment(PRIMITIVE_TICK, 0.5f, 10),
                 new PrimitiveSegment(PRIMITIVE_CLICK, 1, 100)),
                 /* repeatIndex= */ -1);
 
-        assertThat(mAdapter.adaptToVibrator(EMPTY_VIBRATOR_ID, effect)).isEqualTo(effect);
+        VibrationEffect.Composed adapted = (VibrationEffect.Composed)
+                mAdapter.adaptToVibrator(EMPTY_VIBRATOR_ID, effect);
+        assertThat(adapted).isNotNull();
+        adapted.validate();
+        assertThat(adapted.getRepeatIndex()).isEqualTo(-1);
+        for (VibrationEffectSegment segment : adapted.getSegments()) {
+            assertThat(segment).isInstanceOf(StepSegment.class);
+        }
     }
 
     @Test
     @EnableFlags(Flags.FLAG_PRIMITIVE_COMPOSITION_ABSOLUTE_DELAY)
-    public void testUnsupportedPrimitives_returnsNull() {
+    public void testUnsupportedPrimitives_returnsWaveform() {
         VibrationEffect.Composed effect = new VibrationEffect.Composed(Arrays.asList(
                 new PrimitiveSegment(PRIMITIVE_TICK, 1, 10),
                 new PrimitiveSegment(PRIMITIVE_TICK, 0.5f, 10),
                 new PrimitiveSegment(PRIMITIVE_CLICK, 1, 100)),
                 /* repeatIndex= */ -1);
 
-        assertThat(mAdapter.adaptToVibrator(EMPTY_VIBRATOR_ID, effect)).isNull();
+        VibrationEffect.Composed adapted = (VibrationEffect.Composed)
+                mAdapter.adaptToVibrator(EMPTY_VIBRATOR_ID, effect);
+        assertThat(adapted).isNotNull();
+        adapted.validate();
+        assertThat(adapted.getRepeatIndex()).isEqualTo(-1);
+        for (VibrationEffectSegment segment : adapted.getSegments()) {
+            assertThat(segment).isInstanceOf(StepSegment.class);
+        }
     }
 
     @Test
@@ -564,7 +578,10 @@ public class DeviceAdapterTest {
                 new PrimitiveSegment(PRIMITIVE_CLICK, 0.5f, 20, DELAY_TYPE_PAUSE)),
                 /* repeatIndex= */ -1);
 
-        assertThat(mAdapter.adaptToVibrator(EMPTY_VIBRATOR_ID, effect)).isNull();
+        VibrationEffect.Composed portable = (VibrationEffect.Composed)
+                mAdapter.adaptToVibrator(EMPTY_VIBRATOR_ID, effect);
+        assertThat(portable).isNotNull();
+        portable.validate();
         assertThat(mAdapter.adaptToVibrator(BASIC_VIBRATOR_ID, effect)).isEqualTo(expected);
     }
 

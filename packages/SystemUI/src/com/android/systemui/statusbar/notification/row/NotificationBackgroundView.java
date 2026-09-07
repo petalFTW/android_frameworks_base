@@ -410,6 +410,14 @@ public class NotificationBackgroundView extends View implements Dumpable,
      * Sets the current top and bottom radius for this background.
      */
     public void setRadius(float topRoundness, float bottomRoundness) {
+        // petalOS: with glass notifications enabled, rows adopt the island's rounded blob
+        // silhouette regardless of the stack's per-position radii.
+        if (petalGlassNotificationsEnabled()) {
+            float glassRadius = getResources().getDimensionPixelSize(
+                    R.dimen.petal_glass_notif_corner_radius);
+            topRoundness = glassRadius;
+            bottomRoundness = glassRadius;
+        }
         if (topRoundness == mCornerRadii[0] && bottomRoundness == mCornerRadii[4]) {
             return;
         }
@@ -423,6 +431,14 @@ public class NotificationBackgroundView extends View implements Dumpable,
         mCornerRadii[6] = bottomRoundness;
         mCornerRadii[7] = bottomRoundness;
         updateBackgroundRadii();
+    }
+
+    /** True when the petalOS glass-notification restyle is enabled. */
+    private boolean petalGlassNotificationsEnabled() {
+        return android.provider.Settings.Secure.getInt(
+                getContext().getContentResolver(),
+                com.android.systemui.island.settings.IslandSettings.KEY_GLASS_NOTIFICATIONS,
+                0) != 0;
     }
 
     public void setBottomAmountClips(boolean clips) {

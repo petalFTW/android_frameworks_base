@@ -33,6 +33,7 @@ import android.multiuser.Flags;
 import android.os.Build;
 
 import com.android.internal.R;
+import com.android.internal.pm.pkg.parsing.GmsCompatPkgParser;
 import com.android.internal.pm.pkg.parsing.ParsingPackage;
 import com.android.internal.pm.pkg.parsing.ParsingPackageUtils;
 import com.android.internal.pm.pkg.parsing.ParsingUtils;
@@ -192,6 +193,8 @@ public class ParsedServiceUtils {
             }
             service.setExported(hasIntentFilters);
         }
+
+        GmsCompatPkgParser.amendParsedService(pkg.getPackageName(), service);
 
         return input.success(service);
     }

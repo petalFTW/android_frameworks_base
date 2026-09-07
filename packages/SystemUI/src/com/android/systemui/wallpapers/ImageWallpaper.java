@@ -53,6 +53,8 @@ import java.util.List;
 
 import javax.inject.Inject;
 
+import org.petalos.config.PetalConfig;
+
 /**
  * Default built-in wallpaper that simply shows a static image.
  */
@@ -214,7 +216,9 @@ public class ImageWallpaper extends WallpaperService {
 
         @Override
         public boolean shouldZoomOutWallpaper() {
-            return true;
+            // Depth pixels must match the foreground.
+            return getWallpaperFlags() != FLAG_LOCK
+                    || !PetalConfig.isDepthEnabled(mUserTracker.getUserContext());
         }
 
         @Override

@@ -65,6 +65,15 @@ public class FusedLocationProvider extends LocationProviderBase {
     // Maximum request interval at which we will activate GPS (because GPS sometimes consumes
     // excessive power with large intervals).
     private static final long MAX_GPS_INTERVAL_MS = 5 * 1000; // 5 seconds
+    /**
+     * Maximum interval for which the NLP fallback will hold GPS. petalOS: without a network
+     * location provider every fused request used to fall through to GPS, which kept the GNSS
+     * engine started around the clock for low-frequency background requests (e.g.
+     * TwilightService's 1h BALANCED request) and drained the battery ("Android System" was the
+     * top consumer). Long-interval background requests no longer hold the GNSS engine open;
+     * they are served from the last fix instead.
+     */
+    private static final long MAX_GPS_FALLBACK_INTERVAL_MS = 60 * 1000; // 1 minute
 
     private final Object mLock = new Object();
 
@@ -171,8 +180,10 @@ public class FusedLocationProvider extends LocationProviderBase {
 
         boolean requestAllowsGps = mRequest.getQuality() == QUALITY_HIGH_ACCURACY
                 && mRequest.getIntervalMillis() <= MAX_GPS_INTERVAL_MS;
+        boolean fallbackAllowsGps = !mNlpPresent
+                && mRequest.getIntervalMillis() <= MAX_GPS_FALLBACK_INTERVAL_MS;
         long gpsInterval =
-                mGpsPresent && (requestAllowsGps || !mNlpPresent)
+                mGpsPresent && (requestAllowsGps || fallbackAllowsGps)
                         ? mRequest.getIntervalMillis() : INTERVAL_DISABLED;
         long networkInterval = mNlpPresent ? mRequest.getIntervalMillis() : INTERVAL_DISABLED;
 

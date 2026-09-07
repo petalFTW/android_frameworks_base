@@ -46,6 +46,7 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.SearchManager;
 import android.app.WallpaperManager;
+import android.app.compat.gms.GmsCompat;
 import android.compat.annotation.UnsupportedAppUsage;
 import android.content.AttributionSource;
 import android.content.ComponentName;
@@ -106,6 +107,7 @@ import android.view.WindowManager.LayoutParams;
 import android.widget.Editor;
 
 import com.android.internal.annotations.GuardedBy;
+import com.android.internal.gmscompat.GmsCompatApp;
 import com.android.internal.util.Preconditions;
 
 import java.io.IOException;
@@ -3636,9 +3638,31 @@ public final class Settings {
                     mReadableFieldsWithMaxTargetSdk);
         }
 
+        // Returns last path component of the relevant Uri.
+        // Keep in sync with GmsCompatApp#registerObserver
+        private String maybeGetGmsCompatNamespace() {
+            Uri uri = mUri;
+            // no need to use expensive equals() method in this case
+            if (uri == Global.CONTENT_URI) {
+                return "global";
+            }
+            if (uri == Secure.CONTENT_URI) {
+                return "secure";
+            }
+            return null;
+        }
+
         public boolean putStringForUser(ContentResolver cr, String name, String value,
                 String tag, boolean makeDefault, final @CanBeCURRENT @UserIdInt int userId,
                 boolean overrideableByRestore) {
+            if (GmsCompat.isEnabled()) {
+                String ns = maybeGetGmsCompatNamespace();
+                if (ns != null && !mAllFields.contains(name)) {
+                    return GmsCompatApp.putString(ns, name, value);
+                }
+                return false;
+            }
+
             try {
                 Bundle arg = new Bundle();
                 arg.putString(Settings.NameValueTable.VALUE, value);
@@ -3712,6 +3736,15 @@ public final class Settings {
         @UnsupportedAppUsage
         public String getStringForUser(ContentResolver cr, String name,
                 final @CanBeCURRENT @UserIdInt int userId) {
+            if (GmsCompat.isEnabled()) {
+                String ns = maybeGetGmsCompatNamespace();
+                if (ns != null) {
+                    if (!mAllFields.contains(name) && !name.startsWith("gmscompat")) {
+                        return GmsCompatApp.getString(ns, name);
+                    }
+                }
+            }
+
             final boolean isSelf = (userId == UserHandle.myUserId());
             final AttributionSource attributionSource = cr.getAttributionSource();
             final int deviceId =
@@ -3765,6 +3798,10 @@ public final class Settings {
             // still be regarded as readable.
             if (!isCallerExemptFromReadableRestriction() && mAllFields.contains(name)) {
                 if (!mReadableFields.contains(name)) {
+                    if (GmsCompat.isEnabled()) {
+                        return null;
+                    }
+
                     throw new SecurityException(
                             "Settings key: <" + name + "> is not readable. From S+, settings keys "
                                     + "annotated with @hide are restricted to system_server and "
@@ -3781,6 +3818,10 @@ public final class Settings {
                                 && application.getApplicationInfo().targetSdkVersion
                                 <= maxTargetSdk;
                         if (!targetSdkCheckOk) {
+                            if (GmsCompat.isEnabled()) {
+                                return null;
+                            }
+
                             throw new SecurityException(
                                     "Settings key: <" + name + "> is only readable to apps with "
                                             + "targetSdkVersion lower than or equal to: "
@@ -4637,6 +4678,19 @@ public final class Settings {
          * or not a valid integer.
          */
         public static int getInt(ContentResolver cr, String name, int def) {
+            if (GmsCompat.isEnabled()) {
+                if ("google_play_store_system_component_update".equals(name)) {
+                    // Stop Play Store from attempting to auto-install some system component
+                    // packages, such as "Android System SafetyCore" (com.google.android.safetycore)
+                    // and "Android System Key Verifier" (com.google.android.contactkeys)
+                    //
+                    // This setting also disables auto-updates of GmsCore and Play Store.
+                    if (!"1".equals(getString(cr, "gmscompat_bypass_sys_component_update_stub"))) {
+                        return 0;
+                    }
+                }
+            }
+
             return getIntForUser(cr, name, def, cr.getUserId());
         }
 
@@ -7240,6 +7294,29 @@ public final class Settings {
         // NOTE: If you add new settings here, be sure to add them to
         // com.android.providers.settings.SettingsProtoDumpUtil#dumpProtoSecureSettingsLocked.
 
+        /** @hide */
+        public static final String AUTO_GRANT_OTHER_SENSORS_PERMISSION = "auto_grant_OTHER_SENSORS_perm";
+
+        /** @hide */
+        public static final String SCREENSHOT_TIMESTAMP_EXIF = "screenshot_timestamp_exif";
+
+        /** @hide */
+        public static final String SCRAMBLE_PIN_LAYOUT_PRIMARY =
+                "lockscreen_scramble_pin_layout";
+
+        /** @hide */
+        public static final String SCRAMBLE_PIN_LAYOUT_SECONDARY =
+                "lockscreen_scramble_pin_layout_secondary";
+
+        /** @hide */
+        public static final String SCRAMBLE_SIM_PIN_LAYOUT = "scramble_sim_pin_layout";
+
+        /** @hide */
+        public static final String CROSS_PROFILE_CLIPBOARD_ACCESS = "cross_profile_clipboard_access";
+
+        /** @hide */
+        public static final String DISALLOW_DELAYED_LOCKING_ON_USER_STOP = "disallow_delayed_locking_on_user_stop";
+
         /**
          * The content:// style URL for this table
          */
@@ -7259,6 +7336,11 @@ public final class Settings {
                 CALL_METHOD_DELETE_SECURE,
                 sProviderHolder,
                 Secure.class);
+
+        /** @hide */
+        public static boolean isKnownKey(String key) {
+            return sNameValueCache.mAllFields.contains(key);
+        }
 
         @UnsupportedAppUsage
         private static final HashSet<String> MOVED_TO_LOCK_SETTINGS;
@@ -13905,6 +13987,61 @@ public final class Settings {
         // NOTE: If you add new settings here, be sure to add them to
         // com.android.providers.settings.SettingsProtoDumpUtil#dumpProtoGlobalSettingsLocked.
 
+        /** @hide */
+        public static final String ALLOW_DISABLING_HARDENING_VIA_APP_COMPAT_CONFIG =
+                "allow_automatic_pkg_hardening_config"; // historical name
+
+        /** @hide */
+        public static final String AUTO_REBOOT_TIMEOUT = "settings_reboot_after_timeout";
+
+        /** @hide */
+        public static final String GNSS_SUPL = "force_disable_supl"; // historical name
+
+        /** @hide */
+        public static final String GNSS_PSDS_STANDARD = "psds_server"; // historical name
+
+        /** @hide */
+        public static final String WIFI_AUTO_OFF = "wifi_off_timeout";
+
+        /** @hide */
+        public static final String BLUETOOTH_AUTO_OFF = "bluetooth_off_timeout";
+
+        /** @hide */
+        public static final String NFC_AUTO_OFF = "nfc_off_timeout";
+
+        /** @hide */
+        public static final String REMOTE_KEY_PROVISIONING_SERVER = "attest_remote_provisioner_server";
+
+        /** @hide */
+        public static final String RESTRICT_MEMORY_DYN_CODE_LOADING_BY_DEFAULT = "restrict_memory_dyn_code_exec";
+
+        /** @hide */
+        public static final String RESTRICT_STORAGE_DYN_CODE_LOADING_BY_DEFAULT = "restrict_storage_dyn_code_exec";
+
+        /** @hide */
+        public static final String RESTRICT_WEBVIEW_DYN_CODE_LOADING_BY_DEFAULT = "restrict_webview_dyn_code_exec";
+
+        /** @hide */
+        public static final String FORCE_APP_MEMTAG_BY_DEFAULT = "force_app_memtag";
+
+        /** @hide */
+        public static final String SHOW_SYSTEM_PROCESS_CRASH_NOTIFICATIONS = "show_system_process_crash_notifs";
+
+        /** @hide */
+        public static final String WIDEVINE_PROVISIONING_SERVER = "widevine_provisioner_server";
+
+        /** @hide */
+        public static final String BATTERY_CHARGE_LIMIT = "battery_charge_limit";
+
+        /** @hide */
+        public static final String NETWORK_LOCATION = "network_location";
+
+        /** @hide */
+        public static final String GEOCODER = "geocoder";
+
+        /** @hide */
+        public static final String CERT_TRANSPARENCY_DOWNLOADER = "cert_transparency_downloader";
+
         /**
          * The content:// style URL for global secure settings items.  Not public.
          */
@@ -19189,6 +19326,11 @@ public final class Settings {
                     CALL_METHOD_DELETE_GLOBAL,
                     sProviderHolder,
                     Global.class);
+
+        /** @hide */
+        public static boolean isKnownKey(String key) {
+            return sNameValueCache.mAllFields.contains(key);
+        }
 
         // Certain settings have been moved from global to the per-user secure namespace
         @UnsupportedAppUsage

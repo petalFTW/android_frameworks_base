@@ -16,27 +16,35 @@
 
 package com.android.systemui.island.render
 
+import android.graphics.Bitmap
+import android.graphics.BitmapShader
+import android.graphics.BlurMaskFilter
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.ColorFilter
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.PathMeasure
 import android.graphics.PixelFormat
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.drawable.Drawable
 import androidx.annotation.ColorInt
+import kotlin.random.Random
 
 /**
- * The "liquid glass" surface: a translucent tint fill, a thin light rim on the top and left edges,
- * and a specular sheen that slides across on every appearance/state change. Backdrop blur and the
- * drop shadow are handled by the window and the view respectively (see IslandWindow/IslandView).
+ * The "liquid glass" surface: a translucent tint fill, a film-grain speckle, a thin light rim on
+ * the top and left edges, and a specular sheen that slides across on every appearance/state change.
+ * Backdrop blur and the drop shadow are handled by the window and the view respectively (see
+ * IslandWindow/IslandView).
  *
- * Zero allocation in [draw]: all Paint/Path/RectF objects are pre-allocated.
+ * Zero allocation in [draw]: the grain bitmap + shader is cached; only the rim shader is rebuilt per
+ * draw (matching the original implementation).
  */
 class LiquidGlassDrawable : Drawable() {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val grainPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val rimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val sheenPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val path = Path()
@@ -53,10 +61,32 @@ class LiquidGlassDrawable : Drawable() {
 
     private var cornerRadius = 0f
     private var rimWidthPx = 1f
+    private var grainAlpha = DEFAULT_GRAIN_ALPHA
 
     /** -1f disables the sheen; [0..1] sweeps it across the surface. */
     private var specularProgress = -1f
     private var sheenShader: LinearGradient? = null
+
+    /** Film-grain speckle; the bitmap is generated once per process. */
+    private var grainShader: BitmapShader? = null
+
+    /** Neon rim sweep: -1f disables it; [0..1] sweeps a glowing comet once around the rim. */
+    private var neonProgress = -1f
+
+    @ColorInt
+    private var neonColor = Color.TRANSPARENT
+
+    private val neonMeasurePath = Path()
+    private val neonSegment = Path()
+    private val neonMeasure = PathMeasure()
+    private val neonCorePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    private val neonGlowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+
+    init {
+        grainShader = BitmapShader(noiseBitmap(), Shader.TileMode.REPEAT, Shader.TileMode.REPEAT)
+        grainPaint.shader = grainShader
+        grainPaint.alpha = grainAlpha
+    }
 
     fun setTintColor(@ColorInt color: Int) {
         if (tint != color) {
@@ -87,9 +117,28 @@ class LiquidGlassDrawable : Drawable() {
         }
     }
 
+    fun setGrainAlpha(alpha: Int) {
+        if (grainAlpha != alpha) {
+            grainAlpha = alpha
+            grainPaint.alpha = alpha
+            invalidateSelf()
+        }
+    }
+
     fun setSpecularProgress(progress: Float) {
         if (specularProgress != progress) {
             specularProgress = progress
+            invalidateSelf()
+        }
+    }
+
+    fun setNeonColor(@ColorInt color: Int) {
+        neonColor = color
+    }
+
+    fun setNeonProgress(progress: Float) {
+        if (neonProgress != progress) {
+            neonProgress = progress
             invalidateSelf()
         }
     }
@@ -98,12 +147,16 @@ class LiquidGlassDrawable : Drawable() {
         val bounds = bounds
         if (bounds.isEmpty) return
         rect.set(bounds)
+        buildPath()
 
         // Tint fill
         paint.color = tint
         paint.style = Paint.Style.FILL
-        buildPath()
+        paint.shader = null
         canvas.drawPath(path, paint)
+
+        // Film grain
+        canvas.drawPath(path, grainPaint)
 
         // Rim: vertical gradient stroke, inset by half the stroke width
         if (rimPaint.strokeWidth != rimWidthPx) rimPaint.strokeWidth = rimWidthPx
@@ -120,9 +173,66 @@ class LiquidGlassDrawable : Drawable() {
         canvas.drawPath(path, rimPaint)
         rimPaint.shader = null
 
+        // Neon rim sweep
+        if (neonProgress >= 0f) drawNeon(canvas, rimRect)
+
         // Specular sheen
         if (specularProgress in 0f..1f) drawSheen(canvas)
     }
+
+    /**
+     * Draws a glowing "comet" of app-coloured neon travelling once around the rim. A fixed-length
+     * chain follows a bright head; the whole thing fades in as it leaves the start point and fades
+     * out once the tail has caught up with the start (i.e. it has completed the loop).
+     */
+    private fun drawNeon(canvas: Canvas, rimRect: RectF) {
+        neonMeasurePath.reset()
+        neonMeasurePath.addRoundRect(rimRect, cornerRadius, cornerRadius, Path.Direction.CW)
+        neonMeasure.setPath(neonMeasurePath, false)
+        val perimeter = neonMeasure.length
+        if (perimeter <= 0f) return
+
+        val chainLength = perimeter * NEON_CHAIN_FRACTION
+        val head = neonProgress * (perimeter + chainLength)
+        val tail = (head - chainLength).coerceAtLeast(0f)
+        if (tail >= perimeter) return
+
+        neonSegment.reset()
+        val wrapped = head - perimeter
+        if (wrapped <= 0f) {
+            neonMeasure.getSegment(tail, head, neonSegment, true)
+        } else {
+            // The head has wrapped past the start; stitch the two ends of the loop.
+            neonMeasure.getSegment(tail, perimeter, neonSegment, true)
+            val wrap = Path()
+            neonMeasure.getSegment(0f, wrapped, wrap, true)
+            neonSegment.addPath(wrap)
+        }
+
+        val alpha = neonAlpha(neonProgress)
+        val coreWidth = rimWidthPx * 1.6f
+        val glowWidth = rimWidthPx * 5f
+
+        neonGlowPaint.color = neonWithAlpha((alpha * 0x30).toInt())
+        neonGlowPaint.strokeWidth = glowWidth
+        neonGlowPaint.maskFilter = BlurMaskFilter(glowWidth, BlurMaskFilter.Blur.NORMAL)
+        canvas.drawPath(neonSegment, neonGlowPaint)
+        neonGlowPaint.maskFilter = null
+
+        neonCorePaint.color = neonWithAlpha((alpha * 0xFF).toInt())
+        neonCorePaint.strokeWidth = coreWidth
+        canvas.drawPath(neonSegment, neonCorePaint)
+    }
+
+    /** Fades the comet in as it leaves the start and out as it returns to it. */
+    private fun neonAlpha(p: Float): Float {
+        val fadeIn = (p / NEON_FADE_FRACTION).coerceIn(0f, 1f)
+        val fadeOut = ((1f - p) / NEON_FADE_FRACTION).coerceIn(0f, 1f)
+        return fadeIn * fadeOut
+    }
+
+    private fun neonWithAlpha(alpha: Int): Int =
+        Color.argb(alpha, Color.red(neonColor), Color.green(neonColor), Color.blue(neonColor))
 
     private fun drawSheen(canvas: Canvas) {
         val w = rect.width()
@@ -173,4 +283,34 @@ class LiquidGlassDrawable : Drawable() {
 
     @Deprecated("Deprecated in Java")
     override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+
+    companion object {
+        private const val DEFAULT_GRAIN_ALPHA = 0x12
+        private const val NOISE_SIZE = 96
+
+        /** Fraction of the rim perimeter occupied by the neon chain. */
+        private const val NEON_CHAIN_FRACTION = 0.24f
+
+        /** Fraction of the sweep used to fade the neon in/out at its ends. */
+        private const val NEON_FADE_FRACTION = 0.12f
+
+        @Volatile
+        private var cachedNoise: Bitmap? = null
+
+        /** Static monochrome speckle: mixed light/dark grains with random alpha. */
+        private fun noiseBitmap(): Bitmap {
+            cachedNoise?.let { return it }
+            val bmp = Bitmap.createBitmap(NOISE_SIZE, NOISE_SIZE, Bitmap.Config.ARGB_8888)
+            val px = IntArray(NOISE_SIZE * NOISE_SIZE)
+            val rnd = Random(0x5EED)
+            for (i in px.indices) {
+                val light = rnd.nextBoolean()
+                val a = rnd.nextInt(0x40)
+                px[i] = if (light) Color.argb(a, 0xFF, 0xFF, 0xFF) else Color.argb(a, 0x00, 0x00, 0x00)
+            }
+            bmp.setPixels(px, 0, NOISE_SIZE, 0, 0, NOISE_SIZE, NOISE_SIZE)
+            cachedNoise = bmp
+            return bmp
+        }
+    }
 }

@@ -34,6 +34,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.integerResource
@@ -46,6 +47,7 @@ import com.android.systemui.compose.modifiers.sysuiResTag
 import com.android.systemui.development.ui.compose.BuildNumber
 import com.android.systemui.development.ui.viewmodel.BuildNumberViewModel
 import com.android.systemui.lifecycle.rememberViewModel
+import com.android.systemui.petalos.PetalQsSkin
 import com.android.systemui.qs.panels.dagger.PaginatedBaseLayoutType
 import com.android.systemui.qs.panels.ui.compose.Dimensions.FooterHeight
 import com.android.systemui.qs.panels.ui.compose.Dimensions.InterPageSpacing
@@ -73,6 +75,32 @@ constructor(
             rememberViewModel(traceName = "PaginatedGridLayout-TileGrid") {
                 viewModelFactory.create()
             }
+
+        // The petal control center is one continuous composition. Passing it through the stock
+        // pager constrains every section to a stock page height and causes the media/sliders to be
+        // clipped while later tiles overflow into a second page.
+        if (PetalQsSkin.isEnabled(LocalContext.current)) {
+            Column(modifier) {
+                with(delegateGridLayout) {
+                    TileGrid(
+                        tiles = tiles,
+                        modifier = Modifier.fillMaxWidth(),
+                        listening = listening,
+                        enableRevealEffect = enableRevealEffect,
+                    )
+                }
+                val editButtonViewModel =
+                    rememberViewModel(traceName = "PetalGrid-editButtonViewModel") {
+                        viewModel.editModeButtonViewModelFactory.create()
+                    }
+                EditModeButton(
+                    viewModel = editButtonViewModel,
+                    isVisible = listening(),
+                    modifier = Modifier.align(Alignment.End),
+                )
+            }
+            return
+        }
         val delegateGridViewModel =
             rememberViewModel(traceName = "PaginatedGridLayout-TileGrid") {
                 delegateGridLayout.viewModelFactory.create()

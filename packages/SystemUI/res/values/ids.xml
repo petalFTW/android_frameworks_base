@@ -229,6 +229,8 @@
     <item type="id" name="keyguard_indication_text" />
     <item type="id" name="keyguard_indication_text_bottom" />
     <item type="id" name="keyguard_root_view" />
+    <item type="id" name="petal_depth_subject" />
+    <item type="id" name="petal_depth_clock" />
     <item type="id" name="keyguard_settings_button" />
     <item type="id" name="nssl_guideline" />
     <item type="id" name="nssl_placeholder" />

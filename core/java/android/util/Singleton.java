@@ -50,4 +50,11 @@ public abstract class Singleton<T> {
         }
         return instance;
     }
+
+    /** @hide */
+    public void clear() {
+        synchronized (this) {
+            mInstance = null;
+        }
+    }
 }

@@ -22,6 +22,7 @@ import android.annotation.Nullable;
 import android.annotation.RequiresPermission;
 import android.annotation.SystemApi;
 import android.compat.annotation.UnsupportedAppUsage;
+import android.app.compat.gms.GmsCompat;
 import android.content.res.AssetFileDescriptor;
 import android.database.CrossProcessCursorWrapper;
 import android.database.Cursor;
@@ -39,6 +40,7 @@ import android.os.RemoteException;
 import android.util.Log;
 
 import com.android.internal.annotations.GuardedBy;
+import com.android.internal.gmscompat.GmsHooks;
 import com.android.internal.annotations.VisibleForTesting;
 
 import dalvik.system.CloseGuard;
@@ -196,6 +198,13 @@ public class ContentProviderClient implements ContentInterface, AutoCloseable {
             final Cursor cursor = mContentProvider.query(
                     mAttributionSource, uri, projection, queryArgs,
                     remoteCancellationSignal);
+            if (GmsCompat.isEnabled()) {
+                Cursor override = GmsHooks.maybeModifyQueryResult(uri, projection, queryArgs, cursor);
+                if (override != null) {
+                    // original cursor is closed if it wasn't null
+                    return override;
+                }
+            }
             if (cursor == null) {
                 return null;
             }

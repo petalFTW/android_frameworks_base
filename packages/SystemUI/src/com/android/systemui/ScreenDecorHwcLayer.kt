@@ -16,12 +16,16 @@
 
 package com.android.systemui
 
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ValueAnimator
 import android.content.Context
 import android.content.pm.ActivityInfo
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.ColorFilter
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffColorFilter
@@ -39,16 +43,15 @@ import android.view.DisplayCutout.BOUNDS_POSITION_RIGHT
 import android.view.RoundedCorner
 import android.view.RoundedCorners
 import android.view.Surface
+import android.view.animation.LinearInterpolator
 import androidx.annotation.VisibleForTesting
+import com.android.systemui.petalos.PetalUiConfig
 import com.android.systemui.util.asIndenting
 import java.io.PrintWriter
 import kotlin.math.ceil
 import kotlin.math.floor
 
-/**
- * When the HWC of the device supports Composition.DISPLAY_DECORATION, we use this layer to draw
- * screen decorations.
- */
+// This thing draws hardware screen decorations.
 class ScreenDecorHwcLayer(
     context: Context,
     displayDecorationSupport: DisplayDecorationSupport,
@@ -76,6 +79,83 @@ class ScreenDecorHwcLayer(
     private var roundedCornerBottomSize = 0
     private var roundedCornerDrawableTop: Drawable? = null
     private var roundedCornerDrawableBottom: Drawable? = null
+
+    private val extraKeyPath = Path()
+    private val extraKeyPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private var extraKeyAnimator: ValueAnimator? = null
+    private var extraKeyProgress = 0f
+    private var extraKeyLeft = true
+    private var extraKeyAnchor = 0.25f
+
+    // One push per press on the decor thread.
+    fun pulseExtraKey() {
+        if (!isAttachedToWindow || pendingConfigChange || !ValueAnimator.areAnimatorsEnabled()) {
+            return
+        }
+        extraKeyAnimator?.cancel()
+        extraKeyLeft = PetalUiConfig.isExtraKeyEdgeLeft(context)
+        extraKeyAnchor = PetalUiConfig.getExtraKeyAnchorFraction(context)
+        extraKeyAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 300L
+            interpolator = LinearInterpolator()
+            addUpdateListener {
+                val t = it.animatedValue as Float
+                // Push for 100 ms, return for 200 ms.
+                val phase = if (t < 1f / 3f) t * 3f else (1f - t) * 1.5f
+                extraKeyProgress = phase * phase * (3f - 2f * phase)
+                invalidate()
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    extraKeyProgress = 0f
+                    extraKeyAnimator = null
+                    requestLayout()
+                    parent?.requestTransparentRegion(this@ScreenDecorHwcLayer)
+                    invalidate()
+                }
+            })
+            start()
+        }
+        requestLayout()
+        parent?.requestTransparentRegion(this)
+    }
+
+    override fun onDetachedFromWindow() {
+        extraKeyAnimator?.cancel()
+        super.onDetachedFromWindow()
+    }
+
+    private fun drawExtraKey(canvas: Canvas) {
+        if (extraKeyProgress <= 0f || pendingConfigChange) return
+        val landscape = displayRotation == Surface.ROTATION_90 ||
+            displayRotation == Surface.ROTATION_270
+        val naturalWidth = (if (landscape) height else width).toFloat()
+        val naturalHeight = (if (landscape) width else height).toFloat()
+        val halfHeight = minOf(24f * resources.displayMetrics.density, naturalHeight / 2f)
+        val cy = (naturalHeight * extraKeyAnchor).coerceIn(halfHeight, naturalHeight - halfHeight)
+        val depth = 6f * resources.displayMetrics.density * extraKeyProgress
+        val saved = canvas.save()
+        // Keep this thing beside the physical key.
+        when (displayRotation) {
+            Surface.ROTATION_90 -> { canvas.translate(0f, height.toFloat()); canvas.rotate(-90f) }
+            Surface.ROTATION_180 -> { canvas.translate(width.toFloat(), height.toFloat()); canvas.rotate(180f) }
+            Surface.ROTATION_270 -> { canvas.translate(width.toFloat(), 0f); canvas.rotate(90f) }
+        }
+        if (!extraKeyLeft) { canvas.translate(naturalWidth, 0f); canvas.scale(-1f, 1f) }
+        extraKeyPath.rewind()
+        extraKeyPath.moveTo(0f, cy - halfHeight)
+        extraKeyPath.cubicTo(0f, cy - halfHeight * 0.70f,
+            depth, cy - halfHeight * 0.80f, depth, cy - halfHeight * 0.35f)
+        extraKeyPath.lineTo(depth, cy + halfHeight * 0.35f)
+        extraKeyPath.cubicTo(depth, cy + halfHeight * 0.80f,
+            0f, cy + halfHeight * 0.70f, 0f, cy + halfHeight)
+        extraKeyPath.close()
+        // Keep the layer alpha mode.
+        extraKeyPaint.set(paint)
+        extraKeyPaint.isAntiAlias = true
+        canvas.drawPath(extraKeyPath, extraKeyPaint)
+        canvas.restoreToCount(saved)
+    }
 
     init {
         if (displayDecorationSupport.format != PixelFormat.R_8) {
@@ -157,12 +237,11 @@ class ScreenDecorHwcLayer(
             canvas.drawColor(bgColor)
         }
 
-        // We may clear the color(if useInvertedAlphaColor is true) of the rounded corner rects
-        // before drawing rounded corners. If the cutout happens to be inside one of these rects, it
-        // will be cleared, so we have to draw rounded corners before cutout.
+        // Draw corners first so clearing cannot erase the cutout.
         drawRoundedCorners(canvas)
         // Cutouts are drawn in DisplayCutoutBaseView.onDraw()
         super.onDraw(canvas)
+        drawExtraKey(canvas)
 
         debugTransparentRegionPaint?.let {
             canvas.drawRect(transparentRect, it)
@@ -173,11 +252,7 @@ class ScreenDecorHwcLayer(
         region?.let {
             calculateTransparentRect()
             if (debug) {
-                // Since we're going to draw a rectangle where the layer would
-                // normally be transparent, treat the transparent region as
-                // empty. We still want this method to be called, though, so
-                // that it calculates the transparent rect at the right time
-                // to match ![debug]
+                // Debug fills the layer, so nothing stays transparent.
                 region.setEmpty()
             } else {
                 region.op(transparentRect, Region.Op.INTERSECT)
@@ -187,10 +262,7 @@ class ScreenDecorHwcLayer(
         return false
     }
 
-    /**
-     * The transparent rect is calculated by subtracting the regions of cutouts, cutout protect and
-     * rounded corners from the region with fullscreen display size.
-     */
+    // Remove decorations from the transparent region.
     @VisibleForTesting
     fun calculateTransparentRect() {
         transparentRect.set(0, 0, width, height)
@@ -203,6 +275,18 @@ class ScreenDecorHwcLayer(
 
         // Remove rounded corner region.
         removeRoundedCornersFromTransparentRegion()
+
+        // Reserve the whole bend once per pulse.
+        if (extraKeyAnimator != null) {
+            val depth = ceil(6f * resources.displayMetrics.density).toInt() + 1
+            val naturalEdge = if (extraKeyLeft) BOUNDS_POSITION_LEFT else BOUNDS_POSITION_RIGHT
+            when ((naturalEdge - displayRotation + BOUNDS_POSITION_LENGTH) % BOUNDS_POSITION_LENGTH) {
+                BOUNDS_POSITION_LEFT -> transparentRect.left = maxOf(transparentRect.left, depth)
+                BOUNDS_POSITION_TOP -> transparentRect.top = maxOf(transparentRect.top, depth)
+                BOUNDS_POSITION_RIGHT -> transparentRect.right = minOf(transparentRect.right, width - depth)
+                BOUNDS_POSITION_BOTTOM -> transparentRect.bottom = minOf(transparentRect.bottom, height - depth)
+            }
+        }
     }
 
     private fun removeCutoutFromTransparentRegion() {
@@ -243,8 +327,7 @@ class ScreenDecorHwcLayer(
             ceil(centerY + scaledDistanceY).toInt()
         )
 
-        // Find out which edge the protectionRect belongs and remove that edge from the transparent
-        // region.
+        // Remove the protected edge from the transparent region.
         val leftDistance = tempRect.left
         val topDistance = tempRect.top
         val rightDistance = width - tempRect.right
@@ -276,23 +359,19 @@ class ScreenDecorHwcLayer(
             hasLeftOrRightCutouts = !cutout.boundingRectLeft.isEmpty ||
                     !cutout.boundingRectRight.isEmpty
         }
-        // The goal is to remove the rounded corner areas as small as possible so that we can have a
-        // larger transparent region. Therefore, we should always remove from the short edge sides
-        // if possible.
+        // Trim short edges to keep more of this thing transparent.
         val isShortEdgeTopBottom = width < height
         if (isShortEdgeTopBottom) {
             // Short edges on top & bottom.
             if (!hasTopOrBottomCutouts && hasLeftOrRightCutouts) {
-                // If there are cutouts only on left or right edges, remove left and right sides
-                // for rounded corners.
+                // Side cutouts need side trims for corners.
                 transparentRect.left = getRoundedCornerSizeByPosition(BOUNDS_POSITION_LEFT)
                     .coerceAtLeast(transparentRect.left)
                 transparentRect.right =
                     (width - getRoundedCornerSizeByPosition(BOUNDS_POSITION_RIGHT))
                         .coerceAtMost(transparentRect.right)
             } else {
-                // If there are cutouts on top or bottom edges or no cutout at all, remove top
-                // and bottom sides for rounded corners.
+                // Otherwise trim top and bottom for corners.
                 transparentRect.top = getRoundedCornerSizeByPosition(BOUNDS_POSITION_TOP)
                     .coerceAtLeast(transparentRect.top)
                 transparentRect.bottom =

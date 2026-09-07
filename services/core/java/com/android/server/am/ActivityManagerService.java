@@ -270,6 +270,7 @@ import android.app.assist.ActivityId;
 import android.app.backup.BackupAnnotations.BackupDestination;
 import android.app.backup.BackupManagerInternal;
 import android.app.compat.CompatChanges;
+import android.app.compat.gms.GmsCompat;
 import android.app.job.JobParameters;
 import android.app.usage.UsageEvents;
 import android.app.usage.UsageEvents.Event;
@@ -13957,6 +13958,10 @@ public class ActivityManagerService extends IActivityManager.Stub
                 if (ActivityManager.checkUidPermission(
                         INTERACT_ACROSS_USERS,
                         aInfo.uid) != PackageManager.PERMISSION_GRANTED) {
+                    if (GmsCompat.isEnabledFor(aInfo)) {
+                        return false;
+                    }
+
                     ComponentName comp = new ComponentName(aInfo.packageName, className);
                     String msg = "Permission Denial: Component " + comp.flattenToShortString()
                             + " requests FLAG_SINGLE_USER, but app does not hold "
@@ -19932,6 +19937,26 @@ public class ActivityManagerService extends IActivityManager.Stub
                 }
             }
         });
+    }
+
+    @Override
+    public void showDynCodeLoadingNotification(int type, String pkgName, @Nullable String path,
+            List<String> reportBody, String denialType) {
+        final int callerUid = Binder.getCallingUid();
+        enforceCallingPackage(pkgName, callerUid);
+
+        final long token = Binder.clearCallingIdentity();
+        try {
+            Slog.w(TAG, "Dynamic code loading denied: type=" + type + ", pkg=" + pkgName
+                    + ", path=" + path + ", denialType=" + denialType);
+            if (reportBody != null) {
+                for (String line : reportBody) {
+                    Slog.w(TAG, "  " + line);
+                }
+            }
+        } finally {
+            Binder.restoreCallingIdentity(token);
+        }
     }
 
     @Override

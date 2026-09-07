@@ -4902,6 +4902,33 @@ public class PackageInstallerSession extends IPackageInstallerSession.Stub {
         // {@link PackageLite#getTargetSdk()}
         mValidatedTargetSdk = packageLite.getTargetSdk();
 
+        if (mPackageName.equals(android.ext.PackageId.GSF_NAME)) {
+            // Installation of GSF is not needed for GmsCompat. However, other apps might use
+            // package that holds the GSF package name without permission checks since GSF is a
+            // preinstalled package on GMS Android.
+            throw new PackageManagerException(INSTALL_FAILED_SESSION_INVALID, "GSF installation is not allowed");
+        }
+
+        // Enforce the maximum supported GmsCore / Play Store version. The client-side
+        // PlayStoreHooks.adjustSessionParams() sets params.maxAllowedVersion (from the gmscompat
+        // config versionMap) when these packages are installed via PackageInstaller. Reject any
+        // install that exceeds it, except for shell (adb) and first-party installers so that a
+        // manual downgrade remains possible.
+        if (params.maxAllowedVersion != Long.MAX_VALUE
+                && params.maxAllowedVersion > 0
+                && mVersionCode > params.maxAllowedVersion) {
+            final String initiatingPackageName = getInstallSource().mInitiatingPackageName;
+            final boolean isFirstPartyInstaller = initiatingPackageName != null
+                    && android.util.PackageUtils.getFirstPartyAppSourcePackageName(mContext)
+                            .equals(initiatingPackageName);
+            if (!isInstallerShell && !isFirstPartyInstaller) {
+                throw new PackageManagerException(INSTALL_FAILED_SESSION_INVALID,
+                        "Installation of " + mPackageName + " version " + mVersionCode
+                                + " is blocked to prevent breaking gmscompat. Max allowed version is "
+                                + params.maxAllowedVersion);
+            }
+        }
+
         return packageLite;
     }
 

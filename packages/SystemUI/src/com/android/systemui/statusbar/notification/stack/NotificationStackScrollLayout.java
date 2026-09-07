@@ -1454,11 +1454,53 @@ public class NotificationStackScrollLayout
         }
     }
 
+    private boolean mPetalSilentExpanded;
+    private final Set<ExpandableNotificationRow> mPetalHiddenSilentRows = new HashSet<>();
+
+    /** Collapse presentation only: keep entries in the pipeline and preserve clear-all semantics. */
+    private void updatePetalSilentSection() {
+        SectionHeaderView header = mSectionsManager.getSilentHeaderView();
+        boolean enabled = com.android.systemui.petalos.PetalQsSkin.isEnabled(mContext)
+                && !mAmbientState.isOnKeyguard() && header != null && header.getParent() == this;
+        if (!enabled && mPetalHiddenSilentRows.isEmpty()) {
+            if (header != null) header.setPetalDisclosure(false, false, null);
+            return;
+        }
+        boolean changed = false;
+        for (int i = 0; i < getChildCount(); i++) {
+            if (!(getChildAt(i) instanceof ExpandableNotificationRow row)) continue;
+            boolean hide = enabled && !mPetalSilentExpanded
+                    && (NotificationBundleUi.isEnabled()
+                            ? row.getEntryAdapter().getSectionBucket()
+                            : row.getEntryLegacy().getBucket()) == BUCKET_SILENT;
+            if (hide && row.getVisibility() == View.VISIBLE) {
+                mPetalHiddenSilentRows.add(row);
+                row.setVisibility(View.GONE);
+                changed = true;
+            } else if (!hide && mPetalHiddenSilentRows.remove(row)) {
+                row.setVisibility(View.VISIBLE);
+                changed = true;
+            }
+        }
+        if (header != null) {
+            header.setPetalDisclosure(enabled, mPetalSilentExpanded, v -> {
+                mPetalSilentExpanded = !mPetalSilentExpanded;
+                requestChildrenUpdate();
+            });
+        }
+        if (changed) {
+            mSpeedBumpIndexDirty = true;
+            updateContentHeight();
+            updateFirstAndLastBackgroundViews();
+        }
+    }
+
     /**
      * Updates the children views according to the stack scroll algorithm. Call this whenever
      * modifications to {@link #getOwnScrollY()} are performed to reflect it in the view layout.
      */
     private void updateChildren() {
+        updatePetalSilentSection();
         Trace.beginSection("NSSL#updateChildren");
         updateScrollStateForAddedChildren();
         mAmbientState.setCurrentScrollVelocity(mScroller.isFinished()
@@ -3183,6 +3225,9 @@ public class NotificationStackScrollLayout
     @Override
     public void onViewRemoved(View child) {
         super.onViewRemoved(child);
+        if (mPetalHiddenSilentRows.remove(child)) {
+            child.setVisibility(View.VISIBLE);
+        }
         // we only call our internal methods if this is actually a removal and not just a
         // notification which becomes a child notification
         ExpandableView expandableView = (ExpandableView) child;
@@ -4858,6 +4903,7 @@ public class NotificationStackScrollLayout
     void setIsExpanded(boolean isExpanded) {
         boolean changed = isExpanded != mIsExpanded;
         mIsExpanded = isExpanded;
+        if (!isExpanded) mPetalSilentExpanded = false;
         mStackScrollAlgorithm.setIsExpanded(isExpanded);
         mAmbientState.setShadeExpanded(isExpanded);
         mStateAnimator.setShadeExpanded(isExpanded);
@@ -6107,7 +6153,8 @@ public class NotificationStackScrollLayout
                 viewsToRemove.add(parent);
             }
             List<ExpandableNotificationRow> children = parent.getAttachedChildren();
-            if (isVisibleOrIsVisibleInShelf(parent) && children != null) {
+            if ((isVisibleOrIsVisibleInShelf(parent) || mPetalHiddenSilentRows.contains(parent))
+                    && children != null) {
                 for (ExpandableNotificationRow child : children) {
                     if (includeChildInClearAll(parent, selection)) {
                         viewsToRemove.add(child);

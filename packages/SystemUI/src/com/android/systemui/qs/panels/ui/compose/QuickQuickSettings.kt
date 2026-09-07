@@ -23,12 +23,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.util.fastMap
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.android.compose.animation.scene.ContentScope
 import com.android.systemui.compose.modifiers.sysuiResTag
 import com.android.systemui.grid.ui.compose.VerticalSpannedGrid
+import com.android.systemui.petalos.PetalQsSkin
 import com.android.systemui.qs.composefragment.ui.GridAnchor
 import com.android.systemui.qs.flags.QSMaterialExpressiveTiles
 import com.android.systemui.qs.panels.ui.compose.infinitegrid.Tile
@@ -48,11 +50,28 @@ fun ContentScope.QuickQuickSettings(
     val tiles = sizedTiles.fastMap { it.tile }
     val squishiness by viewModel.squishinessViewModel.squishiness.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
+    val petalSkin = PetalQsSkin.isEnabled(LocalContext.current)
+    // The first two concept slots are always extended. Beyond those, preserve the user's resize
+    // choices so every tile configured as expanded morphs into the same petal pill geometry.
+    val petalExpandedSpecs =
+        remember(sizedTiles, petalSkin) {
+            if (petalSkin) {
+                sizedTiles
+                    .filterIndexed { index, tile -> index < 2 || !tile.isIcon }
+                    .map { it.tile.spec }
+                    .toSet()
+            } else {
+                emptySet()
+            }
+        }
 
     Box(modifier = modifier) {
         GridAnchor()
 
-        if (QSMaterialExpressiveTiles.isEnabled) {
+        // petalOS: the petal skin composes its own button groups and pill geometry, which the
+        // legacy spanned grid cannot render, so the skin selects this path regardless of the
+        // (build-disabled) qs_material_expressive_tiles flag.
+        if (petalSkin || QSMaterialExpressiveTiles.isEnabled) {
             ButtonGroupGrid(
                 sizedTiles = sizedTiles,
                 columns = columns,
@@ -63,7 +82,7 @@ fun ContentScope.QuickQuickSettings(
             ) { sizedTile, interactionSource ->
                 Tile(
                     tile = sizedTile.tile,
-                    iconOnly = sizedTile.isIcon,
+                    iconOnly = petalSkin || sizedTile.isIcon,
                     squishiness = { squishiness },
                     coroutineScope = scope,
                     tileHapticsViewModelFactoryProvider =
@@ -74,6 +93,7 @@ fun ContentScope.QuickQuickSettings(
                     isVisible = listening,
                     bounceableInfo = null,
                     interactionSource = interactionSource,
+                    petalExpandToPill = sizedTile.tile.spec in petalExpandedSpecs,
                 )
             }
         } else {
@@ -92,7 +112,7 @@ fun ContentScope.QuickQuickSettings(
                 Element(it.tile.spec.toElementKey(), Modifier) {
                     Tile(
                         tile = it.tile,
-                        iconOnly = it.isIcon,
+                        iconOnly = petalSkin || it.isIcon,
                         squishiness = { squishiness },
                         coroutineScope = scope,
                         bounceableInfo =
@@ -110,6 +130,7 @@ fun ContentScope.QuickQuickSettings(
                         detailsViewModel = null,
                         isVisible = listening,
                         interactionSource = null,
+                        petalExpandToPill = it.tile.spec in petalExpandedSpecs,
                     )
                 }
             }

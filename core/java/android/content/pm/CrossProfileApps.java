@@ -25,6 +25,7 @@ import static android.app.admin.flags.Flags.FLAG_ALLOW_QUERYING_PROFILE_TYPE;
 
 import android.annotation.FlaggedApi;
 import android.annotation.NonNull;
+import android.app.compat.gms.GmsCompat;
 import android.annotation.Nullable;
 import android.annotation.RequiresPermission;
 import android.annotation.RestrictedForEnvironment;
@@ -315,6 +316,10 @@ public class CrossProfileApps {
      * @see UserManager#getUserProfiles()
      */
     public @NonNull List<UserHandle> getTargetUserProfiles() {
+        if (GmsCompat.isEnabled()) {
+            return java.util.Collections.emptyList();
+        }
+
         try {
             return mService.getTargetUserProfiles(mContext.getPackageName());
         } catch (RemoteException ex) {
@@ -484,6 +489,10 @@ public class CrossProfileApps {
      * @return true if the calling package can request to interact across profiles.
      */
     public boolean canRequestInteractAcrossProfiles() {
+        if (GmsCompat.isEnabled()) {
+            return false;
+        }
+
         try {
             return mService.canRequestInteractAcrossProfiles(mContext.getPackageName());
         } catch (RemoteException ex) {
@@ -515,6 +524,10 @@ public class CrossProfileApps {
      * calling UID.
      */
     public boolean canInteractAcrossProfiles() {
+        if (GmsCompat.isEnabled()) {
+            return false;
+        }
+
         try {
             return mService.canInteractAcrossProfiles(mContext.getPackageName());
         } catch (RemoteException ex) {

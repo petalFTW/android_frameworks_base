@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <bool name="setting_default_allow_disabling_hardening_via_app_compat_config">true</bool>
+    <java-symbol type="bool" name="setting_default_allow_disabling_hardening_via_app_compat_config" />
+
+    <bool name="setting_default_allow_native_debugging">true</bool>
+    <java-symbol type="bool" name="setting_default_allow_native_debugging" />
+
+    <bool name="setting_default_restrict_memory_dyn_code_loading">false</bool>
+    <java-symbol type="bool" name="setting_default_restrict_memory_dyn_code_loading" />
+
+    <bool name="setting_default_restrict_storage_dyn_code_loading">false</bool>
+    <java-symbol type="bool" name="setting_default_restrict_storage_dyn_code_loading" />
+
+    <string-array translatable="false" name="system_pkgs_allowed_memory_dyn_code_loading_by_default">
+        <item>app.vanadium.browser</item>
+        <!-- original-package for Vanadium -->
+        <item>org.chromium.chrome</item>
+    </string-array>
+    <java-symbol type="array" name="system_pkgs_allowed_memory_dyn_code_loading_by_default" />
+
+    <string-array translatable="false" name="system_pkgs_allowed_storage_dyn_code_loading_by_default">
+    </string-array>
+    <java-symbol type="array" name="system_pkgs_allowed_storage_dyn_code_loading_by_default" />
+
+    <bool name="setting_default_restrict_webview_dyn_code_loading">false</bool>
+    <java-symbol type="bool" name="setting_default_restrict_webview_dyn_code_loading" />
+
+    <string-array translatable="false" name="system_pkgs_allowed_webview_dyn_code_loading_by_default">
+        <item>app.grapheneos.pdfviewer</item>
+        <!-- original-package -->
+        <item>org.grapheneos.pdfviewer</item>
+        <!-- requires WebAssembly, which doesn't work in jitless mode -->
+        <item>com.android.virtualization.terminal</item>
+    </string-array>
+    <java-symbol type="array" name="system_pkgs_allowed_webview_dyn_code_loading_by_default" />
+
+    <bool name="setting_default_force_app_memtag">false</bool>
+    <java-symbol type="bool" name="setting_default_force_app_memtag" />
+
+    <bool name="config_has_alternative_touchscreen_mode">false</bool>
+    <java-symbol type="bool" name="config_has_alternative_touchscreen_mode" />
+
+    <string-array translatable="false" name="system_browser_package_names">
+        <item>app.vanadium.browser</item>
+        <!-- original-package for Vanadium -->
+        <item>org.chromium.chrome</item>
+    </string-array>
+    <java-symbol type="array" name="system_browser_package_names" />
+
+    <!-- config_first_party_app_source_package_name is defined in config.xml
+         (adapted to com.android.vending for this device). -->
+
+    <!-- Certificate digests for trusted apps that will be allowed to obtain the knownSigner
+         read additional security state permission.
+         The digest should be computed over the DER encoding of the trusted certificate
+         using the SHA-256 digest algorithm. -->
+    <string-array name="read_additional_security_state_known_signers">
+        <!-- bundled Auditor app certdigest -->
+        <item>990e04f0864b19f14f84e0e432f7a393f297ab105a22c1e1b10b442a4a62c42c</item>
+    </string-array>
+    <java-symbol type="array" name="read_additional_security_state_known_signers" />
+
+</resources>

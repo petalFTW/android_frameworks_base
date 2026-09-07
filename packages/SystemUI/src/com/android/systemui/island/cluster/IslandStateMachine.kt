@@ -21,6 +21,7 @@ import com.android.systemui.island.Form
 import com.android.systemui.island.IslandConstants
 import com.android.systemui.island.IslandSignal
 import com.android.systemui.island.SignalKind
+import com.android.systemui.island.presenter.NotificationPayload
 import com.android.systemui.util.concurrency.DelayableExecutor
 
 enum class IslandState { HIDDEN, EMERGING, COLLAPSED, EXPANDING, EXPANDED, COLLAPSING, DISSOLVING, DRAGGING, MORPHING }
@@ -54,11 +55,27 @@ class IslandStateMachine(
     private var dwellTimer: Runnable? = null
     private var notifDwellMs = IslandConstants.DWELL_NOTIF
 
+    /**
+     * While held (e.g. the user is typing an inline reply), no dwell timer is armed so the
+     * blob stays on screen. A user-driven dismiss clears the hold.
+     */
+    private var dismissalHeld = false
+
     /** One-shot expiry for transient signals (charging/volume). */
     private var transientDismiss = false
 
     fun setNotifDwellMs(ms: Long) {
         notifDwellMs = ms
+    }
+
+    /** Prevents dwell timers from firing while [held] (e.g. inline reply in progress). */
+    fun holdDismissal(held: Boolean) {
+        dismissalHeld = held
+        if (held) {
+            cancelDwell()
+        } else {
+            current?.let { armDwell(it) }
+        }
     }
 
     /** Deliver a signal. Returns true if it was accepted (shown, morphed or queued). */
@@ -131,10 +148,12 @@ class IslandStateMachine(
 
     /** User dismissed (swipe up). */
     fun userDismiss() {
+        dismissalHeld = false
         dismiss()
     }
 
     fun dismiss() {
+        dismissalHeld = false
         cancelDwell()
         state = IslandState.DISSOLVING
         listener?.onDismiss()
@@ -147,6 +166,11 @@ class IslandStateMachine(
             armDwell(next)
         } else {
             current = null
+            // petalOS bug fix: nothing ever reports the end of the view's dissolve animation
+            // back here, so the machine used to park in DISSOLVING forever (visible as
+            // "state=DISSOLVING signal=null" in the SystemUI dump). The machine is done with
+            // this signal — the view animates out on its own — so go straight to HIDDEN.
+            state = IslandState.HIDDEN
         }
     }
 
@@ -156,9 +180,25 @@ class IslandStateMachine(
 
     private fun armDwell(signal: IslandSignal) {
         cancelDwell()
+        if (dismissalHeld) return
         if (signal.isSticky) return
         when (signal.kind) {
-            SignalKind.NOTIFICATION -> armNotificationDwell(signal)
+            SignalKind.NOTIFICATION -> {
+                val payload = signal.payload as? NotificationPayload
+                if (payload != null && (payload.progressMax > 0 || payload.progressIndeterminate)) {
+                    if (payload.progressMax > 0 && payload.progressCurrent >= payload.progressMax) {
+                        // Finished: give a beat for the 100% pill to read, then fade.
+                        dwellTimer = mainExecutor.executeDelayed(
+                            { dismiss() },
+                            IslandConstants.PROGRESS_DONE_DWELL_MS,
+                        )
+                    }
+                    // In-flight progress: no dwell. The blob persists (collapsed pill) until the
+                    // notification is removed, completes, or another blob replaces it.
+                    return
+                }
+                armNotificationDwell(signal)
+            }
             SignalKind.CHARGING -> {
                 // expanded 2s -> collapsed 2s -> hidden
                 transientDismiss = false

@@ -31,6 +31,7 @@ import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.annotation.SystemApi;
 import android.app.ContextImpl.ServiceInitializationState;
+import android.app.compat.gms.GmsCompat;
 import android.app.admin.DevicePolicyManager;
 import android.app.admin.IDevicePolicyManager;
 import android.app.ambientcontext.AmbientContextManager;
@@ -300,6 +301,7 @@ import com.android.internal.app.IAppOpsService;
 import com.android.internal.app.IBatteryStats;
 import com.android.internal.app.ISoundTriggerService;
 import com.android.internal.appwidget.IAppWidgetService;
+import com.android.internal.gmscompat.sysservice.GmcUserManager;
 import com.android.internal.graphics.fonts.IFontManager;
 import com.android.internal.net.INetworkWatchlistManager;
 import com.android.internal.os.IBinaryTransparencyService;
@@ -938,6 +940,11 @@ public final class SystemServiceRegistry {
             public UserManager createService(ContextImpl ctx) throws ServiceNotFoundException {
                 IBinder b = ServiceManager.getServiceOrThrow(Context.USER_SERVICE);
                 IUserManager service = IUserManager.Stub.asInterface(b);
+
+                if (GmsCompat.isEnabled()) {
+                    return new GmcUserManager(ctx, service);
+                }
+
                 return new UserManager(ctx, service);
             }});
 
@@ -2114,6 +2121,15 @@ public final class SystemServiceRegistry {
         return ret;
     }
 
+    /** @hide */
+    public static void clearServiceCache(Context ctx) {
+        for (ServiceFetcher<?> fetcher : SYSTEM_SERVICE_FETCHERS.values()) {
+            if (ctx instanceof ContextImpl ctxImpl) {
+                fetcher.clearCache(ctxImpl);
+            }
+        }
+    }
+
     private static boolean isChooserManagerSupported(ContextImpl ctx) {
         PackageManager pm = ctx.getPackageManager();
         if (pm == null) {
@@ -2452,6 +2468,9 @@ public final class SystemServiceRegistry {
     static abstract interface ServiceFetcher<T> {
         T getService(ContextImpl ctx);
 
+        default void clearCache(ContextImpl ctx) {
+        }
+
         /**
          * Should this service fetcher support being fetched via {@link #getSystemService(String)},
          * without a Context?
@@ -2478,6 +2497,15 @@ public final class SystemServiceRegistry {
             // outer class (SystemServiceRegistry), which already does the synchronization,
             // so bare access to sServiceCacheSize is okay here.
             mCacheIndex = sServiceCacheSize++;
+        }
+
+        @Override
+        public void clearCache(ContextImpl ctx) {
+            final Object[] cache = ctx.mServiceCache;
+            synchronized (cache) {
+                cache[mCacheIndex] = null;
+                ctx.mServiceInitializationStateArray[mCacheIndex] = ContextImpl.STATE_UNINITIALIZED;
+            }
         }
 
         @Override
@@ -2593,6 +2621,14 @@ public final class SystemServiceRegistry {
         private boolean mIsCached = false;
         @GuardedBy("StaticServiceFetcher.this")
         private T mCachedInstance;
+
+        @Override
+        public void clearCache(ContextImpl ctx) {
+            synchronized (StaticServiceFetcher.this) {
+                mIsCached = false;
+                mCachedInstance = null;
+            }
+        }
 
         @Override
         public final T getService(ContextImpl ctx) {

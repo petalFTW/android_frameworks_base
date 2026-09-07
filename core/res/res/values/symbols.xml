@@ -6006,6 +6006,7 @@
   <java-symbol type="integer" name="config_am_tieredCachedAdjUiTierSize" />
 
   <java-symbol type="raw" name="default_ringtone_vibration_effect" />
+  <java-symbol type="raw" name="petal_richtap_patterns" />
 
   <!-- For activity embedding divider -->
   <java-symbol type="drawable" name="activity_embedding_divider_handle" />
@@ -6347,4 +6348,5 @@
 
   <!-- Action for opening trusted location settings page -->
   <java-symbol type="string" name="trusted_location_settings_action" />
+  <java-symbol type="string" name="config_first_party_app_source_package_name" />
 </resources>

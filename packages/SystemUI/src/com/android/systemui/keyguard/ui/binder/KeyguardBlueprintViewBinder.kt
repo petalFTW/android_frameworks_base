@@ -39,6 +39,10 @@ import com.android.systemui.shared.R as sharedR
 import com.android.systemui.util.kotlin.pairwise
 
 object KeyguardBlueprintViewBinder {
+    private fun isDepthLayer(id: Int): Boolean =
+        id == com.android.systemui.res.R.id.petal_depth_clock ||
+            id == com.android.systemui.res.R.id.petal_depth_subject
+
     @JvmStatic
     fun bind(
         constraintLayout: ConstraintLayout,
@@ -75,9 +79,16 @@ object KeyguardBlueprintViewBinder {
                                     clone(constraintLayout)
                                     val emptyLayout = ConstraintSet.Layout()
                                     knownIds.forEach {
-                                        getConstraint(it).layout.copyFrom(emptyLayout)
+                                        // Depth layers are owned by their controller and span all
+                                        // blueprints. Keep their full-root constraints intact.
+                                        if (!isDepthLayer(it)) {
+                                            getConstraint(it).layout.copyFrom(emptyLayout)
+                                        }
                                     }
                                     blueprint.applyConstraints(this)
+                                    knownIds.filter { isDepthLayer(it) }.forEach {
+                                        setVisibilityMode(it, ConstraintSet.VISIBILITY_MODE_IGNORE)
+                                    }
                                 }
 
                             logger.logConstraintSet(cs, clockViewModel)
@@ -108,6 +119,9 @@ object KeyguardBlueprintViewBinder {
                                 ConstraintSet().apply {
                                     clone(constraintLayout)
                                     blueprint.applyConstraints(this)
+                                    knownIds.filter { isDepthLayer(it) }.forEach {
+                                        setVisibilityMode(it, ConstraintSet.VISIBILITY_MODE_IGNORE)
+                                    }
                                 }
                             logger.logConstraintSet(cs, clockViewModel)
                             cs.applyTo(constraintLayout)

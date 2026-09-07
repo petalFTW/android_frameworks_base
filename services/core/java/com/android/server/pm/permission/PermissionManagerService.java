@@ -274,6 +274,13 @@ public class PermissionManagerService extends IPermissionManager.Stub {
                 deviceId, getPersistentDeviceId(deviceId));
     }
 
+    @Override
+    public void updatePermissionStateAndInvalidateCache(String packageName, int userId) {
+        // Invalidate cached package info (e.g. GosPackageState) so it is re-read on next access.
+        // Full permission recompute is not ported; state is re-read on next process start.
+        PackageManager.invalidatePackageInfoCache();
+    }
+
     private String getPersistentDeviceId(int deviceId) {
         if (deviceId == Context.DEVICE_ID_DEFAULT) {
             return VirtualDeviceManager.PERSISTENT_DEVICE_ID_DEFAULT;

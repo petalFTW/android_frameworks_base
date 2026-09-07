@@ -17,8 +17,10 @@
 package com.android.systemui.shade.ui
 
 import android.content.Context
+import androidx.compose.ui.graphics.toArgb
 import com.android.internal.graphics.ColorUtils
 import com.android.systemui.res.R
+import org.petalos.config.PetalConfig
 
 object ShadeColors {
     /**
@@ -31,6 +33,42 @@ object ShadeColors {
      */
     @JvmStatic
     fun shadePanel(context: Context, blurSupported: Boolean, withScrim: Boolean): Int {
+        // Match the Petal controls with smoked frost, including a legible solid fallback
+        // when battery saver or device capabilities disable blur. Explicit Hub colors win.
+        if (
+            com.android.systemui.petalos.PetalQsSkin.isEnabled(context) &&
+                !PetalConfig.isQsCustomEnabled(context)
+        ) {
+            return if (blurSupported) frostPanelColor()
+            else com.android.systemui.petalos.PetalQsSkin.FrostTint.toArgb()
+        }
+        return shadePanelStock(context, blurSupported, withScrim)
+    }
+
+    /** petalOS frost panel color (smoked translucent glass tint). */
+    @JvmStatic
+    fun frostPanelColor(): Int =
+        ColorUtils.setAlphaComponent(
+            com.android.systemui.petalos.PetalQsSkin.FrostTint.toArgb(),
+            com.android.systemui.petalos.PetalQsSkin.FrostScrimAlpha,
+        )
+
+    /**
+     * Panel color for surfaces that share their backdrop with the bouncer: always the stock
+     * palette, so the frost never turns the lock screen bouncer (which uses light-on-dark themed
+     * text) unreadable.
+     */
+    @JvmStatic
+    fun bouncerSurfacePanel(context: Context, blurSupported: Boolean): Int =
+        shadePanelStock(context, blurSupported, withScrim = true)
+
+    private fun shadePanelStock(context: Context, blurSupported: Boolean, withScrim: Boolean): Int {
+        if (PetalConfig.isQsCustomEnabled(context)) {
+            val color = PetalConfig.getQsColor(context)
+            if (color != PetalConfig.DISABLED) {
+                return ColorUtils.setAlphaComponent(color, PetalConfig.getQsAlpha(context))
+            }
+        }
         return if (blurSupported) {
             if (withScrim) {
                 ColorUtils.compositeColors(

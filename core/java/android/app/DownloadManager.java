@@ -17,6 +17,7 @@
 package android.app;
 
 import android.annotation.NonNull;
+import android.app.compat.gms.GmsCompat;
 import android.annotation.Nullable;
 import android.annotation.RequiresPermission;
 import android.annotation.SdkConstant;
@@ -716,6 +717,13 @@ public class DownloadManager {
          * @return this object
          */
         public Request setNotificationVisibility(int visibility) {
+            if (GmsCompat.isEnabled()) {
+                // requires the privileged DOWNLOAD_WITHOUT_NOTIFICATION permission
+                if (visibility == VISIBILITY_HIDDEN) {
+                    return this;
+                }
+            }
+
             mNotificationVisibility = visibility;
             return this;
         }

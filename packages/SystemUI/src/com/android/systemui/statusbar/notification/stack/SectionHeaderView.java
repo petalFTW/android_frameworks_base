@@ -41,6 +41,8 @@ import com.android.systemui.statusbar.notification.row.StackScrollerDecorView;
  */
 public class SectionHeaderView extends StackScrollerDecorView {
 
+    private boolean mPetalDisclosureEnabled;
+    private boolean mPetalDisclosureExpanded;
     private ViewGroup mContents;
     private TextView mLabelView;
     private ImageView mClearAllButton;
@@ -142,6 +144,25 @@ public class SectionHeaderView extends StackScrollerDecorView {
     public void setHeaderText(@StringRes int resId) {
         mLabelTextId = resId;
         mLabelView.setText(resId);
+    }
+
+    /** Use the silent header as a disclosure without replacing its settings listener. */
+    public void setPetalDisclosure(boolean enabled, boolean expanded, View.OnClickListener toggle) {
+        if (enabled == mPetalDisclosureEnabled && expanded == mPetalDisclosureExpanded) return;
+        mPetalDisclosureEnabled = enabled;
+        mPetalDisclosureExpanded = expanded;
+        mLabelView.setMinimumHeight(enabled ? (int) (48 * getResources().getDisplayMetrics().density) : 0);
+        mLabelView.setOnClickListener(enabled ? toggle : mLabelClickListener);
+        if (mLabelTextId != null) {
+            String label = getResources().getString(mLabelTextId);
+            mLabelView.setText(enabled ? label + (expanded ? " ▴" : " ▾") : label);
+        }
+        mLabelView.setStateDescription(enabled ? getResources().getString(expanded
+                ? R.string.petal_silent_expanded : R.string.petal_silent_collapsed) : null);
+        ViewCompat.replaceAccessibilityAction(mLabelView, ACTION_CLICK,
+                getResources().getString(enabled
+                        ? (expanded ? R.string.petal_silent_minimise : R.string.petal_silent_expand)
+                        : R.string.accessibility_notification_section_header_open_settings), null);
     }
 
     void setForegroundColors(@ColorInt int onSurface, @ColorInt int onSurfaceVariant) {

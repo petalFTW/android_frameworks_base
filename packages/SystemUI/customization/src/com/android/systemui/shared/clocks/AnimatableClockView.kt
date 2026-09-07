@@ -78,7 +78,7 @@ constructor(
 
     private val dozingWeightInternal: Int
     private val lockScreenWeightInternal: Int
-    private val isSingleLineInternal: Boolean
+    private var isSingleLineInternal: Boolean
 
     private var format: CharSequence? = null
     private var descFormat: CharSequence? = null
@@ -115,10 +115,34 @@ constructor(
     @VisibleForTesting var timeOverrideInMillis: Long? = null
 
     val dozingWeight: Int
-        get() = if (useBoldedVersion()) dozingWeightInternal + 100 else dozingWeightInternal
+        get() {
+            val base = if (weightOverride >= 0) weightOverride else dozingWeightInternal
+            return if (useBoldedVersion()) base + 100 else base
+        }
 
     val lockScreenWeight: Int
-        get() = if (useBoldedVersion()) lockScreenWeightInternal + 100 else lockScreenWeightInternal
+        get() {
+            val base = if (weightOverride >= 0) weightOverride else lockScreenWeightInternal
+            return if (useBoldedVersion()) base + 100 else base
+        }
+
+    private var weightOverride = -1
+
+    /** Overrides the variable-font weight used by this clock (0..1000). Set -1 to clear. */
+    fun setWeightOverride(weight: Int) {
+        weightOverride = weight
+    }
+
+    /**
+     * Swaps in a concrete typeface and rebuilds the text animator so the new face takes effect.
+     * Used by the petalOS clock styles to give each preset a distinct look.
+     */
+    fun setClockTypeface(typeface: android.graphics.Typeface) {
+        setTypeface(typeface)
+        textAnimator = null
+        requestLayout()
+        invalidate()
+    }
 
     /**
      * The number of pixels below the baseline. For fonts that support languages such as Burmese,
@@ -483,6 +507,13 @@ constructor(
     }
 
     fun refreshFormat() = refreshFormat(DateFormat.is24HourFormat(context))
+
+    /** Switches between the stacked (HH\nMM) and single-line (HH:MM) clock layout. */
+    fun setClockInSingleLine(singleLine: Boolean) {
+        if (singleLine == isSingleLineInternal) return
+        isSingleLineInternal = singleLine
+        refreshFormat()
+    }
 
     fun refreshFormat(use24HourFormat: Boolean) {
         Patterns.update(context)

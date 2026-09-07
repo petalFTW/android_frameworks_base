@@ -164,6 +164,7 @@ import com.android.systemui.media.remedia.ui.viewmodel.MediaPlayPauseActionViewM
 import com.android.systemui.media.remedia.ui.viewmodel.MediaSecondaryActionViewModel
 import com.android.systemui.media.remedia.ui.viewmodel.MediaSettingsButtonViewModel
 import com.android.systemui.media.remedia.ui.viewmodel.MediaViewModel
+import com.android.systemui.petalos.PetalQsSkin
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
@@ -404,8 +405,11 @@ private fun Card(
 
 @Composable
 private fun rememberAnimatedColorScheme(colorScheme: MediaColorScheme?): AnimatedColorScheme {
-    val primaryColor = colorScheme?.primary ?: MaterialTheme.colorScheme.primaryFixed
-    val onPrimaryColor = colorScheme?.onPrimary ?: MaterialTheme.colorScheme.onPrimaryFixed
+    val petalSkin = PetalQsSkin.isEnabled(LocalContext.current)
+    val primaryColor = if (petalSkin) Color(0xFFE1E5ED)
+        else colorScheme?.primary ?: MaterialTheme.colorScheme.primaryFixed
+    val onPrimaryColor = if (petalSkin) Color(0xFF202127)
+        else colorScheme?.onPrimary ?: MaterialTheme.colorScheme.onPrimaryFixed
     val backgroundColor = colorScheme?.background ?: MaterialTheme.colorScheme.onSurface
     val animatedPrimary by animateColorAsState(targetValue = primaryColor)
     val animatedOnPrimary by animateColorAsState(targetValue = onPrimaryColor)
@@ -1206,6 +1210,9 @@ private fun DeviceChip(
     // The outer composable hosts that clickable that writes user events into the InteractionSource.
     // The inner composable consumes the user events from the InteractionSource and feeds them into
     // its indication.
+    val petalSkin = PetalQsSkin.isEnabled(LocalContext.current)
+    val chipFill = if (petalSkin) Color(0xCC292B32) else style.fillColor
+    val chipContent = if (petalSkin) Color(0xFFF5F5F8) else style.contentColor
     val clickInteractionSource = remember { MutableInteractionSource() }
     Expandable(
         controller =
@@ -1229,7 +1236,7 @@ private fun DeviceChip(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier =
                     Modifier.clip(RoundedCornerShape(12.dp))
-                        .background(style.fillColor)
+                        .background(chipFill)
                         .thenIf(style.borderColor != null) {
                             Modifier.border(
                                 width = 1.dp,
@@ -1242,14 +1249,14 @@ private fun DeviceChip(
             ) {
                 if (viewModel.isConnecting) {
                     CircularProgressIndicator(
-                        color = style.contentColor,
+                        color = chipContent,
                         modifier = Modifier.size(12.dp),
                         strokeWidth = 1.dp,
                     )
                 } else {
                     Icon(
                         icon = viewModel.icon,
-                        tint = style.contentColor,
+                        tint = chipContent,
                         modifier = Modifier.size(16.dp),
                     )
                 }
@@ -1258,7 +1265,7 @@ private fun DeviceChip(
                         Text(
                             text = it,
                             style = MaterialTheme.typography.labelMedium,
-                            color = style.contentColor,
+                            color = chipContent,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.padding(horizontal = 4.dp),
@@ -1281,10 +1288,12 @@ private fun ContentScope.PlayPauseAction(
 ) {
     if (viewModel == null) return
 
-    val buttonSize = DpSize(width = 72.dp, height = 48.dp)
+    val petalSkin = PetalQsSkin.isEnabled(LocalContext.current)
+    val buttonSize = DpSize(width = if (petalSkin) 56.dp else 72.dp, height = 48.dp)
     val cornerRadius: Dp by
         animateDpAsState(
-            targetValue = buttonCornerRadius(viewModel.state != MediaSessionState.Paused),
+            targetValue = if (petalSkin) 24.dp
+                else buttonCornerRadius(viewModel.state != MediaSessionState.Paused),
             label = "PlayPauseAction.cornerRadius",
         )
     // This element can be animated when switching between scenes inside a media card.

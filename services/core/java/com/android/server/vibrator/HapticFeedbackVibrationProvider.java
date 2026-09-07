@@ -29,9 +29,6 @@ import com.android.internal.annotations.VisibleForTesting;
 
 import java.io.PrintWriter;
 
-/**
- * Provides the {@link VibrationEffect} and {@link VibrationAttributes} for haptic feedback.
- */
 public final class HapticFeedbackVibrationProvider {
     private static final String TAG = "HapticFeedbackVibrationProvider";
 
@@ -74,15 +71,6 @@ public final class HapticFeedbackVibrationProvider {
         }
     }
 
-    /**
-     * Provides the {@link VibrationEffect} for a given haptic feedback effect ID (provided in
-     * {@link HapticFeedbackConstants}).
-     *
-     * @param effectId the haptic feedback effect ID whose respective vibration we want to get.
-     * @param usage the {@link VibrationAttributes} usage for the haptic feedback.
-     * @return a {@link VibrationEffect} for the given haptic feedback effect ID, or {@code null} if
-     *          the provided effect ID is not supported.
-     */
     @Nullable public VibrationEffect getVibration(
             int effectId, @VibrationAttributes.Usage int usage) {
         if (!isFeedbackConstantEnabled(effectId)) {
@@ -96,16 +84,6 @@ public final class HapticFeedbackVibrationProvider {
         return getVibrationForHapticFeedback(effectId);
     }
 
-    /**
-     * Provides the {@link VibrationEffect} for a given haptic feedback effect ID (provided in
-     * {@link HapticFeedbackConstants}).
-     *
-     * @param effectId    the haptic feedback effect ID whose respective vibration we want to get.
-     * @param inputSource the {@link InputDevice.Source} that customizes the haptic feedback
-     *                    corresponding to the {@code effectId}.
-     * @return a {@link VibrationEffect} for the given haptic feedback effect ID, or {@code null} if
-     * the provided effect ID is not supported.
-     */
     @Nullable public VibrationEffect getVibrationForInputDevice(int effectId, int inputSource) {
         if (!isFeedbackConstantEnabled(effectId)) {
             return null;
@@ -118,15 +96,6 @@ public final class HapticFeedbackVibrationProvider {
         return getVibrationForHapticFeedback(effectId);
     }
 
-    /**
-     * Provides the {@link VibrationAttributes} that should be used for a haptic feedback.
-     *
-     * @param effectId the haptic feedback effect ID whose respective vibration attributes we want
-     *      to get.
-     * @param flags Additional flags as per {@link HapticFeedbackConstants}.
-     * @param privFlags Additional private flags as per {@link HapticFeedbackConstants}.
-     * @return the {@link VibrationAttributes} that should be used for the provided haptic feedback.
-     */
     public VibrationAttributes getVibrationAttributes(int effectId,
             @VibrationAttributes.Usage int usage,
             @HapticFeedbackConstants.Flags int flags,
@@ -166,11 +135,6 @@ public final class HapticFeedbackVibrationProvider {
         return getVibrationAttributesWithFlags(attrs, effectId, flags);
     }
 
-    /**
-     * Similar to {@link #getVibrationAttributes} but also handles input source customization.
-     *
-     * @param inputSource one of {@code InputDevice.SOURCE_*} to customize the attributes.
-     */
     public VibrationAttributes getVibrationAttributesForInputDevice(int effectId,
             int inputSource,
             @HapticFeedbackConstants.Flags int flags,
@@ -189,13 +153,6 @@ public final class HapticFeedbackVibrationProvider {
                 effectId, VibrationAttributes.USAGE_UNKNOWN, flags, privFlags);
     }
 
-    /**
-     * Returns true if given haptic feedback is restricted to system apps with permission
-     * {@code android.permission.VIBRATE_SYSTEM_CONSTANTS}.
-     *
-     * @param effectId the haptic feedback effect ID to check.
-     * @return true if the haptic feedback is restricted, false otherwise.
-     */
     public boolean isRestrictedHapticFeedback(int effectId) {
         switch (effectId) {
             case HapticFeedbackConstants.BIOMETRIC_CONFIRM:
@@ -206,7 +163,6 @@ public final class HapticFeedbackVibrationProvider {
         }
     }
 
-    /** Dumps relevant state. */
     public void dump(String prefix, PrintWriter pw) {
         pw.print("mHapticTextHandleEnabled="); pw.println(mHapticTextHandleEnabled);
     }
@@ -219,12 +175,12 @@ public final class HapticFeedbackVibrationProvider {
         };
     }
 
-    /**
-     * Get {@link VibrationEffect} respective {@code effectId} from platform-wise mapping. This
-     * method doesn't include OEM customizations.
-     */
     @Nullable
     private VibrationEffect getVibrationForHapticFeedback(int effectId) {
+        VibrationEffect petalEffect = PetalHapticsEngine.feedback(effectId);
+        if (petalEffect != null) {
+            return petalEffect;
+        }
         switch (effectId) {
             case HapticFeedbackConstants.CONTEXT_CLICK:
             case HapticFeedbackConstants.GESTURE_END:
@@ -326,6 +282,10 @@ public final class HapticFeedbackVibrationProvider {
 
     @NonNull
     private VibrationEffect getKeyboardVibration(int effectId) {
+        if (effectId == HapticFeedbackConstants.KEYBOARD_TAP
+                && mKeyboardVibrationFixedAmplitude <= 0) {
+            return PetalHapticsEngine.defaultTap();
+        }
         int primitiveId;
         int predefinedEffectId;
         boolean predefinedEffectFallback;
@@ -380,9 +340,7 @@ public final class HapticFeedbackVibrationProvider {
             case HapticFeedbackConstants.SCROLL_TICK:
             case HapticFeedbackConstants.SCROLL_ITEM_FOCUS:
             case HapticFeedbackConstants.SCROLL_LIMIT:
-                // The SCROLL_* constants should bypass interruption filter, so that scroll haptics
-                // can play regardless of focus modes like DND. Guard this behavior by the feature
-                // flag controlling the general scroll feedback APIs.
+                // Scroll feedback follows its feature flag.
                 return android.view.flags.Flags.scrollFeedbackApi();
             default:
                 return false;

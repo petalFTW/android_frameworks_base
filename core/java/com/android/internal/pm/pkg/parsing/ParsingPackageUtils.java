@@ -1080,6 +1080,16 @@ public class ParsingPackageUtils {
 
         convertCompatPermissions(pkg);
 
+        List<ParsedUsesPermissionImpl> extraUsesPerms =
+                GmsCompatPkgParser.extraUsesPermissions(pkg.getPackageName());
+        if (extraUsesPerms != null) {
+            for (ParsedUsesPermissionImpl p : extraUsesPerms) {
+                if (!pkg.getUsesPermissionMapping().containsKey(p.getName())) {
+                    pkg.addUsesPermission(p);
+                }
+            }
+        }
+
         convertSplitPermissions(pkg);
 
         // At this point we can check if an application is not supporting densities and hence
@@ -1369,7 +1379,9 @@ public class ParsingPackageUtils {
             return input.error(result);
         }
         ParsedPermission permission = result.getResult();
-        if (permission != null) {
+        if (permission != null
+                && !GmsCompatPkgParser.shouldSkipPermissionDefinition(pkg.getPackageName(),
+                        permission)) {
             pkg.addPermission(permission);
         }
         return input.success(pkg);
@@ -2431,6 +2443,13 @@ public class ParsingPackageUtils {
         if (hasReceiverOrder) {
             pkg.sortReceivers();
         }
+
+        ParsedService gmsCompatClientSvc = GmsCompatPkgParser.maybeCreateClientService(pkg);
+        if (gmsCompatClientSvc != null) {
+            hasServiceOrder |= (gmsCompatClientSvc.getOrder() != 0);
+            pkg.addService(gmsCompatClientSvc);
+        }
+
         if (hasServiceOrder) {
             pkg.sortServices();
         }

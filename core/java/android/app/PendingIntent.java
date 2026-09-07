@@ -25,6 +25,7 @@ import static android.app.ActivityManager.START_ABORTED;
 import android.Manifest.permission;
 import android.annotation.IntDef;
 import android.annotation.NonNull;
+import android.app.compat.gms.GmsCompat;
 import android.annotation.Nullable;
 import android.annotation.RequiresPermission;
 import android.annotation.SpecialUsers.CanBeALL;
@@ -63,6 +64,9 @@ import android.util.Pair;
 import android.util.proto.ProtoOutputStream;
 
 import com.android.internal.annotations.GuardedBy;
+import com.android.internal.gmscompat.GmsHooks;
+import com.android.internal.gmscompat.GmsInfo;
+import com.android.internal.gmscompat.util.GmcActivityUtils;
 import com.android.internal.os.IResultReceiver;
 
 import java.lang.annotation.Retention;
@@ -1083,6 +1087,22 @@ public final class PendingIntent implements Parcelable {
             @Nullable OnFinished onFinished, @Nullable Handler handler,
             @Nullable String requiredPermission, @Nullable Bundle options)
             throws CanceledException {
+        if (GmsCompat.isEnabled()) {
+            if (options != null && intent != null && isBroadcast()) {
+                String targetPkg = getCreatorPackage();
+                if (targetPkg != null) {
+                    options = GmsHooks.filterBroadcastOptions(options, targetPkg);
+                }
+            }
+        }
+
+        if (isActivity()) {
+            String pkg = getCreatorPackage();
+            if (pkg != null && GmsCompat.isGmsAppAndUnprivilegedProcess(pkg)) {
+                options = GmcActivityUtils.allowActivityLaunchFromPendingIntent(options);
+            }
+        }
+
         if (sendAndReturnResult(context, code, intent, onFinished, handler, requiredPermission,
                 options) < 0) {
             throw new CanceledException();

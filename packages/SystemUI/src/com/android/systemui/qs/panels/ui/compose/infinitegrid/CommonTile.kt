@@ -132,10 +132,16 @@ fun LargeTileContent(
     onLongClick: (() -> Unit)? = null,
 ) {
     val isDualTarget = toggleClick != null
+    // petalOS: the skin renders tiles fully icon-only; with no label text the icon is
+    // centered in the card like the concept's media / slider cards. Stock behaviour
+    // (start-aligned icon + labels) is untouched when the skin is off.
+    val petalCenterIcon =
+        label.isEmpty() && com.android.systemui.petalos.PetalQsSkin.isEnabled(LocalContext.current)
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = tileHorizontalArrangement(),
-        modifier = modifier,
+        horizontalArrangement =
+            if (petalCenterIcon) Arrangement.Center else tileHorizontalArrangement(),
+        modifier = if (petalCenterIcon) modifier.fillMaxWidth() else modifier,
     ) {
         // Icon
         val longPressLabel = longPressLabelSettings().takeIf { onLongClick != null }

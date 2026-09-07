@@ -22,6 +22,7 @@ import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
 import android.media.VolumePolicy;
 import android.os.Bundle;
+import android.os.Handler;
 import android.provider.Settings;
 import android.view.WindowManager.LayoutParams;
 
@@ -31,6 +32,7 @@ import com.android.systemui.dagger.SysUISingleton;
 import com.android.systemui.demomode.DemoMode;
 import com.android.systemui.demomode.DemoModeController;
 import com.android.systemui.keyguard.KeyguardViewMediator;
+import com.android.systemui.petalos.PetalOverlayHost;
 import com.android.systemui.plugins.ActivityStarter;
 import com.android.systemui.plugins.PluginDependencyProvider;
 import com.android.systemui.plugins.VolumeDialog;
@@ -71,8 +73,12 @@ public class VolumeDialogComponent implements VolumeComponent, TunerService.Tuna
             | ActivityInfo.CONFIG_ASSETS_PATHS | ActivityInfo.CONFIG_UI_MODE);
     private final KeyguardViewMediator mKeyguardViewMediator;
     private final ActivityStarter mActivityStarter;
+    private final PetalOverlayHost mPetalHost;
     private VolumeDialog mDialog;
     private VolumePolicy mVolumePolicy;
+    private VolumeDialogController.State mLastState;
+    private float mLastShownFraction = -1f;
+    private boolean mHasShownVolume = false;
 
     @Inject
     public VolumeDialogComponent(
@@ -90,6 +96,29 @@ public class VolumeDialogComponent implements VolumeComponent, TunerService.Tuna
         mActivityStarter = activityStarter;
         mController = volumeDialogController;
         mController.setUserActivityListener(this);
+        // petalOS: drive the bezel-anchored volume overlay from the controller's
+        // show/state/dismiss callbacks instead of the stock volume panel (whose
+        // show path is suppressed in VolumeDialogImpl#showH).
+        mPetalHost = new PetalOverlayHost(context);
+        // petalOS: scrubbing the volume HUD sets the stream level directly.
+        mPetalHost.setOnVolumeScrubListener(new PetalOverlayHost.OnVolumeScrubListener() {
+            @Override
+            public void onVolumeScrub(float fraction) {
+                if (mLastState == null) return;
+                VolumeDialogController.StreamState ss =
+                        mLastState.states.get(mLastState.activeStream);
+                if (ss == null) return;
+                int level = ss.levelMin + Math.round(fraction * (ss.levelMax - ss.levelMin));
+                level = Math.max(ss.levelMin, Math.min(ss.levelMax, level));
+                mController.setStreamVolume(mLastState.activeStream, level, true);
+            }
+
+            @Override
+            public void onVolumeScrubEnd() {
+                // no-op; the host re-arms the auto-dismiss timer.
+            }
+        });
+        mController.addCallback(mPetalVolumeCallbacks, new Handler(context.getMainLooper()));
         // Allow plugins to reference the VolumeDialogController.
         pluginDependencyProvider.allowPluginDependency(VolumeDialogController.class);
         extensionController.newExtension(VolumeDialog.class)
@@ -212,5 +241,104 @@ public class VolumeDialogComponent implements VolumeComponent, TunerService.Tuna
             startSettings(ZEN_PRIORITY_SETTINGS);
         }
     };
+
+    private final VolumeDialogController.Callbacks mPetalVolumeCallbacks =
+            new VolumeDialogController.Callbacks() {
+        @Override
+        public void onShowRequested(int reason, boolean keyguardLocked, int lockTaskModeState) {
+            updateVolumeOverlay(true);
+        }
+
+        @Override
+        public void onDismissRequested(int reason) {
+            mPetalHost.dismissVolume();
+        }
+
+        @Override
+        public void onStateChanged(VolumeDialogController.State state) {
+            boolean wasShowing = mPetalHost.isVolumeShowing();
+            mLastState = state;
+            if (wasShowing) {
+                // The overlay is up: push the fresh level/mute into it so the fill pill
+                // tracks the volume keys. Without this the bar freezes on the value it
+                // was opened with.
+                updateVolumeOverlay(true);
+            }
+        }
+
+        @Override
+        public void onLayoutDirectionChanged(int layoutDirection) {
+        }
+
+        @Override
+        public void onConfigurationChanged() {
+        }
+
+        @Override
+        public void onShowVibrateHint() {
+        }
+
+        @Override
+        public void onShowSilentHint() {
+        }
+
+        @Override
+        public void onScreenOff() {
+            mPetalHost.dismissVolume();
+        }
+
+        @Override
+        public void onShowSafetyWarning(int flags) {
+        }
+
+        @Override
+        public void onAccessibilityModeChanged(Boolean showA11yStream) {
+        }
+
+        @Override
+        public void onCaptionComponentStateChanged(Boolean isComponentEnabled,
+                Boolean fromTooltip) {
+        }
+
+        @Override
+        public void onCaptionEnabledStateChanged(Boolean isEnabled, Boolean checkBeforeSwitch) {
+        }
+
+        @Override
+        public void onShowCsdWarning(int csdWarning, int durationMs) {
+        }
+
+        @Override
+        public void onVolumeChangedFromKey() {
+        }
+    };
+
+    /**
+     * Shows (or refreshes) the petal volume overlay from the latest controller state.
+     * Re-arms the auto-dismiss, and fires the over-limit shake when a press did not
+     * move the level while already parked at an end of the range.
+     */
+    private void updateVolumeOverlay(boolean allowShake) {
+        if (mLastState == null) {
+            return;
+        }
+        VolumeDialogController.StreamState streamState =
+                mLastState.states.get(mLastState.activeStream);
+        if (streamState == null) {
+            return;
+        }
+        int range = streamState.levelMax - streamState.levelMin;
+        float fraction = range > 0
+                ? (float) (streamState.level - streamState.levelMin) / (float) range
+                : 0f;
+        fraction = Math.max(0f, Math.min(1f, fraction));
+        boolean atLimit = fraction <= 0f || fraction >= 1f;
+        boolean shake = allowShake && mHasShownVolume && atLimit
+                && Math.abs(fraction - mLastShownFraction) < 1e-6f;
+        mPetalHost.showVolume(streamState.level, streamState.levelMin,
+                streamState.levelMax, streamState.muted, shake);
+        mLastShownFraction = fraction;
+        mHasShownVolume = true;
+    }
 
 }

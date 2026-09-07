@@ -620,6 +620,17 @@ object BrightnessSliderMotionTestKeys {
 
 @Composable
 private fun colors(): SliderColors {
+    // petalOS: when the quick settings skin is enabled, style the slider with the petal
+    // card palette (white fill on a dark translucent track).
+    if (com.android.systemui.petalos.PetalQsSkin.isEnabled(LocalContext.current)) {
+        return SliderDefaults.colors(
+            thumbColor = com.android.systemui.petalos.PetalQsSkin.CardLight,
+            activeTrackColor = com.android.systemui.petalos.PetalQsSkin.CardLight,
+            inactiveTrackColor = com.android.systemui.petalos.PetalQsSkin.CardColor,
+            activeTickColor = com.android.systemui.petalos.PetalQsSkin.GlyphDark,
+            inactiveTickColor = com.android.systemui.petalos.PetalQsSkin.GlyphLight,
+        )
+    }
     return SliderDefaults.colors()
         .copy(
             inactiveTrackColor = LocalAndroidColorScheme.current.surfaceEffect1,

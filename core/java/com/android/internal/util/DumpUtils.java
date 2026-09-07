@@ -107,6 +107,20 @@ public final class DumpUtils {
         }
     }
 
+    public static boolean checkDumpPermission(Context context, String tag, PrintWriter pw, boolean log) {
+        if (context.checkCallingOrSelfPermission(android.Manifest.permission.DUMP)
+                != PackageManager.PERMISSION_GRANTED) {
+            if (log) {
+                logMessage(pw, "Permission Denial: can't dump " + tag + " from from pid="
+                        + Binder.getCallingPid() + ", uid=" + Binder.getCallingUid()
+                        + " due to missing android.permission.DUMP permission");
+            }
+            return false;
+        } else {
+            return true;
+        }
+    }
+
     /**
      * Verify that caller holds
      * {@link android.Manifest.permission#PACKAGE_USAGE_STATS} and that they

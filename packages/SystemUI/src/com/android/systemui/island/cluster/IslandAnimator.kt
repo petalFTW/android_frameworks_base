@@ -181,6 +181,58 @@ class IslandAnimator(private val view: View) {
         alphaAnimator?.start()
     }
 
+    fun animateTranslationY(target: Float, durationMs: Long = 220L, onEnd: (() -> Unit)? = null) {
+        if (mode == AnimationMode.NONE) {
+            view.translationY = target
+            onEnd?.invoke()
+            return
+        }
+        alphaAnimator?.cancel()
+        alphaAnimator = ValueAnimator.ofFloat(view.translationY, target).apply {
+            duration = durationMs
+            interpolator = PathInterpolator(0.3f, 0f, 0.8f, 0.15f)
+            addUpdateListener { a -> view.translationY = a.animatedValue as Float }
+            addListener(
+                object : AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: android.animation.Animator) {
+                        onEnd?.invoke()
+                    }
+                },
+            )
+        }
+        alphaAnimator?.start()
+    }
+
+    /** Spring-settle translationX back to 0 with paired alpha restore. */
+    fun settleTranslationX(onEnd: (() -> Unit)? = null) {
+        if (mode == AnimationMode.NONE) {
+            view.translationX = 0f
+            view.alpha = 1f
+            onEnd?.invoke()
+            return
+        }
+        alphaAnimator?.cancel()
+        val startTx = view.translationX
+        val startAlpha = view.alpha
+        alphaAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 280L
+            interpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
+            addUpdateListener { a ->
+                val f = a.animatedFraction
+                view.translationX = startTx * (1f - f)
+                view.alpha = startAlpha + (1f - startAlpha) * f
+            }
+            addListener(
+                object : AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: android.animation.Animator) {
+                        onEnd?.invoke()
+                    }
+                },
+            )
+        }
+        alphaAnimator?.start()
+    }
+
     fun cancelAll() {
         springW?.cancel()
         springH?.cancel()

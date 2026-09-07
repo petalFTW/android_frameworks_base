@@ -18,9 +18,11 @@ package com.android.systemui.island
 
 import android.content.Context
 import android.content.res.Configuration
+import android.graphics.Rect
 import android.media.session.MediaController
 import android.view.View
 import android.view.WindowManager
+import androidx.core.view.doOnLayout
 import com.android.systemui.CoreStartable
 import com.android.systemui.dagger.SysUISingleton
 import com.android.systemui.dagger.qualifiers.Application
@@ -43,7 +45,13 @@ import com.android.systemui.island.signal.MediaSignalSource
 import com.android.systemui.island.signal.NotificationSignalSource
 import com.android.systemui.island.signal.SignalRouter
 import com.android.systemui.island.signal.TorchSignalSource
+import com.android.systemui.plugins.ActivityStarter
+import com.android.systemui.shade.ShadeExpansionStateManager
+import com.android.systemui.shade.ShadeStateListener
+import com.android.systemui.shade.STATE_CLOSED
+import com.android.systemui.shade.domain.interactor.ShadeInteractor
 import com.android.systemui.statusbar.policy.ConfigurationController
+import com.android.systemui.statusbar.policy.KeyguardStateController
 import com.android.systemui.util.concurrency.DelayableExecutor
 import java.io.PrintWriter
 import javax.inject.Inject
@@ -63,7 +71,12 @@ class IslandController @Inject constructor(
     @Application private val scope: CoroutineScope,
     private val settings: IslandSettings,
     private val configurationController: ConfigurationController,
+    private val shadeExpansionStateManager: ShadeExpansionStateManager,
+    private val shadeInteractor: ShadeInteractor,
+    private val keyguardStateController: KeyguardStateController,
+    private val activityStarter: ActivityStarter,
     private val signalRouter: SignalRouter,
+    private val statusBarIconHider: StatusBarIconHider,
     private val notificationSignalSource: NotificationSignalSource,
     private val mediaSignalSource: MediaSignalSource,
     private val callSignalSource: CallSignalSource,
@@ -83,8 +96,37 @@ class IslandController @Inject constructor(
             override fun onThemeChanged() = applyTheme()
         }
 
+    /**
+     * The status bar re-shows its icons (clock, notification + system icons) whenever the shade
+     * transitions, which undoes [StatusBarIconHider]'s hide. Re-apply coverage on every shade
+     * state change, and once more after a fully-closed shade so a lingering media blob keeps the
+     * icons hidden even after the icon fade-in completes.
+     */
+    private val shadeStateListener =
+        ShadeStateListener { state ->
+            refreshStatusBarCoverage()
+            if (state == STATE_CLOSED) {
+                mainExecutor.executeDelayed({ refreshStatusBarCoverage() }, 400L)
+            }
+        }
+
+    /**
+     * The keyguard re-shows the status bar icons when it locks and unlocks; re-assert coverage a
+     * beat after the transition so a visible media blob keeps them hidden once the icon fade-in
+     * completes.
+     */
+    private val keyguardStateCallback =
+        object : KeyguardStateController.Callback {
+            override fun onKeyguardShowingChanged() {
+                refreshStatusBarCoverage()
+                mainExecutor.executeDelayed({ refreshStatusBarCoverage() }, 400L)
+            }
+        }
+
     override fun start() {
         settings.start()
+        shadeExpansionStateManager.addStateListener(shadeStateListener)
+        keyguardStateController.addCallback(keyguardStateCallback)
         scope.launch {
             settings.enabled.collect { enabled -> onEnabledChanged(enabled) }
         }
@@ -93,6 +135,14 @@ class IslandController @Inject constructor(
                 window?.rootView?.leftIsland?.setAnimationMode(mode)
                 window?.rootView?.rightIsland?.setAnimationMode(mode)
             }
+        }
+        // Quick settings and the shade re-show status bar icons on open/close; re-assert coverage
+        // on every transition so a visible blob keeps them hidden.
+        scope.launch {
+            shadeInteractor.isAnyExpanded.collect { refreshStatusBarCoverage() }
+        }
+        scope.launch {
+            shadeInteractor.isQsExpanded.collect { refreshStatusBarCoverage() }
         }
     }
 
@@ -103,6 +153,12 @@ class IslandController @Inject constructor(
                 val w = IslandWindow(context, windowManager, geometry)
                 window = w
                 leftMachine.setNotifDwellMs(settings.notifDwellMs())
+                w.rootView.onOutsideTouch = {
+                    // A tap anywhere else collapses a currently-expanded blob (bug: expanded
+                    // media/notification island never dismissed on outside tap).
+                    if (w.rootView.leftIsland.isExpanded) leftMachine.userCollapse()
+                    if (w.rootView.rightIsland.isExpanded) rightMachine.userCollapse()
+                }
                 wireMachine(leftMachine, w.rootView.leftIsland)
                 wireMachine(rightMachine, w.rootView.rightIsland)
                 w.rootView.leftIsland.setAnimationMode(settings.animationMode())
@@ -121,6 +177,7 @@ class IslandController @Inject constructor(
         } else {
             window?.let { w ->
                 configurationController.removeCallback(configListener)
+                statusBarIconHider.updateCoverage(null, null)
                 w.removeFromWindow()
             }
             window = null
@@ -128,27 +185,59 @@ class IslandController @Inject constructor(
     }
 
     private fun wireMachine(machine: IslandStateMachine, view: IslandView) {
+        val host =
+            object : IslandPresenter.Host {
+                override fun setWindowFocusable(focusable: Boolean) {
+                    window?.setFocusable(focusable)
+                }
+
+                override fun setDismissalHeld(held: Boolean) {
+                    machine.holdDismissal(held)
+                }
+
+                override fun launchPendingIntent(pendingIntent: android.app.PendingIntent) {
+                    // Dismisses the keyguard (via bouncer when secure) before launching, the
+                    // same path a shade notification tap takes.
+                    activityStarter.startPendingIntentDismissingKeyguard(pendingIntent)
+                }
+            }
+
         machine.listener =
             object : IslandStateMachine.Listener {
                 override fun onShow(signal: IslandSignal, form: Form) {
                     val presenter = createPresenter(signal)
                     android.util.Log.d(TAG, "onShow signal=${signal.id} kind=${signal.kind} presenter=${presenter != null}")
                     if (presenter == null) return
+                    presenter.setHost(host)
                     view.visibility = View.VISIBLE
                     view.show(signal, presenter, form)
+                    refreshStatusBarCoverage()
+                    // Refresh once more after the next layout so a freshly sized blob covers the
+                    // status bar icons immediately (covers NONE/instant animation mode too).
+                    view.doOnLayout { refreshStatusBarCoverage() }
                 }
 
                 override fun onMorph(signal: IslandSignal) {
                     val presenter = createPresenter(signal) ?: return
+                    presenter.setHost(host)
                     view.morph(signal, presenter)
                 }
 
-                override fun onExpand() = view.expand()
+                override fun onExpand() {
+                    view.expand()
+                    refreshStatusBarCoverage()
+                }
 
-                override fun onCollapse() = view.collapse()
+                override fun onCollapse() {
+                    view.collapse()
+                    refreshStatusBarCoverage()
+                }
 
                 override fun onDismiss() {
                     view.dismiss()
+                    refreshStatusBarCoverage()
+                    // Re-check once the dissolve/translate-off animation has finished.
+                    mainExecutor.executeDelayed({ refreshStatusBarCoverage() }, 260L)
                 }
 
                 override fun onFormChange(form: Form) = Unit
@@ -162,9 +251,11 @@ class IslandController @Inject constructor(
                         val rightView = window?.rootView?.rightIsland ?: return
                         if (rightView.isExpanded) rightMachine.userCollapse()
                     }
+                    refreshStatusBarCoverage()
                 }
 
                 override fun onFormSettled(island: IslandView, expanded: Boolean) {
+                    refreshStatusBarCoverage()
                     if (expanded) {
                         android.util.Log.d(
                             TAG,
@@ -180,15 +271,32 @@ class IslandController @Inject constructor(
                 }
 
                 override fun onUserDismiss(island: IslandView) {
+                    // Capture the id before userDismiss() pops the queue and swaps `current`.
+                    val signalId = machine.current?.id
                     machine.userDismiss()
                     island.presenterForSignal()?.onDismiss()
+                    // A user-initiated swipe should also remove the notification from the
+                    // notification center (auto-expiry dismissals must NOT cancel it).
+                    if (signalId?.startsWith(NOTIF_ID_PREFIX) == true) {
+                        notificationSignalSource.cancelFromIsland(
+                            signalId.removePrefix(NOTIF_ID_PREFIX)
+                        )
+                    }
                 }
 
                 override fun onUserExpand(island: IslandView) = machine.userExpand()
 
                 override fun onUserPrimaryAction(island: IslandView) {
+                    val signalId = machine.current?.id
                     val handled = island.presenterForSignal()?.onPrimaryAction() == true
-                    if (handled) machine.userCollapse()
+                    if (handled) {
+                        // Remember this notification so the app's read-marking re-post doesn't
+                        // re-emerge the island (bug: tapping a notification re-shows it).
+                        if (signalId?.startsWith(NOTIF_ID_PREFIX) == true) {
+                            signalRouter.markOpened(signalId.removePrefix(NOTIF_ID_PREFIX))
+                        }
+                        machine.userCollapse()
+                    }
                 }
             }
     }
@@ -223,6 +331,25 @@ class IslandController @Inject constructor(
         }
     }
 
+    /** Hides the status bar icons currently sitting behind a visible blob. */
+    private fun refreshStatusBarCoverage() {
+        val root = window?.rootView ?: return
+        statusBarIconHider.updateCoverage(
+            coverageRect(root.leftIsland),
+            coverageRect(root.rightIsland),
+        )
+    }
+
+    private fun coverageRect(island: IslandView): Rect? {
+        if (island.visibility != View.VISIBLE || island.alpha < 0.5f || island.width <= 0) {
+            return null
+        }
+        val r = Rect()
+        island.getBoundsOnScreen(r)
+        r.inset(-geometry.dp(4f), -geometry.dp(4f))
+        return r
+    }
+
     private fun applyTheme() {
         val dark = (context.resources.configuration.uiMode and
             Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
@@ -240,5 +367,6 @@ class IslandController @Inject constructor(
 
     companion object {
         private const val TAG = "IslandController"
+        private const val NOTIF_ID_PREFIX = "notif:"
     }
 }

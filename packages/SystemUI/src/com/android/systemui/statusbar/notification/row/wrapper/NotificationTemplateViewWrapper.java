@@ -44,6 +44,7 @@ import com.android.internal.util.ContrastColorUtil;
 import com.android.internal.widget.NotificationActionListLayout;
 import com.android.systemui.Dependency;
 import com.android.systemui.UiOffloadThread;
+import com.android.systemui.petalos.PetalOtpHelper;
 import com.android.systemui.res.R;
 import com.android.systemui.statusbar.CrossFadeHelper;
 import com.android.systemui.statusbar.TransformableView;
@@ -60,6 +61,9 @@ import java.util.function.Consumer;
  * Wraps a notification view inflated from a template.
  */
 public class NotificationTemplateViewWrapper extends NotificationHeaderViewWrapper {
+
+    /** Tag identifying petalOS's injected "Copy code" action button. */
+    private static final String PETAL_OTP_COPY_TAG = "petal_otp_copy";
 
     private final int mFullHeaderTranslation;
     private final boolean mAllowHideHeader;
@@ -287,6 +291,55 @@ public class NotificationTemplateViewWrapper extends NotificationHeaderViewWrapp
         if (row.getHeaderVisibleAmount() != DEFAULT_HEADER_VISIBLE_AMOUNT) {
             setHeaderVisibleAmount(row.getHeaderVisibleAmount());
         }
+        petalUpdateOtpCopyAction(row);
+    }
+
+    /**
+     * petalOS: injects a "Copy code" action into the row's action list when the notification
+     * text contains an OTP-looking code (see {@link PetalOtpHelper}). The injected button is a
+     * plain clipboard copy owned by SystemUI — no PendingIntent from the posting app involved.
+     */
+    private void petalUpdateOtpCopyAction(ExpandableNotificationRow row) {
+        if (mActions == null) {
+            return;
+        }
+        View existing = mActions.findViewWithTag(PETAL_OTP_COPY_TAG);
+        StatusBarNotification sbn = NotificationBundleUi.isEnabled()
+                ? (row.getEntryAdapter() != null ? row.getEntryAdapter().getSbn() : null)
+                : (row.getEntryLegacy() != null ? row.getEntryLegacy().getSbn() : null);
+        String code = null;
+        if (sbn != null) {
+            Notification n = sbn.getNotification();
+            code = PetalOtpHelper.extract(
+                    n.extras.getCharSequence(Notification.EXTRA_TITLE),
+                    n.extras.getCharSequence(Notification.EXTRA_TEXT),
+                    n.extras.getCharSequence(Notification.EXTRA_BIG_TEXT),
+                    n.extras.getCharSequence(Notification.EXTRA_SUB_TEXT));
+        }
+        if (code == null) {
+            if (existing != null) {
+                mActions.removeView(existing);
+            }
+            return;
+        }
+        // IMPORTANT: build the chip (and resolve its strings) with the ROW's context, which is
+        // SystemUI's own. The template view's context can be the posting app's package context
+        // (decorated custom styles), and SystemUI string IDs don't exist there — that context
+        // swap is exactly what made the first tap of this button crash SystemUI.
+        Context rowContext = row.getContext();
+        String label = rowContext.getString(R.string.petal_otp_copy_action);
+        if (existing instanceof Button) {
+            ((Button) existing).setText(label);
+            return;
+        }
+        Button chip = (Button) android.view.LayoutInflater.from(rowContext).inflate(
+                com.android.internal.R.layout.notification_material_action, mActions,
+                /* attachToRoot= */ false);
+        chip.setText(label);
+        final String finalCode = code;
+        chip.setOnClickListener(v -> PetalOtpHelper.copyToClipboard(rowContext, finalCode));
+        chip.setTag(PETAL_OTP_COPY_TAG);
+        mActions.addView(chip);
     }
 
     @Override

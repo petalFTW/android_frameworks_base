@@ -54,6 +54,7 @@ import com.android.systemui.statusbar.notification.shared.NotificationBundleUi;
  */
 public abstract class NotificationViewWrapper implements TransformableView {
 
+	protected final Context mContext;
     protected final View mView;
     protected final ExpandableNotificationRow mRow;
     private final Rect mTmpRect = new Rect();
@@ -103,6 +104,7 @@ public abstract class NotificationViewWrapper implements TransformableView {
     }
 
     protected NotificationViewWrapper(Context ctx, View view, ExpandableNotificationRow row) {
+		mContext = ctx;
         mView = view;
         mRow = row;
         onReinflated();

@@ -6587,6 +6587,10 @@
     <permission android:name="android.permission.REVOKE_RUNTIME_PERMISSIONS"
          android:protectionLevel="signature|installer|verifier" />
 
+    <!--- @hide -->
+    <permission android:name="android.permission.UPDATE_AND_INVALIDATE_PERMISSION_STATE"
+        android:protectionLevel="internal|preinstalled" />
+
    <!-- @TestApi Allows an application to revoke the POST_NOTIFICATIONS permission from an app
         without killing the app. Only granted to the shell.
         @hide -->

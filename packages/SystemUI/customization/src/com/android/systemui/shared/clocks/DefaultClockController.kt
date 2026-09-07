@@ -17,6 +17,7 @@ import android.content.Context
 import android.content.res.Resources
 import android.graphics.Color
 import android.graphics.Rect
+import android.graphics.Typeface
 import android.icu.text.NumberFormat
 import android.icu.util.TimeZone
 import android.util.TypedValue
@@ -100,9 +101,60 @@ class DefaultClockController(
             )
         clocks = listOf(smallClock.view, largeClock.view)
 
+        applyPetalStyle()
+
         events = DefaultClockEvents()
         events.onLocaleChanged(Locale.getDefault())
     }
+
+    /**
+     * Applies the petalOS clock style (encoded by the "petal_style" axis in the clock settings) as
+     * a concrete typeface + layout + colour so every preset is visually distinct.
+     */
+    private fun applyPetalStyle() {
+        val style = settings?.axes?.get(DefaultClockProvider.PETAL_STYLE_AXIS)?.toInt() ?: 0
+        val typeface = typefaceFor(style) ?: return
+        val singleLine = singleLineFor(style)
+        val weight = weightFor(style)
+        clocks.forEach { clock ->
+            // The clock re-applies its own variable-font weight axis (thin by default) on every
+            // animator rebuild, which silently undoes the typeface's weight for variable fonts
+            // (sans-serif = Roboto Flex). Pin the weight so e.g. "HyperOS Bold" stays bold.
+            if (weight > 0) clock.setWeightOverride(weight)
+            clock.setClockTypeface(typeface)
+            clock.setClockInSingleLine(singleLine)
+        }
+    }
+
+    /** Variable-font weight for the style; -1 = leave the clock's own weight logic alone. */
+    private fun weightFor(style: Int): Int = when (style) {
+        1 -> 100 // HyperOS Light
+        2 -> 900 // HyperOS Bold
+        3 -> 500 // OxygenOS
+        4 -> 700 // iOS
+        5 -> 300 // iOS Light
+        6 -> 700 // Pixel Bold
+        7 -> 100 // Slim
+        11 -> 600 // Neon
+        else -> -1 // Mono / Serif / Cursive: non-variable families define their own look
+    }
+
+    private fun typefaceFor(style: Int): Typeface? = when (style) {
+        1 -> Typeface.create("sans-serif-thin", Typeface.NORMAL)
+        2 -> Typeface.create("sans-serif-black", Typeface.NORMAL)
+        3 -> Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        4 -> Typeface.create(Typeface.create("sans-serif", Typeface.NORMAL), 700, false)
+        5 -> Typeface.create("sans-serif-light", Typeface.NORMAL)
+        6 -> Typeface.create("sans-serif-condensed", Typeface.BOLD)
+        7 -> Typeface.create(Typeface.create("sans-serif", Typeface.NORMAL), 100, false)
+        8 -> Typeface.create("monospace", Typeface.NORMAL)
+        9 -> Typeface.create("serif", Typeface.NORMAL)
+        10 -> Typeface.create("cursive", Typeface.NORMAL)
+        11 -> Typeface.create(Typeface.create("sans-serif", Typeface.NORMAL), 600, false)
+        else -> null
+    }
+
+    private fun singleLineFor(style: Int): Boolean = style == 3 || style == 5 || style == 6
 
     override val eventListeners = ClockEventListeners()
 
@@ -149,7 +201,8 @@ class DefaultClockController(
                 override fun onThemeChanged(theme: ThemeConfig) {
                     this@DefaultClockFaceController.theme = theme
 
-                    val color = theme.getDefaultColor(ctx)
+                    // petalOS: honor the clock style's accent colour when one is set.
+                    val color = seedColor ?: theme.getDefaultColor(ctx)
                     if (currentColor == color) {
                         return
                     }

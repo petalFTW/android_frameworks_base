@@ -928,17 +928,40 @@ constructor(
                                         end = qsHorizontalMargin(),
                                     )
                         ) {
-                            QuickSettingsLayout(
-                                brightness =
-                                    if (viewModel.isBrightnessSliderVisible) {
-                                        { BrightnessSlider() }
+                            // petalOS: with the QS skin on, the media slot + brightness/volume
+                            // pills flow to InfiniteGridLayout through LocalPetalMediaRow so the
+                            // middle row lands between the pills row and the circle tiles, and the
+                            // stock top brightness slider is suppressed.
+                            val petalSkin =
+                                com.android.systemui.petalos.PetalQsSkin.isEnabled(
+                                    androidx.compose.ui.platform.LocalContext.current)
+                            CompositionLocalProvider(
+                                com.android.systemui.petalos.LocalPetalMediaRow provides
+                                    if (petalSkin) {
+                                        {
+                                            com.android.systemui.petalos.PetalMediaRow(
+                                                brightnessViewModel =
+                                                    containerViewModel.brightnessSliderViewModel,
+                                                media = Media,
+                                                mediaVisible = viewModel.qsMediaVisible,
+                                            )
+                                        }
                                     } else {
-                                        {}
-                                    },
-                                tiles = TileGrid,
-                                media = Media,
-                                mediaInRow = viewModel.qsMediaInRow,
-                            )
+                                        null
+                                    }
+                            ) {
+                                QuickSettingsLayout(
+                                    brightness =
+                                        if (!petalSkin && viewModel.isBrightnessSliderVisible) {
+                                            { BrightnessSlider() }
+                                        } else {
+                                            {}
+                                        },
+                                    tiles = TileGrid,
+                                    media = { if (!petalSkin) Media() },
+                                    mediaInRow = viewModel.qsMediaInRow,
+                                )
+                            }
                         }
                     }
                 }

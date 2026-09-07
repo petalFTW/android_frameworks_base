@@ -56,6 +56,7 @@ import android.view.DisplayCutout.BoundsPosition;
 import android.view.DisplayInfo;
 import android.view.Gravity;
 import android.view.LayoutInflater;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.View.OnLayoutChangeListener;
 import android.view.ViewGroup;
@@ -89,6 +90,7 @@ import com.android.systemui.settings.DisplayTracker;
 import com.android.systemui.settings.UserTracker;
 import com.android.systemui.shade.domain.interactor.ShadeInteractor;
 import com.android.systemui.statusbar.commandline.CommandRegistry;
+import com.android.systemui.statusbar.CommandQueue;
 import com.android.systemui.statusbar.events.PrivacyDotViewController;
 import com.android.systemui.statusbar.policy.ConfigurationController;
 import com.android.systemui.util.concurrency.DelayableExecutor;
@@ -408,6 +410,28 @@ public class ScreenDecorations implements
             });
         }
     };
+
+    /** Use the existing hardware decoration surface; auxiliary keys create no windows. */
+    @Inject
+    void registerBezelKeyCallback(CommandQueue commandQueue) {
+        commandQueue.addCallback(new CommandQueue.Callbacks() {
+            @Override
+            public void handleSystemKey(KeyEvent event) {
+                if (event.getAction() != KeyEvent.ACTION_DOWN || event.getRepeatCount() != 0
+                        || event.isCanceled() || event.getScanCode() <= 0
+                        || (event.getKeyCode() != KeyEvent.KEYCODE_ASSIST
+                                && event.getKeyCode() != KeyEvent.KEYCODE_SEARCH)) {
+                    return;
+                }
+                mExecutor.execute(() -> {
+                    if (mScreenDecorHwcLayer != null && !mPendingConfigChange
+                            && mContext.getDisplay().getState() == Display.STATE_ON) {
+                        mScreenDecorHwcLayer.pulseExtraKey();
+                    }
+                });
+            }
+        });
+    }
 
     @Override
     public void start() {

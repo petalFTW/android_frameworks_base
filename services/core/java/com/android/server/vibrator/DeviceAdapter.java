@@ -27,34 +27,19 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-/**
- * Adapts a {@link CombinedVibration} to a device by transforming each {@link VibrationEffect} to
- * the available device vibrator capabilities defined by {@link VibratorInfo}.
- */
 final class DeviceAdapter implements CombinedVibration.VibratorAdapter {
     private static final String TAG = "DeviceAdapter";
 
-    /**
-     * The HalVibrator.getInfo might trigger HAL binder calls, so just keep a reference to
-     * the system vibrators until the adaptor is triggered by the VibrationThread.
-     */
     private final SparseArray<HalVibrator> mAvailableVibrators;
     private final int[] mAvailableVibratorIds;
 
-    /**
-     * The actual adapters that can replace VibrationEffectSegment entries from a list based on the
-     * VibratorInfo. They can be applied in a chain to a mutable list before a new VibrationEffect
-     * instance is created with the final segment list.
-     */
     private final List<VibrationSegmentsAdapter> mSegmentAdapters;
-    /**
-     * The vibration segment validators that can validate VibrationEffectSegments entries based on
-     * the VibratorInfo.
-     */
+
     private final List<VibrationSegmentsValidator> mSegmentsValidators;
 
     DeviceAdapter(VibrationSettings settings, SparseArray<HalVibrator> vibrators) {
         mSegmentAdapters = Arrays.asList(
+                new PetalHapticsEngine(),
                 // Replace unsupported prebaked effects with fallback
                 new PrebakedFallbackAdapter(settings.getFallbackEffects()),
                 // Updates primitive delays to hardware supported pauses
@@ -120,8 +105,7 @@ final class DeviceAdapter implements CombinedVibration.VibratorAdapter {
                     mSegmentAdapters.get(i).adaptToVibrator(info, newSegments, newRepeatIndex);
         }
 
-        // Validate the vibration segments. If a segment is not supported, ignore the entire
-        // vibration effect.
+        // Drop effects the motor cannot play.
         for (int i = 0; i < mSegmentsValidators.size(); i++) {
             if (!mSegmentsValidators.get(i).hasValidSegments(info, newSegments)) {
                 return null;

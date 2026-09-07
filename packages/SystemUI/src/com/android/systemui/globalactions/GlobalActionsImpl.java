@@ -17,7 +17,9 @@ package com.android.systemui.globalactions;
 import static android.app.StatusBarManager.DISABLE2_GLOBAL_ACTIONS;
 
 import android.content.Context;
+import android.util.Log;
 
+import com.android.systemui.petalos.PetalOverlayHost;
 import com.android.systemui.plugins.GlobalActions;
 import com.android.systemui.shade.ShadeController;
 import com.android.systemui.statusbar.CommandQueue;
@@ -28,14 +30,19 @@ import javax.inject.Inject;
 
 public class GlobalActionsImpl implements GlobalActions, CommandQueue.Callbacks {
 
+    private static final String TAG = "PetalGlobalActions";
+
     private final Context mContext;
     private final KeyguardStateController mKeyguardStateController;
     private final DeviceProvisionedController mDeviceProvisionedController;
     private final CommandQueue mCommandQueue;
     private final GlobalActionsDialogLite mGlobalActionsDialog;
+    private final PetalOverlayHost mPetalHost;
     private boolean mDisabled;
     private ShutdownUi mShutdownUi;
     private ShadeController mShadeController;
+    private GlobalActionsManager mManager;
+    private boolean mReportedShown;
 
     @Inject
     public GlobalActionsImpl(Context context, CommandQueue commandQueue,
@@ -46,26 +53,43 @@ public class GlobalActionsImpl implements GlobalActions, CommandQueue.Callbacks 
             ShutdownUi shutdownUi) {
         mContext = context;
         mGlobalActionsDialog = globalActionsDialog;
+        mPetalHost = new PetalOverlayHost(context);
         mKeyguardStateController = keyguardStateController;
         mDeviceProvisionedController = deviceProvisionedController;
         mCommandQueue = commandQueue;
         mCommandQueue.addCallback(this);
         mShutdownUi = shutdownUi;
         mShadeController = shadeController;
+        mPetalHost.setOnPowerMenuVisibilityListener(showing -> {
+            if (showing) {
+                // Tell PhoneWindowManager we came up. Without this it fires a 5 s
+                // watchdog (framework GlobalActions$mShowTimeout) that concludes
+                // SystemUI failed and opens the legacy AOSP power menu on top.
+                if (!mReportedShown && mManager != null) {
+                    mReportedShown = true;
+                    mManager.onGlobalActionsShown();
+                }
+            } else if (mReportedShown && mManager != null) {
+                mReportedShown = false;
+                mManager.onGlobalActionsHidden();
+            }
+        });
     }
 
     @Override
     public void destroy() {
         mCommandQueue.removeCallback(this);
         mGlobalActionsDialog.destroy();
+        mPetalHost.dismissPowerMenu();
     }
 
     @Override
     public void showGlobalActions(GlobalActionsManager manager) {
         if (mDisabled) return;
-        mGlobalActionsDialog.showOrHideDialog(mKeyguardStateController.isShowing(),
-                mDeviceProvisionedController.isDeviceProvisioned(), null /* view */,
-                mContext.getDisplayId());
+        Log.d(TAG, "show");
+        mManager = manager;
+        mPetalHost.setGlobalActionsManager(manager);
+        mPetalHost.showPowerMenu(); // idempotent when already up
     }
 
     @Override
@@ -80,7 +104,8 @@ public class GlobalActionsImpl implements GlobalActions, CommandQueue.Callbacks 
         if (displayId != mContext.getDisplayId() || disabled == mDisabled) return;
         mDisabled = disabled;
         if (disabled) {
-            mGlobalActionsDialog.dismissDialog();
+            Log.d(TAG, "hide (DISABLE2_GLOBAL_ACTIONS)");
+            mPetalHost.dismissPowerMenu();
         }
     }
 }

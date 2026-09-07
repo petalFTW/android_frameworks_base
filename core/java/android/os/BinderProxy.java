@@ -25,6 +25,8 @@ import android.util.SparseIntArray;
 
 import com.android.internal.annotations.GuardedBy;
 import com.android.internal.os.BinderInternal;
+import com.android.internal.gmscompat.GmsCompatLib;
+import com.android.internal.gmscompat.IGmsCompatLib;
 
 import libcore.util.NativeAllocationRegistry;
 
@@ -514,12 +516,27 @@ public final class BinderProxy implements IBinder {
      * Retrieve a local interface - always null in case of a proxy
      */
     public IInterface queryLocalInterface(String descriptor) {
+        IGmsCompatLib gmcLib = GmsCompatLib.get();
+        if (gmcLib != null) {
+            synchronized (this) {
+                IInterface cache = mLocalInterface;
+                if (cache != null) {
+                    return cache == NO_LOCAL_INTERFACE ? null : cache;
+                }
+                IInterface res = gmcLib.maybeProvideBinderProxyInterface(this, descriptor);
+                mLocalInterface = res != null ? res : NO_LOCAL_INTERFACE;
+                return res;
+            }
+        }
         return null;
     }
 
     /** @hide */
     @Override
     public native @Nullable IBinder getExtension() throws RemoteException;
+
+    private static final String LOG_TAG_TXN = "BinderProxyTxn";
+    private static boolean LOG_TXNS = Log.isLoggable(LOG_TAG_TXN, Log.VERBOSE);
 
     /**
      * Perform a binder transaction on a proxy.
@@ -714,6 +731,17 @@ public final class BinderProxy implements IBinder {
      * @throws RemoteException
      */
     public void dump(FileDescriptor fd, String[] args) throws RemoteException {
+        if (LOG_TXNS) {
+            Log.v(LOG_TAG_TXN, "dump: " + getInterfaceDescriptor() + ", args " + Arrays.toString(args), new Throwable());
+        }
+
+        IGmsCompatLib gmcLib = GmsCompatLib.get();
+        if (gmcLib != null) {
+            if (gmcLib.maybeInterceptBinderProxyDump(this, fd, args, false)) {
+                return;
+            }
+        }
+
         Parcel data = Parcel.obtain();
         Parcel reply = Parcel.obtain();
         data.writeFileDescriptor(fd);
@@ -735,6 +763,17 @@ public final class BinderProxy implements IBinder {
      * @throws RemoteException
      */
     public void dumpAsync(FileDescriptor fd, String[] args) throws RemoteException {
+        if (LOG_TXNS) {
+            Log.v(LOG_TAG_TXN, "dumpAsync: " + getInterfaceDescriptor() + ", args " + Arrays.toString(args), new Throwable());
+        }
+
+        IGmsCompatLib gmcLib = GmsCompatLib.get();
+        if (gmcLib != null) {
+            if (gmcLib.maybeInterceptBinderProxyDump(this, fd, args, true)) {
+                return;
+            }
+        }
+
         Parcel data = Parcel.obtain();
         Parcel reply = Parcel.obtain();
         data.writeFileDescriptor(fd);
@@ -806,4 +845,7 @@ public final class BinderProxy implements IBinder {
      * native IBinder object, and a DeathRecipientList.
      */
     private final long mNativeData;
+
+    private IInterface mLocalInterface;
+    private static final IInterface NO_LOCAL_INTERFACE = () -> null;
 }

@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="bluetooth_auto_off_attribution_label">Bluetooth auto-off</string>
+    <string name="bg_dexopt_notif_ch_title">Optimizing apps</string>
+    <java-symbol type="string" name="bg_dexopt_notif_ch_title" />
+
+    <string name="bg_dexopt_notif_title">Optimizing apps (%1$d of %2$d)</string>
+    <java-symbol type="string" name="bg_dexopt_notif_title" />
+    <string name="bg_dexopt_notif_text">Device performance might be slower until app optimization completes</string>
+    <java-symbol type="string" name="bg_dexopt_notif_text" />
+
+    <string name="bg_dexopt_completed_notif_ch_title">App optimization has completed</string>
+    <java-symbol type="string" name="bg_dexopt_completed_notif_ch_title" />
+
+    <string name="bg_dexopt_completed_notif_title">App restart is required</string>
+    <java-symbol type="string" name="bg_dexopt_completed_notif_title" />
+    <string name="bg_dexopt_completed_notif_text">App optimization has completed. Tap to restart apps that were optimized.</string>
+    <java-symbol type="string" name="bg_dexopt_completed_notif_text" />
+
+    <string name="notif_channel_exploit_protection">Exploit protection</string>
+    <java-symbol type="string" name="notif_channel_exploit_protection" />
+    <string name="notif_text_tap_to_open_settings">Tap to open settings</string>
+    <java-symbol type="string" name="notif_text_tap_to_open_settings" />
+    <string name="notif_text_tap_to_see_details">Tap to see the details</string>
+    <java-symbol type="string" name="notif_text_tap_to_see_details" />
+    <string name="notif_action_more_info">More info</string>
+    <java-symbol type="string" name="notif_action_more_info" />
+
+    <string name="notif_native_debug_title">%1$s tried to use native code debugging</string>
+    <java-symbol type="string" name="notif_native_debug_title" />
+
+    <string name="notif_ch_system_journal">System journal</string>
+    <java-symbol type="string" name="notif_ch_system_journal" />
+
+    <string name="process_crash_notif_title">%1$s has crashed</string>
+    <java-symbol type="string" name="process_crash_notif_title" />
+
+    <string name="fsck_error_notif_title">File system error was detected</string>
+    <java-symbol type="string" name="fsck_error_notif_title" />
+
+    <string name="notif_memtag_crash_title">Memory tagging detected an error in %1$s</string>
+    <java-symbol type="string" name="notif_memtag_crash_title" />
+
+    <string name="notif_hmalloc_crash_title">hardened_malloc detected an error in %1$s</string>
+    <java-symbol type="string" name="notif_hmalloc_crash_title" />
+
+    <string name="notif_memory_dcl_title">%1$s tried to perform DCL via memory</string>
+    <java-symbol type="string" name="notif_memory_dcl_title" />
+
+    <string name="notif_storage_dcl_title">%1$s tried to perform DCL via storage</string>
+    <java-symbol type="string" name="notif_storage_dcl_title" />
+
+    <string name="usb_port_security_error_title">USB-C port security feature has malfunctioned</string>
+    <java-symbol type="string" name="usb_port_security_error_title" />
+
+</resources>

@@ -38,6 +38,7 @@ import android.annotation.BroadcastBehavior;
 import android.annotation.FlaggedApi;
 import android.annotation.IntDef;
 import android.annotation.NonNull;
+import android.app.compat.gms.GmsCompat;
 import android.annotation.Nullable;
 import android.annotation.RequiresPermission;
 import android.annotation.SdkConstant;
@@ -87,6 +88,7 @@ import android.provider.DocumentsContract;
 import android.provider.DocumentsProvider;
 import android.provider.MediaStore;
 import android.provider.OpenableColumns;
+import android.provider.Settings;
 import android.service.chooser.AdditionalContentContract;
 import android.service.chooser.ChooserAction;
 import android.service.chooser.ChooserResult;
@@ -10243,6 +10245,14 @@ public class Intent implements Parcelable, Cloneable {
      * @see #resolveActivityInfo
      */
     public ComponentName resolveActivity(@NonNull PackageManager pm) {
+        if (GmsCompat.isEnabled()) {
+            if (Settings.ACTION_SETTINGS_EMBED_DEEP_LINK_ACTIVITY.equals(getAction())) {
+                if (!GmsCompat.hasPermission(Manifest.permission.LAUNCH_MULTI_PANE_SETTINGS_DEEP_LINK)) {
+                    return null;
+                }
+            }
+        }
+
         if (mComponent != null) {
             return mComponent;
         }

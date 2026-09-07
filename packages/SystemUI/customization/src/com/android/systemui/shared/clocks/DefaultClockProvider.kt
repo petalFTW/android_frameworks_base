@@ -74,7 +74,10 @@ constructor(
             throw IllegalArgumentException("${settings.clockId} is unsupported by $TAG")
         }
 
-        return if (isClockReactiveVariantsEnabled) {
+        // petalOS: lock-screen clock styles are encoded as a "petal_style" font axis and are
+        // implemented by DefaultClockController (typeface/layout/colour presets). When one is
+        // set, bypass the reactive-variant FlexClockController so the style is always honored.
+        return if (isClockReactiveVariantsEnabled && settings.axes.get(PETAL_STYLE_AXIS) == null) {
             val buffers = messageBuffers ?: ClockMessageBuffers(ClockLogger.DEFAULT_MESSAGE_BUFFER)
             val fontAxes = getDefaultAxes(settings).merge(settings.axes)
             val clockSettings = settings.copy(axes = ClockAxisStyle(fontAxes))
@@ -140,9 +143,14 @@ constructor(
         // In practice, 30 looks good enough and limits our memory usage
         const val NUM_CLOCK_FONT_ANIMATION_STEPS = 30
 
+        /** petalOS clock style selector axis (see PetalClockStyleController). */
+        const val PETAL_STYLE_AXIS = "petal_style"
+
         val FLEX_TYPEFACE by lazy {
-            // TODO(b/364680873): Move constant to config_clockFontFamily when shipping
-            Typeface.create("google-sans-flex-clock", Typeface.NORMAL)
+            // petalOS: the stock family name "google-sans-flex-clock" is only registered on
+            // Google devices. LineageOS ships the variable font under "google-sans-flex", so use
+            // that so the clock-style font axes actually resolve to a variable font.
+            Typeface.create("google-sans-flex", Typeface.NORMAL)
         }
     }
 }

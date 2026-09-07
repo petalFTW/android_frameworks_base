@@ -122,20 +122,28 @@ class CallPresenter(
             },
         )
 
-        // Decline / accept buttons.
-        val decline = callButton(ACCENT_DECLINE, android.R.drawable.sym_call_missed) {
-            (payload.declineIntent ?: payload.hangUpIntent)?.sendSafe()
+        // Decline / accept buttons. Incoming calls get a decline + accept pair; an ongoing call
+        // only gets a hang-up button (there is nothing left to accept).
+        if (payload.isIncoming) {
+            val decline = callButton(ACCENT_DECLINE, android.R.drawable.sym_call_missed) {
+                (payload.declineIntent ?: payload.hangUpIntent)?.sendSafe()
+            }
+            val accept = callButton(ACCENT_CALL, android.R.drawable.sym_call_incoming) {
+                payload.answerIntent?.sendSafe()
+            }
+            row.addView(decline)
+            row.addView(
+                accept,
+                LinearLayout.LayoutParams(geometry.dp(44f), geometry.dp(44f)).apply {
+                    marginStart = geometry.dp(6f)
+                },
+            )
+        } else {
+            val hangUp = callButton(ACCENT_DECLINE, android.R.drawable.sym_call_missed) {
+                (payload.hangUpIntent ?: payload.declineIntent)?.sendSafe()
+            }
+            row.addView(hangUp)
         }
-        val accept = callButton(ACCENT_CALL, android.R.drawable.sym_call_incoming) {
-            payload.answerIntent?.sendSafe()
-        }
-        row.addView(decline)
-        row.addView(
-            accept,
-            LinearLayout.LayoutParams(geometry.dp(44f), geometry.dp(44f)).apply {
-                marginStart = geometry.dp(6f)
-            },
-        )
 
         container.addView(row)
     }

@@ -2328,4 +2328,8 @@
     <dimen name="island_equalizer_max_height">12dp</dimen>
     <dimen name="island_equalizer_max_height_expanded">18dp</dimen>
     <dimen name="island_droplet_base_radius">14dp</dimen>
+
+    <!-- petalOS: corner radius applied to shade notification rows when glass notifications
+         are enabled (island-matching silhouette). -->
+    <dimen name="petal_glass_notif_corner_radius">22dp</dimen>
 </resources>

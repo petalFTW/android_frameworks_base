@@ -53,6 +53,7 @@ import android.os.SystemClock;
 import android.os.SystemProperties;
 import android.os.Trace;
 import android.os.UserHandle;
+import android.provider.Settings;
 import android.text.TextUtils;
 import android.util.AttributeSet;
 import android.util.FloatProperty;
@@ -95,6 +96,7 @@ import com.android.internal.widget.ConversationLayout;
 import com.android.internal.widget.MessagingLayout;
 import com.android.systemui.Flags;
 import com.android.systemui.flags.RefactorFlag;
+import com.android.systemui.island.settings.IslandSettings;
 import com.android.systemui.plugins.FalsingManager;
 import com.android.systemui.plugins.PluginListener;
 import com.android.systemui.plugins.statusbar.NotificationMenuRowPlugin;
@@ -1754,7 +1756,8 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
 
     @Override
     protected void setBackgroundTintColor(int color) {
-        if (notificationRowTransparency()) {
+        boolean glassNotifications = glassNotificationsEnabled();
+        if (notificationRowTransparency() || glassNotifications) {
             boolean isColorized = false;
             if (NotificationBundleUi.isEnabled()) {
                 if (mEntryAdapter != null) {
@@ -1765,7 +1768,7 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
                     isColorized = getEntryLegacy().getSbn().getNotification().isColorized();
                 }
             }
-            boolean isTransparent = usesTransparentBackground();
+            boolean isTransparent = usesTransparentBackground() || glassNotifications;
             if (isColorized) {
                 // For colorized notifications, use a color that matches the tint color at 90% alpha
                 // when the row is transparent.
@@ -1776,6 +1779,16 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
                 // when the row is transparent, and the opaque color token otherwise.
                 if (!isTransparent && mBgTint == NO_COLOR) {
                     color = mOpaqueColor;
+                } else if (glassNotifications && mBgTint == NO_COLOR) {
+                    // petalOS: translucent liquid-glass surface (matching the island) so the shade
+                    // blur shows through, tinted by the notification's accent color.
+                    if (!notificationRowTransparency()) {
+                        color = ColorUtils.setAlphaComponent(mNormalColor, 0xC0);
+                    }
+                    int accent = getNotificationColor();
+                    if (accent != Notification.COLOR_DEFAULT) {
+                        color = ColorUtils.blendARGB(color, accent, 0.18f);
+                    }
                 }
             }
         }
@@ -1784,6 +1797,23 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
         if (view != null) {
             view.setBackgroundTintColor(color);
         }
+    }
+
+    /** Whether the petalOS notification glass restyle is enabled via the petal hub. */
+    private boolean glassNotificationsEnabled() {
+        return Settings.Secure.getInt(getContext().getContentResolver(),
+                IslandSettings.KEY_GLASS_NOTIFICATIONS, 0) != 0;
+    }
+
+    /** The notification's accent color, or {@link Notification#COLOR_DEFAULT} when unset. */
+    private int getNotificationColor() {
+        if (NotificationBundleUi.isEnabled()) {
+            return mEntryAdapter != null ? mEntryAdapter.getSbn().getNotification().color
+                    : Notification.COLOR_DEFAULT;
+        }
+        NotificationEntry entry = getEntryLegacy();
+        return entry != null && entry.getSbn() != null
+                ? entry.getSbn().getNotification().color : Notification.COLOR_DEFAULT;
     }
 
     public void closeRemoteInput() {

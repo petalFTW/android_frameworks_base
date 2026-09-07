@@ -10841,6 +10841,7 @@ package android.content {
     method @Nullable public android.net.Uri uncanonicalize(@NonNull android.net.Uri);
     method public abstract int update(@NonNull android.net.Uri, @Nullable android.content.ContentValues, @Nullable String, @Nullable String[]);
     method public int update(@NonNull android.net.Uri, @Nullable android.content.ContentValues, @Nullable android.os.Bundle);
+    method protected void validateIncomingAuthority(String) throws java.lang.SecurityException;
   }
 
   public final class ContentProvider.CallingIdentity {
@@ -35389,6 +35390,7 @@ package android.os {
   public class UserManager {
     method public static android.content.Intent createUserCreationIntent(@Nullable String, @Nullable String, @Nullable String, @Nullable android.os.PersistableBundle);
     method @WorkerThread public android.os.Bundle getApplicationRestrictions(String);
+    method @Nullable protected String getProfileType(int);
     method public long getSerialNumberForUser(android.os.UserHandle);
     method @RequiresPermission(anyOf={"android.permission.MANAGE_USERS", "android.permission.CREATE_USERS"}) public int getUserCount();
     method public long getUserCreationTime(android.os.UserHandle);

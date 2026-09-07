@@ -7757,4 +7757,7 @@
         It can only contain non-AOSP permissions outside of the android.*
         and com.android.* namespace. -->
     <string-array name="config_watchFacePermissions" translatable="false"/>
+
+    <!-- First-party app source package name (used by gmscompat). -->
+    <string name="config_first_party_app_source_package_name" translatable="false">com.android.vending</string>
 </resources>

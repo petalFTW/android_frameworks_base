@@ -18,6 +18,7 @@ package com.android.systemui.statusbar
 
 import android.annotation.SuppressLint
 import android.app.ActivityManager
+import android.content.Context
 import android.content.res.Resources
 import android.gui.EarlyWakeupInfo
 import android.os.Binder
@@ -37,10 +38,12 @@ import androidx.annotation.VisibleForTesting
 import com.android.systemui.Dumpable
 import com.android.systemui.Flags
 import com.android.systemui.dagger.SysUISingleton
+import com.android.systemui.dagger.qualifiers.Application
 import com.android.systemui.dagger.qualifiers.Main
 import com.android.systemui.dump.DumpManager
 import com.android.systemui.keyguard.ui.transitions.BlurConfig
 import com.android.systemui.res.R
+import org.petalos.config.PetalConfig
 import java.io.PrintWriter
 import javax.inject.Inject
 
@@ -49,17 +52,22 @@ open class BlurUtils
 @Inject
 constructor(
     @Main resources: Resources,
+    @Application private val context: Context,
     blurConfig: BlurConfig,
     private val crossWindowBlurListeners: CrossWindowBlurListeners,
     dumpManager: DumpManager,
 ) : Dumpable {
     val minBlurRadius = resources.getDimensionPixelSize(R.dimen.min_window_blur_radius).toFloat()
-    val maxBlurRadius =
+    private val stockMaxBlurRadius =
         if (Flags.notificationShadeBlur()) {
-            blurConfig.maxBlurRadiusPx
+            blurConfig.maxBlurRadiusPx.toFloat()
         } else {
             resources.getDimensionPixelSize(R.dimen.max_window_blur_radius).toFloat()
         }
+
+    /** Max blur radius, scaled by the petalOS QS blur intensity setting. */
+    val maxBlurRadius: Float
+        get() = stockMaxBlurRadius * PetalConfig.getQsBlurScale(context)
 
     private var lastAppliedBlur = 0
     private var lastTargetViewRootImpl: ViewRootImpl? = null

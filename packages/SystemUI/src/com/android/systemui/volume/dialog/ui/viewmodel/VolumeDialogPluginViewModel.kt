@@ -37,6 +37,9 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 
+// petalOS: set false to restore the stock volume panel.
+private const val PETAL_VOLUME_PANEL_SUPPRESSED = true
+
 @VolumeDialogPluginScope
 class VolumeDialogPluginViewModel
 @Inject
@@ -58,7 +61,13 @@ constructor(
                     if (this is VolumeDialogVisibilityModel.Visible) {
                         toVolumeDialogUiEvent()?.let(uiEventLogger::log)
                         logger.onShow(reason)
-                        showDialog()
+                        // petalOS: the bezel-anchored PetalVolumeOverlayView (driven from
+                        // VolumeDialogComponent#mPetalVolumeCallbacks) replaces this panel
+                        // visually. Safety/CSD warnings, state tracking and accessibility
+                        // callbacks keep working; only the visual show is suppressed.
+                        if (!PETAL_VOLUME_PANEL_SUPPRESSED) {
+                            showDialog()
+                        }
                     }
                     if (this is VolumeDialogVisibilityModel.Dismissed) {
                         toVolumeDialogUiEvent()?.let(uiEventLogger::log)

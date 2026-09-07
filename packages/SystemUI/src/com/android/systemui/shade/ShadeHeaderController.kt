@@ -40,6 +40,7 @@ import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.ComposeView
 import androidx.constraintlayout.motion.widget.MotionLayout
 import androidx.core.view.doOnLayout
@@ -419,11 +420,18 @@ constructor(
         }
 
     private fun getFgColor() =
-        if (notificationShadeBlur()) {
+        if (com.android.systemui.petalos.PetalQsSkin.isEnabled(header.context)) {
+            // petalOS: skin tint for the header (clock, date, status icons).
+            petalFgColor
+        } else if (notificationShadeBlur()) {
             header.context.getColor(R.color.shade_header_text_color)
         } else {
             android.graphics.Color.WHITE
         }
+
+    /** petalOS skin header tint. */
+    private val petalFgColor: Int =
+        com.android.systemui.petalos.PetalQsSkin.GlyphLight.toArgb()
 
     private fun createBatteryComposeView(): ComposeView {
         return if (RudimentaryBattery.isEnabled) {

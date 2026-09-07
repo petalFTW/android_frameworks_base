@@ -29,6 +29,7 @@ import android.annotation.TestApi;
 import android.app.ActivityThread;
 import android.app.Application;
 import android.compat.annotation.UnsupportedAppUsage;
+import android.app.compat.gms.GmsCompat;
 import android.content.Context;
 import android.ravenwood.annotation.RavenwoodKeepWholeClass;
 import android.sysprop.BackportedFixesProperties;
@@ -41,6 +42,7 @@ import android.util.Slog;
 import android.view.View;
 
 import com.android.internal.util.FrameworkStatsLog;
+import com.android.internal.gmscompat.GmsHooks;
 
 import dalvik.system.VMRuntime;
 
@@ -265,6 +267,10 @@ public class Build {
     @SuppressAutoDoc // No support for device / profile owner.
     @RequiresPermission(Manifest.permission.READ_PRIVILEGED_PHONE_STATE)
     public static String getSerial() {
+        if (GmsCompat.isEnabled() && !GmsCompat.isAndroidAuto()) {
+            return GmsHooks.getSerial();
+        }
+
         IDeviceIdentifiersPolicyService service = IDeviceIdentifiersPolicyService.Stub
                 .asInterface(ServiceManager.getService(Context.DEVICE_IDENTIFIERS_SERVICE));
         try {
@@ -273,6 +279,11 @@ public class Build {
             return service.getSerialForPackage(callingPackage, null);
         } catch (RemoteException e) {
             e.rethrowFromSystemServer();
+        } catch (SecurityException e) {
+            if (GmsCompat.isEnabled()) {
+                return GmsHooks.getSerial();
+            }
+            throw e;
         }
         return UNKNOWN;
     }

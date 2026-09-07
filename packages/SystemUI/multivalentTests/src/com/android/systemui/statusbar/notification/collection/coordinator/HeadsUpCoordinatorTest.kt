@@ -115,6 +115,7 @@ class HeadsUpCoordinatorTest : SysuiTestCase() {
         mock(VisualInterruptionDecisionLogger::class.java)
     private val headsUpManager = kosmos.mockHeadsUpManager
     private val headsUpViewBinder: HeadsUpViewBinder = mock(HeadsUpViewBinder::class.java)
+    private val islandSettings = mock(com.android.systemui.island.settings.IslandSettings::class.java)
     private val visualInterruptionDecisionProvider: VisualInterruptionDecisionProvider =
         mock(VisualInterruptionDecisionProvider::class.java)
     private val remoteInputManager: NotificationRemoteInputManager =
@@ -157,6 +158,7 @@ class HeadsUpCoordinatorTest : SysuiTestCase() {
                 flags,
                 statusBarNotificationChipsInteractor,
                 kosmos.statusBarChipsUiEventLogger,
+                islandSettings,
                 headerController,
                 executor,
             )
@@ -362,6 +364,43 @@ class HeadsUpCoordinatorTest : SysuiTestCase() {
 
         // THEN only promote mEntry
         assertTrue(notifPromoter.shouldPromoteToTopLevel(entry))
+    }
+
+    @Test
+    fun islandReplacementBlocksStockBanner() {
+        whenever(islandSettings.isEnabled()).thenReturn(true)
+        whenever(islandSettings.replaceHeadsUp()).thenReturn(true)
+        setShouldHeadsUp(entry, true)
+        collectionListener.onEntryAdded(entry)
+        beforeTransformGroupsListener.onBeforeTransformGroups(listOf(entry))
+        beforeFinalizeFilterListener.onBeforeFinalizeFilter(listOf(entry))
+        verify(headsUpViewBinder, never()).bindHeadsUpView(any(), any(), any())
+    }
+
+    @Test
+    fun disabledIslandAllowsStockBanner() {
+        whenever(islandSettings.isEnabled()).thenReturn(false)
+        whenever(islandSettings.replaceHeadsUp()).thenReturn(true)
+        setShouldHeadsUp(entry, true)
+        collectionListener.onEntryAdded(entry)
+        beforeTransformGroupsListener.onBeforeTransformGroups(listOf(entry))
+        beforeFinalizeFilterListener.onBeforeFinalizeFilter(listOf(entry))
+        finishBind(entry)
+        verify(headsUpManager).showNotification(eq(entry), eq(false))
+    }
+
+    @Test
+    fun islandReplacementEnabledDuringBindBlocksStockBanner() {
+        setShouldHeadsUp(entry, true)
+        collectionListener.onEntryAdded(entry)
+        beforeTransformGroupsListener.onBeforeTransformGroups(listOf(entry))
+        beforeFinalizeFilterListener.onBeforeFinalizeFilter(listOf(entry))
+        whenever(islandSettings.isEnabled()).thenReturn(true)
+        whenever(islandSettings.replaceHeadsUp()).thenReturn(true)
+        finishBind(entry)
+        verify(headsUpManager, never()).showNotification(any(), any())
+        verify(headsUpViewBinder).unbindHeadsUpView(entry)
+        assertFalse(notifPromoter.shouldPromoteToTopLevel(entry))
     }
 
     @Test

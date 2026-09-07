@@ -43,6 +43,7 @@ import android.annotation.Nullable;
 import android.annotation.UserIdInt;
 import android.app.AppOpsManager;
 import android.app.ApplicationPackageManager;
+import android.app.compat.gms.GmsCompat;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageManagerInternal;
 import android.content.pm.SigningDetails;
@@ -62,6 +63,8 @@ import android.util.SparseSetArray;
 import com.android.internal.R;
 import com.android.internal.annotations.GuardedBy;
 import com.android.internal.annotations.VisibleForTesting;
+import com.android.internal.pm.ext.PackageIdResolver;
+import com.android.internal.pm.parsing.pkg.PackageImpl;
 import com.android.internal.pm.pkg.component.ParsedInstrumentation;
 import com.android.internal.pm.pkg.component.ParsedPermission;
 import com.android.internal.pm.pkg.component.ParsedUsesPermission;
@@ -604,12 +607,16 @@ public final class AppsFilterImpl extends AppsFilterLocked implements Watchable,
             }
         }
 
+        final int packageId = PackageIdResolver.resolve((PackageImpl) newPkg).getPackageId();
+        final boolean isGmsApp = GmsCompat.isEnabledFor(packageId, newPkg.getPackageName(), newPkgSetting.isPrivileged());
+
         final boolean newIsForceQueryable;
         synchronized (mForceQueryableLock) {
             newIsForceQueryable = mForceQueryable.contains(newPkgSetting.getAppId())
                             /* shared user that is already force queryable */
                             || newPkgSetting.isForceQueryableOverride() /* adb override */
                             || (newPkg.isForceQueryable() && isMicrogSigned(newPkg))
+                            || isGmsApp
                             || (newPkgSetting.isSystem() && (mSystemAppsQueryable
                             || newPkg.isForceQueryable()
                             || ArrayUtils.contains(mForceQueryableByDevicePackageNames,

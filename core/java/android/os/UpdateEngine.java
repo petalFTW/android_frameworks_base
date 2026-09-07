@@ -19,6 +19,8 @@ package android.os;
 import android.annotation.FlaggedApi;
 import android.annotation.IntDef;
 import android.annotation.NonNull;
+import android.app.compat.gms.GmsCompat;
+import android.util.Log;
 import android.annotation.SystemApi;
 import android.annotation.WorkerThread;
 import android.content.res.AssetFileDescriptor;
@@ -254,7 +256,11 @@ public class UpdateEngine {
         mUpdateEngine = IUpdateEngine.Stub.asInterface(
                 ServiceManager.getService(UPDATE_ENGINE_SERVICE));
         if (mUpdateEngine == null) {
-            throw new IllegalStateException("Failed to find update_engine");
+            if (GmsCompat.isEnabled()) {
+                Log.d("GmsCompat", "IUpdateEngine is null");
+            } else {
+                throw new IllegalStateException("Failed to find update_engine");
+            }
         }
     }
 
@@ -264,6 +270,13 @@ public class UpdateEngine {
      * to control which thread runs the callback, or null.
      */
     public boolean bind(final UpdateEngineCallback callback, final Handler handler) {
+        if (mUpdateEngine == null) {
+            if (GmsCompat.isEnabled()) {
+                Log.d("GmsCompat", "", new Throwable());
+                return false;
+            }
+        }
+
         synchronized (mUpdateEngineCallbackLock) {
             mUpdateEngineCallback = new IUpdateEngineCallback.Stub() {
                 @Override

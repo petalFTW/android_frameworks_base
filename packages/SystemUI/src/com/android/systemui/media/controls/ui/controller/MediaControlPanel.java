@@ -1210,7 +1210,17 @@ public class MediaControlPanel {
             final Drawable icon = mediaAction.getIcon();
             button.setImageDrawable(icon);
             button.setContentDescription(mediaAction.getContentDescription());
-            final Drawable bgDrawable = mediaAction.getBackground();
+            final Drawable bgDrawable;
+            if (button.getId() == R.id.actionPlayPause
+                    && com.android.systemui.petalos.PetalQsSkin.isEnabled(mContext)) {
+                android.graphics.drawable.GradientDrawable shape =
+                        new android.graphics.drawable.GradientDrawable();
+                shape.setColor(0xffe1e5ed);
+                shape.setCornerRadius(24 * mContext.getResources().getDisplayMetrics().density);
+                bgDrawable = shape;
+            } else {
+                bgDrawable = mediaAction.getBackground();
+            }
             button.setBackground(bgDrawable);
 
             Runnable action = mediaAction.getAction();

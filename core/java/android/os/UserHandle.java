@@ -18,6 +18,7 @@ package android.os;
 
 import android.annotation.AppIdInt;
 import android.annotation.NonNull;
+import android.app.compat.gms.GmsCompat;
 import android.annotation.Nullable;
 import android.annotation.SpecialUsers.CanBeUsers;
 import android.annotation.SpecialUsers.SpecialUser;
@@ -578,6 +579,10 @@ public final class UserHandle implements Parcelable {
     @Deprecated
     @SystemApi
     public boolean isOwner() {
+        if (GmsCompat.isEnabled()) {
+            return isSystem();
+        }
+
         return this.equals(OWNER);
     }
 
@@ -587,6 +592,11 @@ public final class UserHandle implements Parcelable {
      */
     @SystemApi
     public boolean isSystem() {
+        if (GmsCompat.isEnabled()) {
+            // "system" user means "primary" ("Owner") user
+            return true;
+        }
+
         return this.equals(SYSTEM);
     }
 

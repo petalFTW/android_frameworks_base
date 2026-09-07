@@ -57,6 +57,7 @@ class IslandSettings @Inject constructor(
         const val KEY_RIGHT_MARGIN_DP = "island_right_margin_dp"
         const val KEY_TOP_OFFSET_DP = "island_top_offset_dp"
         const val KEY_HAPTICS = "island_haptics"
+        const val KEY_GLASS_NOTIFICATIONS = "island_glass_notifications"
     }
 
     private val _enabled = MutableStateFlow(isEnabled())
@@ -134,6 +135,9 @@ class IslandSettings @Inject constructor(
 
     fun haptics(): Boolean =
         Settings.Secure.getInt(context.contentResolver, KEY_HAPTICS, 1) != 0
+
+    fun glassNotifications(): Boolean =
+        Settings.Secure.getInt(context.contentResolver, KEY_GLASS_NOTIFICATIONS, 0) != 0
 
     fun leftMarginDp(): Int =
         Settings.Secure.getInt(context.contentResolver, KEY_LEFT_MARGIN_DP, 12)

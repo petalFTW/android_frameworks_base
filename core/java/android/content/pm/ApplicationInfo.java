@@ -32,6 +32,7 @@ import android.compat.annotation.UnsupportedAppUsage;
 import android.content.Context;
 import android.content.pm.PackageManager.NameNotFoundException;
 import android.content.res.Resources;
+import android.ext.AppInfoExt;
 import android.graphics.drawable.Drawable;
 import android.os.Build;
 import android.os.Environment;
@@ -2065,6 +2066,7 @@ public class ApplicationInfo extends PackageItemInfo implements Parcelable {
 
     public ApplicationInfo(ApplicationInfo orig) {
         super(orig);
+        ext = orig.ext;
         taskAffinity = orig.taskAffinity;
         permission = orig.permission;
         mKnownActivityEmbeddingCerts = orig.mKnownActivityEmbeddingCerts;
@@ -2151,12 +2153,26 @@ public class ApplicationInfo extends PackageItemInfo implements Parcelable {
         return 0;
     }
 
+    private AppInfoExt ext = AppInfoExt.DEFAULT;
+
+    /** @hide */
+    public void setExt(AppInfoExt ext) {
+        this.ext = ext;
+    }
+
+    /** @hide */
+    @SystemApi
+    public @NonNull AppInfoExt ext() {
+        return ext;
+    }
+
     @SuppressWarnings("unchecked")
     public void writeToParcel(Parcel dest, int parcelableFlags) {
         if (dest.maybeWriteSquashed(this)) {
             return;
         }
         super.writeToParcel(dest, parcelableFlags);
+        ext.writeToParcel(dest, parcelableFlags);
         dest.writeString8(taskAffinity);
         dest.writeString8(permission);
         dest.writeString8(processName);
@@ -2265,6 +2281,7 @@ public class ApplicationInfo extends PackageItemInfo implements Parcelable {
     @SuppressWarnings("unchecked")
     private ApplicationInfo(Parcel source) {
         super(source);
+        ext = AppInfoExt.CREATOR.createFromParcel(source);
         taskAffinity = source.readString8();
         permission = source.readString8();
         processName = source.readString8();

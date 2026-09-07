@@ -32,6 +32,13 @@ import javax.inject.Inject
 
 /**
  * Tracks active media sessions via [MediaSessionManager] and emits MEDIA signals (§11.2).
+ *
+ * [MediaSessionManager.OnActiveSessionsChangedListener] only fires when the *set* of active
+ * sessions changes — not when a session's playback state changes. Music apps routinely
+ * register their session while its [PlaybackState] is still NONE and only transition to
+ * PLAYING afterwards, so the blob must also react to per-controller
+ * [MediaController.Callback.onPlaybackStateChanged] events (bug: media blob appeared for
+ * video apps but never for music).
  */
 class MediaSignalSource @Inject constructor(
     @Application private val context: Context,
@@ -41,23 +48,41 @@ class MediaSignalSource @Inject constructor(
     private val msm = context.getSystemService(MediaSessionManager::class.java)
     private val handler = Handler(Looper.getMainLooper())
     private var currentId: String? = null
+    private var controllers: List<MediaController> = emptyList()
 
-    private val listener = MediaSessionManager.OnActiveSessionsChangedListener { controllers ->
-        onSessionsChanged(controllers.orEmpty())
+    private val controllerCallback = object : MediaController.Callback() {
+        override fun onPlaybackStateChanged(state: PlaybackState?) {
+            reevaluate()
+        }
+    }
+
+    private val listener = MediaSessionManager.OnActiveSessionsChangedListener { list ->
+        controllers = list.orEmpty()
+        for (controller in controllers) {
+            controller.registerCallback(controllerCallback, handler)
+        }
+        reevaluate()
     }
 
     fun start() {
         msm.addOnActiveSessionsChangedListener(listener, null, handler)
     }
 
-    private fun onSessionsChanged(controllers: List<MediaController>) {
+    private fun reevaluate() {
         if (!settings.mediaEnabled()) return
         val playing = controllers.firstOrNull {
             it.playbackState?.state == PlaybackState.STATE_PLAYING
         }
+        // Only a session that is actually playing (or buffering) keeps the blob alive. A session
+        // left in a stopped/none state after its app is swiped away from recents must not keep the
+        // media blob on screen, so there is deliberately no `controllers.firstOrNull()` fallback.
         val chosen = playing
-            ?: controllers.firstOrNull { it.playbackState?.state == PlaybackState.STATE_PAUSED }
-            ?: controllers.firstOrNull()
+            ?: controllers.firstOrNull {
+                it.playbackState?.state == PlaybackState.STATE_BUFFERING
+            }
+            ?: controllers.firstOrNull {
+                it.playbackState?.state == PlaybackState.STATE_PAUSED
+            }
 
         if (chosen == null) {
             currentId?.let { router.removeSignal(it) }

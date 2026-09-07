@@ -16,6 +16,7 @@
 
 package com.android.systemui.island.signal
 
+import android.os.SystemClock
 import com.android.systemui.dagger.SysUISingleton
 import com.android.systemui.island.Cluster
 import com.android.systemui.island.IslandSignal
@@ -30,6 +31,7 @@ import javax.inject.Inject
 class SignalRouter @Inject constructor() {
     private val machines = mutableMapOf<Cluster, IslandStateMachine>()
     private val handledHeadsUpKeys = mutableSetOf<String>()
+    private val recentlyOpened = mutableMapOf<String, Long>()
 
     fun register(cluster: Cluster, machine: IslandStateMachine) {
         machines[cluster] = machine
@@ -53,4 +55,27 @@ class SignalRouter @Inject constructor() {
     }
 
     fun isHandledByIsland(key: String): Boolean = handledHeadsUpKeys.contains(key)
+
+    /** Records that the user just opened a notification so its re-post doesn't re-emerge. */
+    fun markOpened(key: String) {
+        recentlyOpened[key] = SystemClock.elapsedRealtime()
+    }
+
+    /**
+     * True when the notification was opened within the last [RECENT_OPEN_WINDOW_MS]. Opening an
+     * app often makes it remove + re-post the notification (marking it read), which would
+     * otherwise make the island re-emerge as if a brand-new message arrived.
+     */
+    fun isRecentlyOpened(key: String): Boolean {
+        val opened = recentlyOpened[key] ?: return false
+        if (SystemClock.elapsedRealtime() - opened > RECENT_OPEN_WINDOW_MS) {
+            recentlyOpened.remove(key)
+            return false
+        }
+        return true
+    }
+
+    companion object {
+        private const val RECENT_OPEN_WINDOW_MS = 3000L
+    }
 }

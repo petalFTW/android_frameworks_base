@@ -25,6 +25,7 @@ import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Region
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewTreeObserver
 import android.widget.FrameLayout
@@ -43,6 +44,9 @@ class IslandRootView(
     val leftIsland = IslandView(context, Cluster.LEFT, geometry)
     val rightIsland = IslandView(context, Cluster.RIGHT, geometry)
 
+    /** Invoked when a touch lands outside both islands (collapses any expanded blob). */
+    var onOutsideTouch: (() -> Unit)? = null
+
     private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         maskFilter = BlurMaskFilter(geometry.dp(4f).toFloat(), BlurMaskFilter.Blur.NORMAL)
     }
@@ -51,6 +55,9 @@ class IslandRootView(
     private var dark = true
 
     init {
+        // Let the emergence droplet bulge past an island's leading edge without clipping.
+        clipChildren = false
+        clipToPadding = false
         leftIsland.visibility = android.view.View.GONE
         rightIsland.visibility = android.view.View.GONE
 
@@ -111,6 +118,14 @@ class IslandRootView(
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
         viewTreeObserver.addOnComputeInternalInsetsListener(this)
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (ev.actionMasked == MotionEvent.ACTION_OUTSIDE) {
+            onOutsideTouch?.invoke()
+            return true
+        }
+        return super.dispatchTouchEvent(ev)
     }
 
     override fun onDetachedFromWindow() {

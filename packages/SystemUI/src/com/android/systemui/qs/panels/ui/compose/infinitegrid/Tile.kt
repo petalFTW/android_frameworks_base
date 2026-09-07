@@ -20,24 +20,38 @@ package com.android.systemui.qs.panels.ui.compose.infinitegrid
 
 import android.content.Context
 import android.content.res.Resources
+import android.database.ContentObserver
+import android.os.Handler
+import android.os.Looper
 import android.os.Trace
+import android.provider.Settings
 import android.service.quicksettings.Tile.STATE_ACTIVE
 import android.service.quicksettings.Tile.STATE_INACTIVE
 import android.service.quicksettings.Tile.STATE_UNAVAILABLE
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Arrangement.spacedBy
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyGridScope
 import androidx.compose.foundation.lazy.grid.LazyGridState
@@ -46,32 +60,44 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CornerSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalResources
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.trace
 import com.android.app.tracing.coroutines.launchTraced as launch
 import com.android.compose.animation.Expandable
@@ -88,6 +114,8 @@ import com.android.systemui.common.shared.model.Icon
 import com.android.systemui.haptics.msdl.qs.TileHapticsViewModel
 import com.android.systemui.haptics.msdl.qs.TileHapticsViewModelFactoryProvider
 import com.android.systemui.lifecycle.rememberViewModel
+import com.android.systemui.petalos.PetalQsSkin
+import com.android.systemui.petalos.PetalQsSkin.activeTileGlow
 import com.android.systemui.qs.flags.QsDetailedView
 import com.android.systemui.qs.panels.ui.compose.BounceableInfo
 import com.android.systemui.qs.panels.ui.compose.infinitegrid.CommonTileDefaults.InactiveCornerRadius
@@ -108,6 +136,7 @@ import com.android.systemui.qs.ui.composable.QuickSettingsShade
 import com.android.systemui.qs.ui.compose.borderOnFocus
 import com.android.systemui.res.R
 import kotlinx.coroutines.CoroutineScope
+import org.petalos.config.PetalConfig
 
 @Composable
 fun TileLazyGrid(
@@ -169,6 +198,7 @@ fun ContentScope.Tile(
     requestToggleTextFeedback: (TileSpec) -> Unit = {},
     detailsViewModel: DetailsViewModel?,
     enableRevealEffect: Boolean = false,
+    petalExpandToPill: Boolean = false,
 ) {
     trace(tile.traceName) {
         val currentBounceableInfo by rememberUpdatedState(bounceableInfo)
@@ -190,16 +220,33 @@ fun ContentScope.Tile(
                 tile.state.collect { value = it.toIconProvider() }
             }
 
-        val colors = TileDefaults.getColorForState(uiState, iconOnly)
+        // petalOS: observe the skin toggle so flipping it in petalOS Hub immediately restyles
+        // every tile on the next recomposition (a plain unobserved Settings read would leave
+        // tiles that don't recompose stuck with the stock colors/shapes).
+        val skinEnabled = petalSkinEnabled()
+        val fallbackInteractionSource = remember(tile.spec) { MutableInteractionSource() }
+        val resolvedInteractionSource = interactionSource ?: fallbackInteractionSource
+        val isPressed by resolvedInteractionSource.collectIsPressedAsState()
+        val colors =
+            TileDefaults.getColorForState(uiState, iconOnly && !petalExpandToPill, skinEnabled)
         val hapticsViewModel: TileHapticsViewModel? =
             rememberViewModel(traceName = "TileHapticsViewModel") {
                 tileHapticsViewModelFactoryProvider.getHapticsViewModelFactory()?.create(tile)
             }
 
+        // Petal compact controls draw a rounded-square surface and a caption beneath it.
+        val petalIconTile = iconOnly && skinEnabled
+
         // TODO(b/361789146): Draw the shapes instead of clipping
-        val tileShape by TileDefaults.animateTileShapeAsState(uiState.state)
-        val animatedColor by animateColorAsState(colors.background, label = "QSTileBackgroundColor")
         val isDualTarget = uiState.handlesSecondaryClick
+        val tileShape by
+            TileDefaults.animateTileShapeAsState(
+                uiState.state,
+                iconOnly = iconOnly,
+                skinEnabled = skinEnabled,
+                handlesSecondaryClick = isDualTarget,
+            )
+        val animatedColor by animateColorAsState(colors.background, label = "QSTileBackgroundColor")
 
         val surfaceRevealModifier: Modifier
         val contentRevealModifier: Modifier
@@ -215,15 +262,52 @@ fun ContentScope.Tile(
             contentRevealModifier = Modifier
         }
 
+        // The shade owns entry/exit motion. Listening changes at the QQS/QS handoff are
+        // lifecycle events, not an instruction to shrink or re-enter the tile.
+        val pressScale by
+            animateFloatAsState(
+                targetValue = if (skinEnabled && isPressed) PetalQsSkin.PulsePressedScale else 1f,
+                animationSpec = spring(dampingRatio = 0.82f, stiffness = 900f),
+                label = "PetalTilePressPulse",
+            )
+        val petalPulseModifier =
+            if (skinEnabled) {
+                Modifier.graphicsLayer {
+                    val combinedScale = pressScale
+                    scaleX = combinedScale
+                    scaleY = combinedScale
+                }
+            } else {
+                Modifier
+            }
+
         TileExpandable(
-            color = { animatedColor },
+            // petalOS: for compact tiles the card is drawn by the content itself, so the
+            // cell-wide expandable surface stays invisible.
+            color = { if (petalIconTile) Color.Transparent else animatedColor },
             shape = tileShape,
             squishiness = squishiness,
             hapticsViewModel = hapticsViewModel,
+            clipToShape = !petalIconTile,
+            // petalOS: thin light outline rim on the large glass cards (concept sheen edge).
+            borderColor = if (skinEnabled) PetalQsSkin.TileGlassBorder else Color.Transparent,
+            borderWidth = if (skinEnabled) 1.dp else 0.dp,
             modifier =
                 modifier
+                    .then(petalPulseModifier)
                     .then(surfaceRevealModifier)
-                    .borderOnFocus(color = MaterialTheme.colorScheme.secondary, tileShape.topEnd)
+                    // petalOS: evaluated inline (not via a plain Modifier factory lambda) so the
+                    // @Composable MaterialTheme color read stays in composable context.
+                    .then(
+                        if (!petalIconTile) {
+                            Modifier.borderOnFocus(
+                                color = MaterialTheme.colorScheme.secondary,
+                                cornerSize = tileShape.topEnd,
+                            )
+                        } else {
+                            Modifier
+                        }
+                    )
                     .fillMaxWidth()
                     .thenIf(currentBounceableInfo != null) {
                         Modifier.bounceable(
@@ -260,7 +344,9 @@ fun ContentScope.Tile(
                     currentBounceableInfo?.bounceable ?: BounceableTileViewModel()
                 }
             TileContainer(
-                interactionSource = interactionSource.takeIf { bounceContainer },
+                interactionSource =
+                    if (skinEnabled) resolvedInteractionSource
+                    else interactionSource.takeIf { bounceContainer },
                 onClick = onClick@{
                         if (!isClickable) return@onClick
 
@@ -282,17 +368,21 @@ fun ContentScope.Tile(
                             TileHapticsViewModel.TileInteractionState.CLICKED
                         )
 
-                        coroutineScope.launch {
-                            // Bounce the tile's container if it is toggleable and is not a large
-                            // dual target tile. These don't toggle on main click. Otherwise bounce
-                            // the content of the tile.
-                            if (bounceContainer) {
-                                // Only bounce the container ourselves if a BounceableInfo was given
-                                currentBounceableInfo?.bounceable?.animateContainerBounce()
-                            } else {
-                                contentBounceable.animateContentBounce(iconOnly)
+                        if (!skinEnabled)
+                            coroutineScope.launch {
+                                // Bounce the tile's container if it is toggleable and is not a
+                                // large
+                                // dual target tile. These don't toggle on main click. Otherwise
+                                // bounce
+                                // the content of the tile.
+                                if (bounceContainer) {
+                                    // Only bounce the container ourselves if a BounceableInfo was
+                                    // given
+                                    currentBounceableInfo?.bounceable?.animateContainerBounce()
+                                } else {
+                                    contentBounceable.animateContentBounce(iconOnly)
+                                }
                             }
-                        }
                         if (uiState.isToggleable && iconOnly) {
                             // And show footer text feedback for icons
                             requestToggleTextFeedback(tile.spec)
@@ -302,10 +392,29 @@ fun ContentScope.Tile(
                 accessibilityUiState = uiState.accessibilityUiState,
                 iconOnly = iconOnly,
                 isDualTarget = isDualTarget,
-                modifier = contentRevealModifier,
+                modifier = contentRevealModifier.activeTileGlow(
+                    skinEnabled && !petalIconTile && uiState.state == STATE_ACTIVE
+                ),
+                petalExpanded = petalExpandToPill,
             ) {
                 val iconProvider: Context.() -> Icon = { getTileIcon(icon = icon) }
-                if (iconOnly) {
+                if (petalIconTile) {
+                    // petalOS: compact controls show captions; expanded cards show connection
+                    // details.
+                    PetalIconTileContent(
+                        iconProvider = iconProvider,
+                        colors = colors,
+                        label = uiState.label,
+                        secondaryLabel = uiState.secondaryLabel,
+                        expandToPill = petalExpandToPill,
+                        active = uiState.state == STATE_ACTIVE,
+                        accessibilityUiState = uiState.accessibilityUiState,
+                        modifier =
+                            Modifier.align(Alignment.Center).bounceScale {
+                                contentBounceable.iconBounceScale
+                            },
+                    )
+                } else if (iconOnly) {
                     SmallTileContent(
                         iconProvider = iconProvider,
                         color = colors.icon,
@@ -315,7 +424,11 @@ fun ContentScope.Tile(
                             },
                     )
                 } else {
-                    val iconShape by TileDefaults.animateIconShapeAsState(uiState.state)
+                    val iconShape by
+                        TileDefaults.animateIconShapeAsState(
+                            uiState.state,
+                            skinEnabled = skinEnabled,
+                        )
                     val secondaryClick: (() -> Unit)? =
                         {
                                 hapticsViewModel?.setTileInteractionState(
@@ -324,25 +437,174 @@ fun ContentScope.Tile(
                                 tile.toggleClick()
                             }
                             .takeIf { isDualTarget }
-                    LargeTileContent(
-                        label = uiState.label,
-                        secondaryLabel = uiState.secondaryLabel,
-                        iconProvider = iconProvider,
-                        sideDrawable = uiState.sideDrawable,
-                        colors = colors,
-                        iconShape = iconShape,
-                        toggleClick = secondaryClick,
-                        onLongClick = longClick,
-                        accessibilityUiState = uiState.accessibilityUiState,
-                        squishiness = squishiness,
-                        isVisible = isVisible,
-                        textScale = { contentBounceable.textBounceScale },
-                        modifier =
-                            Modifier.largeTilePadding(isDualTarget = uiState.handlesLongClick),
-                    )
+                    if (skinEnabled) {
+                        PetalConnectivityTileContent(
+                            iconProvider = iconProvider,
+                            colors = colors,
+                            label = uiState.label,
+                            secondaryLabel = uiState.secondaryLabel,
+                            toggleClick = secondaryClick.takeIf { isClickable },
+                            onLongClick = longClick,
+                            accessibilityUiState = uiState.accessibilityUiState,
+                        )
+                    } else {
+                        LargeTileContent(
+                            label = uiState.label,
+                            secondaryLabel = uiState.secondaryLabel,
+                            iconProvider = iconProvider,
+                            sideDrawable = uiState.sideDrawable,
+                            colors = colors,
+                            iconShape = iconShape,
+                            toggleClick = secondaryClick,
+                            onLongClick = longClick,
+                            accessibilityUiState = uiState.accessibilityUiState,
+                            squishiness = squishiness,
+                            isVisible = isVisible,
+                            textScale = { contentBounceable.textBounceScale },
+                            modifier =
+                                Modifier.largeTilePadding(isDualTarget = uiState.handlesLongClick),
+                        )
+                    }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun PetalConnectivityTileContent(
+    iconProvider: Context.() -> Icon,
+    colors: TileColors,
+    label: String,
+    secondaryLabel: String?,
+    toggleClick: (() -> Unit)?,
+    onLongClick: (() -> Unit)?,
+    accessibilityUiState: AccessibilityUiState,
+) {
+    val focusBorderColor = MaterialTheme.colorScheme.secondary
+    Row(
+        modifier =
+            Modifier.fillMaxWidth()
+                .height(PetalQsSkin.connectivityTileHeight())
+                .padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        // Preserve the stock separate toggle target and its switch semantics.
+        Box(
+            modifier =
+                Modifier.size(48.dp)
+                    .clip(PetalQsSkin.iconShape())
+                    .background(colors.iconBackground)
+                    .thenIf(toggleClick != null) {
+                        Modifier.borderOnFocus(focusBorderColor, PetalQsSkin.iconShape().topEnd)
+                            .combinedClickable(onClick = toggleClick!!, onLongClick = onLongClick)
+                            .semantics {
+                                contentDescription = accessibilityUiState.contentDescription
+                                stateDescription = accessibilityUiState.stateDescription
+                                accessibilityUiState.toggleableState?.let { toggleableState = it }
+                                role = Role.Switch
+                            }
+                    },
+            contentAlignment = Alignment.Center,
+        ) {
+            SmallTileContent(
+                iconProvider = iconProvider,
+                color = colors.icon,
+                size = { PetalQsSkin.IconTileIconSize },
+            )
+        }
+        Spacer(Modifier.width(8.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = label,
+                color = colors.label,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                lineHeight = 18.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (!secondaryLabel.isNullOrEmpty()) {
+                Text(
+                    text = secondaryLabel,
+                    color = colors.secondaryLabel,
+                    fontSize = 12.sp,
+                    lineHeight = 16.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+/** The same card geometry is used on both sides of the QQS/QS scene handoff. */
+@Composable
+private fun PetalIconTileContent(
+    iconProvider: Context.() -> Icon,
+    colors: TileColors,
+    label: String,
+    secondaryLabel: String?,
+    expandToPill: Boolean,
+    active: Boolean,
+    accessibilityUiState: AccessibilityUiState,
+    modifier: Modifier = Modifier,
+) {
+    if (expandToPill) {
+        val shape = PetalQsSkin.tileShape(false, true)
+        Box(
+            modifier =
+                modifier
+                    .fillMaxWidth()
+                    .clip(shape)
+                    .background(colors.background)
+                    .activeTileGlow(active)
+                    .border(1.dp, PetalQsSkin.TileGlassBorderBrush, shape)
+        ) {
+            // QQS keeps its existing whole-card toggle action. The visual icon target,
+            // padding, type weight and detail line are identical to the expanded card.
+            PetalConnectivityTileContent(
+                iconProvider = iconProvider,
+                colors = colors,
+                label = label,
+                secondaryLabel = secondaryLabel,
+                toggleClick = null,
+                onLongClick = null,
+                accessibilityUiState = accessibilityUiState,
+            )
+        }
+        return
+    }
+    val shape = PetalQsSkin.tileShape(true)
+    Column(
+        modifier = modifier.fillMaxWidth().height(PetalQsSkin.compactTileHeight()),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Box(
+            modifier =
+                Modifier.size(PetalQsSkin.IconTileSize)
+                    .clip(shape)
+                    .background(colors.background)
+                    .activeTileGlow(active)
+                    .border(1.dp, PetalQsSkin.TileGlassBorderBrush, shape),
+            contentAlignment = Alignment.Center,
+        ) {
+            SmallTileContent(
+                iconProvider = iconProvider,
+                color = colors.icon,
+                size = { PetalQsSkin.IconTileIconSize },
+            )
+        }
+        Text(
+            text = label,
+            color = PetalQsSkin.TileGlyphOnDark,
+            fontSize = 12.sp,
+            lineHeight = 16.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth().padding(top = 4.dp).clearAndSetSemantics {},
+        )
     }
 }
 
@@ -353,11 +615,30 @@ private fun TileExpandable(
     squishiness: () -> Float,
     hapticsViewModel: TileHapticsViewModel?,
     modifier: Modifier = Modifier,
+    clipToShape: Boolean = true,
+    // petalOS: optional glass sheen outline applied over the clipped shape edge.
+    borderColor: Color = Color.Transparent,
+    borderWidth: Dp = 0.dp,
     content: @Composable (Expandable) -> Unit,
 ) {
     Expandable(
         controller = rememberExpandableController(color = color, shape = shape),
-        modifier = modifier.clip(shape).verticalSquish(squishiness),
+        // petalOS: compact tiles draw their own card + label and must not be clipped
+        // to the grid cell bounds, otherwise the caption below the card would be cut off.
+        modifier =
+            (if (clipToShape) {
+                    modifier.clip(shape).verticalSquish(squishiness)
+                } else {
+                    modifier
+                })
+                // petalOS: draw the outline after the clip so it follows the card's rounded rim.
+                .then(
+                    if (clipToShape && borderWidth > 0.dp) {
+                        Modifier.border(borderWidth, PetalQsSkin.TileGlassBorderBrush, shape)
+                    } else {
+                        Modifier
+                    }
+                ),
         useModifierBasedImplementation = true,
     ) {
         content(hapticsViewModel?.createStateAwareExpandable(it) ?: it)
@@ -373,12 +654,20 @@ fun TileContainer(
     isDualTarget: Boolean,
     interactionSource: MutableInteractionSource?,
     modifier: Modifier = Modifier,
+    petalExpanded: Boolean = false,
     content: @Composable BoxScope.() -> Unit,
 ) {
     Box(
         modifier =
             modifier
-                .height(TileHeight)
+                .height(
+                    if (com.android.systemui.petalos.PetalQsSkin.isEnabled(LocalContext.current)) {
+                        if (iconOnly && !petalExpanded) PetalQsSkin.compactTileHeight()
+                        else PetalQsSkin.connectivityTileHeight()
+                    } else {
+                        TileHeight
+                    }
+                )
                 .fillMaxWidth()
                 .tileCombinedClickable(
                     onClick = onClick ?: {},
@@ -399,11 +688,23 @@ fun LargeStaticTile(
     iconProvider: IconProvider,
     modifier: Modifier = Modifier,
 ) {
-    val colors = TileDefaults.getColorForState(uiState = uiState, iconOnly = false)
+    val skinEnabled = petalSkinEnabled()
+    val colors =
+        TileDefaults.getColorForState(
+            uiState = uiState,
+            iconOnly = false,
+            skinEnabled = skinEnabled,
+        )
 
     Box(
         modifier
-            .clip(TileDefaults.animateTileShapeAsState(state = uiState.state).value)
+            .clip(
+                TileDefaults.animateTileShapeAsState(
+                        state = uiState.state,
+                        skinEnabled = skinEnabled,
+                    )
+                    .value
+            )
             .background(colors.background)
             .height(TileHeight)
             .largeTilePadding()
@@ -544,7 +845,28 @@ private object TileDefaults {
 
     @Composable
     @ReadOnlyComposable
-    fun getColorForState(uiState: TileUiState, iconOnly: Boolean): TileColors {
+    fun getColorForState(
+        uiState: TileUiState,
+        iconOnly: Boolean,
+        skinEnabled: Boolean,
+    ): TileColors {
+        // petalOS: when the quick settings skin is enabled, use the petal card palette
+        // (dark translucent cards / white active cards) instead of the Material scheme.
+        if (skinEnabled) {
+            val skin =
+                PetalQsSkin.tileColors(
+                    state = uiState.state,
+                    handlesSecondaryClick = uiState.handlesSecondaryClick,
+                    iconOnly = iconOnly,
+                )
+            return TileColors(
+                background = skin.background,
+                iconBackground = skin.iconBackground,
+                label = skin.label,
+                secondaryLabel = skin.secondaryLabel,
+                icon = skin.icon,
+            )
+        }
         return when (uiState.state) {
             STATE_ACTIVE -> {
                 if (uiState.handlesSecondaryClick && !iconOnly) {
@@ -567,7 +889,11 @@ private object TileDefaults {
     }
 
     @Composable
-    fun animateIconShapeAsState(state: Int): State<RoundedCornerShape> {
+    fun animateIconShapeAsState(state: Int, skinEnabled: Boolean): State<RoundedCornerShape> {
+        // petalOS: the icon box inside large tiles is always a circle in the petal look.
+        if (skinEnabled) {
+            return remember { mutableStateOf(PetalQsSkin.iconShape()) }
+        }
         return animateShapeAsState(
             state = state,
             activeCornerRadius = ActiveIconCornerRadius,
@@ -576,7 +902,23 @@ private object TileDefaults {
     }
 
     @Composable
-    fun animateTileShapeAsState(state: Int): State<RoundedCornerShape> {
+    fun animateTileShapeAsState(
+        state: Int,
+        iconOnly: Boolean = false,
+        skinEnabled: Boolean,
+        handlesSecondaryClick: Boolean = false,
+    ): State<RoundedCornerShape> {
+        // Petal shares soft corners across compact controls and expanded cards.
+        if (skinEnabled) {
+            return remember(handlesSecondaryClick) {
+                mutableStateOf(
+                    PetalQsSkin.tileShape(
+                        iconOnly = iconOnly,
+                        handlesSecondaryClick = handlesSecondaryClick,
+                    )
+                )
+            }
+        }
         return animateShapeAsState(
             state = state,
             activeCornerRadius = ActiveTileCornerRadius,
@@ -622,4 +964,38 @@ private object TileDefaults {
 private fun resources(): Resources {
     LocalConfiguration.current
     return LocalResources.current
+}
+
+/**
+ * petalOS: whether the quick settings skin is enabled, observed via a [ContentObserver] on the
+ * [Settings.System] backing [PetalConfig.isQsSkinEnabled] so that toggling the skin in petalOS Hub
+ * immediately recomposes every tile (colors and shapes) without needing a full shade reload.
+ */
+@Composable
+private fun petalSkinEnabled(): Boolean {
+    val context = LocalContext.current
+    // Bumped by the ContentObserver whenever the setting changes; forces the read below to
+    // re-run. Reading the setting on every recomposition (instead of caching it in a
+    // mutableStateOf) guarantees a tile can never get stuck on a stale skin value — if the
+    // observer ever misses a change, the next recomposition still picks the truth up.
+    var invalidation by remember { mutableIntStateOf(0) }
+    DisposableEffect(context) {
+        val observer =
+            object : ContentObserver(Handler(Looper.getMainLooper())) {
+                override fun onChange(selfChange: Boolean) {
+                    invalidation++
+                }
+            }
+        context.contentResolver.registerContentObserver(
+            Settings.System.getUriFor(PetalConfig.KEY_QS_SKIN_ENABLED),
+            /* notifyForDescendants = */ false,
+            observer,
+        )
+        onDispose { context.contentResolver.unregisterContentObserver(observer) }
+    }
+    // The generation read below subscribes this recompose scope to skin setting changes; the
+    // setting itself is re-read fresh on every recomposition so the value can never go stale,
+    // even if the observer misses an update. (generation only ever increments, so the xor is
+    // a no-op that keeps the state read alive for the compiler.)
+    return PetalConfig.isQsSkinEnabled(context) xor (invalidation < 0)
 }

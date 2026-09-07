@@ -700,6 +700,8 @@ public class PhoneWindowManager implements WindowManagerPolicy {
     private Action mMenuLongPressAction;
     private Action mAssistPressAction;
     private Action mAssistLongPressAction;
+    private Action mAssistDoubleTapAction;
+    private boolean mAssistHapticFeedback = true;
     private Action mAppSwitchPressAction;
     private Action mAppSwitchLongPressAction;
     private Action mEdgeLongSwipeAction;
@@ -759,6 +761,7 @@ public class PhoneWindowManager implements WindowManagerPolicy {
     private static final int BRIGHTNESS_STEPS = 10;
 
     SettingsObserver mSettingsObserver;
+
     ModifierShortcutManager mModifierShortcutManager;
     /** Currently fully consumed key codes per device */
     private final SparseArray<Set<Integer>> mConsumedKeysForDevice = new SparseArray<>();
@@ -1041,6 +1044,12 @@ public class PhoneWindowManager implements WindowManagerPolicy {
                     UserHandle.USER_ALL);
             resolver.registerContentObserver(LineageSettings.System.getUriFor(
                     LineageSettings.System.KEY_ASSIST_LONG_PRESS_ACTION), false, this,
+                    UserHandle.USER_ALL);
+            resolver.registerContentObserver(LineageSettings.System.getUriFor(
+                    LineageSettings.System.KEY_ASSIST_DOUBLE_TAP_ACTION), false, this,
+                    UserHandle.USER_ALL);
+            resolver.registerContentObserver(LineageSettings.System.getUriFor(
+                    LineageSettings.System.KEY_ASSIST_HAPTIC_FEEDBACK), false, this,
                     UserHandle.USER_ALL);
             resolver.registerContentObserver(LineageSettings.System.getUriFor(
                     LineageSettings.System.KEY_APP_SWITCH_ACTION), false, this,
@@ -1777,7 +1786,29 @@ public class PhoneWindowManager implements WindowManagerPolicy {
                     KeyEvent.KEYCODE_ASSIST, 0, 0, KeyCharacterMap.VIRTUAL_KEYBOARD, 0,
                     KeyEvent.FLAG_FROM_SYSTEM, InputDevice.SOURCE_KEYBOARD);
 
+            if (mAssistHapticFeedback) {
+                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY, "Assist - Press");
+            }
             performKeyAction(mAssistPressAction, event,
+                    AssistUtils.INVOCATION_TYPE_ASSIST_BUTTON);
+        }
+    }
+
+    private void assistDoublePress() {
+        if (!keyguardOn() && mAssistDoubleTapAction != Action.NOTHING) {
+            if (mAssistDoubleTapAction != Action.APP_SWITCH) {
+                cancelPreloadRecentApps();
+            }
+
+            long now = SystemClock.uptimeMillis();
+            KeyEvent event = new KeyEvent(now, now, KeyEvent.ACTION_DOWN,
+                    KeyEvent.KEYCODE_ASSIST, 0, 0, KeyCharacterMap.VIRTUAL_KEYBOARD, 0,
+                    KeyEvent.FLAG_FROM_SYSTEM, InputDevice.SOURCE_KEYBOARD);
+
+            if (mAssistHapticFeedback) {
+                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY, "Assist - Double Press");
+            }
+            performKeyAction(mAssistDoubleTapAction, event,
                     AssistUtils.INVOCATION_TYPE_ASSIST_BUTTON);
         }
     }
@@ -1793,7 +1824,9 @@ public class PhoneWindowManager implements WindowManagerPolicy {
                     KeyEvent.KEYCODE_ASSIST, 0, 0, KeyCharacterMap.VIRTUAL_KEYBOARD, 0,
                     KeyEvent.FLAG_FROM_SYSTEM, InputDevice.SOURCE_KEYBOARD);
 
-            performHapticFeedback(HapticFeedbackConstants.LONG_PRESS, "Assist - Long Press");
+            if (mAssistHapticFeedback) {
+                performHapticFeedback(HapticFeedbackConstants.LONG_PRESS, "Assist - Long Press");
+            }
             performKeyAction(mAssistLongPressAction, event,
                     AssistUtils.INVOCATION_TYPE_ASSIST_BUTTON);
         }
@@ -2284,6 +2317,7 @@ public class PhoneWindowManager implements WindowManagerPolicy {
     }
 
     private void performKeyAction(Action action, KeyEvent event, int assistInvocationType) {
+        Slog.i(TAG, "performKeyAction: " + action + " for keycode " + event.getKeyCode());
         switch (action) {
             case NOTHING:
                 break;
@@ -2331,8 +2365,59 @@ public class PhoneWindowManager implements WindowManagerPolicy {
                 takeScreenshot(TAKE_SCREENSHOT_SELECTED_REGION, SCREENSHOT_KEY_OTHER);
                 notifyKeyGestureCompleted(event, KeyGestureEvent.KEY_GESTURE_TYPE_TAKE_SCREENSHOT);
                 break;
+            case FLASHLIGHT:
+                toggleTorch();
+                break;
+            case RINGER_MODE:
+                toggleRingerMode();
+                break;
+            case NEXT_TRACK:
+                triggerVirtualKeypress(KeyEvent.KEYCODE_MEDIA_NEXT);
+                break;
+            case PREV_TRACK:
+                triggerVirtualKeypress(KeyEvent.KEYCODE_MEDIA_PREVIOUS);
+                break;
+            case VOLUME_UP:
+                adjustMusicVolume(AudioManager.ADJUST_RAISE);
+                break;
+            case VOLUME_DOWN:
+                adjustMusicVolume(AudioManager.ADJUST_LOWER);
+                break;
+            case NOTIFICATIONS:
+                try {
+                    getStatusBarService().expandNotificationsPanel();
+                } catch (RemoteException e) {
+                    // Ignore
+                }
+                break;
             default:
                 break;
+        }
+    }
+
+    private void toggleRingerMode() {
+        final AudioManagerInternal ami = getAudioManagerInternal();
+        final int current = ami.getRingerModeInternal();
+        final int next;
+        switch (current) {
+            case AudioManager.RINGER_MODE_NORMAL:
+                next = AudioManager.RINGER_MODE_VIBRATE;
+                break;
+            case AudioManager.RINGER_MODE_VIBRATE:
+                next = AudioManager.RINGER_MODE_SILENT;
+                break;
+            default:
+                next = AudioManager.RINGER_MODE_NORMAL;
+                break;
+        }
+        Slog.i(TAG, "toggleRingerMode: " + current + " -> " + next);
+        ami.setRingerModeInternal(next, TAG);
+    }
+
+    private void adjustMusicVolume(int direction) {
+        final AudioManager am = mContext.getSystemService(AudioManager.class);
+        if (am != null) {
+            am.adjustStreamVolume(AudioManager.STREAM_MUSIC, direction, 0);
         }
     }
 
@@ -3042,13 +3127,22 @@ public class PhoneWindowManager implements WindowManagerPolicy {
         }
 
         @Override
+        int getMaxMultiPressCount() {
+            return mAssistDoubleTapAction != Action.NOTHING ? 2 : 1;
+        }
+
+        @Override
         void onKeyGesture(@NonNull SingleKeyGestureEvent event) {
             if (event.getAction() != ACTION_COMPLETE) {
                 return;
             }
             switch (event.getType()) {
                 case SINGLE_KEY_GESTURE_TYPE_PRESS:
-                    assistPress();
+                    if (event.getPressCount() > 1) {
+                        assistDoublePress();
+                    } else {
+                        assistPress();
+                    }
                     break;
                 case SINGLE_KEY_GESTURE_TYPE_LONG_PRESS:
                     assistLongPress();
@@ -3301,6 +3395,8 @@ public class PhoneWindowManager implements WindowManagerPolicy {
         }
         mAssistPressAction = Action.SEARCH;
         mAssistLongPressAction = Action.VOICE_SEARCH;
+        mAssistDoubleTapAction = Action.NOTHING;
+        mAssistHapticFeedback = true;
         mAppSwitchPressAction = Action.APP_SWITCH;
         mAppSwitchLongPressAction = Action.fromIntSafe(res.getInteger(
                 org.lineageos.platform.internal.R.integer.config_longPressOnAppSwitchBehavior));
@@ -3325,14 +3421,21 @@ public class PhoneWindowManager implements WindowManagerPolicy {
                     LineageSettings.System.KEY_MENU_LONG_PRESS_ACTION,
                     mMenuLongPressAction);
         }
-        if (hasAssist) {
-            mAssistPressAction = Action.fromSettings(resolver,
-                    LineageSettings.System.KEY_ASSIST_ACTION,
-                    mAssistPressAction);
-            mAssistLongPressAction = Action.fromSettings(resolver,
-                    LineageSettings.System.KEY_ASSIST_LONG_PRESS_ACTION,
-                    mAssistLongPressAction);
-        }
+        // Always read the assist key settings: the AssistKeyRule is registered
+        // unconditionally, so a device with an assist/plus key can remap it even
+        // when config_deviceHardwareKeys does not advertise the assist bit.
+        mAssistPressAction = Action.fromSettings(resolver,
+                LineageSettings.System.KEY_ASSIST_ACTION,
+                mAssistPressAction);
+        mAssistLongPressAction = Action.fromSettings(resolver,
+                LineageSettings.System.KEY_ASSIST_LONG_PRESS_ACTION,
+                mAssistLongPressAction);
+        mAssistDoubleTapAction = Action.fromSettings(resolver,
+                LineageSettings.System.KEY_ASSIST_DOUBLE_TAP_ACTION,
+                mAssistDoubleTapAction);
+        mAssistHapticFeedback = LineageSettings.System.getIntForUser(resolver,
+                LineageSettings.System.KEY_ASSIST_HAPTIC_FEEDBACK, 1,
+                UserHandle.USER_CURRENT) != 0;
         if (hasAppSwitch) {
             mAppSwitchPressAction = Action.fromSettings(resolver,
                     LineageSettings.System.KEY_APP_SWITCH_ACTION,
@@ -3369,6 +3472,7 @@ public class PhoneWindowManager implements WindowManagerPolicy {
         boolean updateRotation = false;
         boolean updateKidsModeSettings = false;
         final boolean kidsModeEnabled;
+
         int mDeviceHardwareWakeKeys = mContext.getResources().getInteger(
                 org.lineageos.platform.internal.R.integer.config_deviceHardwareWakeKeys);
         synchronized (mLock) {
@@ -5022,6 +5126,19 @@ public class PhoneWindowManager implements WindowManagerPolicy {
         final int displayId = event.getDisplayId();
         final boolean isInjected = (policyFlags & WindowManagerPolicy.FLAG_INJECTED) != 0;
         final boolean longPress = (event.getFlags() & KeyEvent.FLAG_LONG_PRESS) != 0;
+
+        // petalOS: give physical auxiliary keys visual feedback independently of their action.
+        // Notify before global/device handlers can consume the press; never consume it here.
+        if (interactive && down && !canceled && !isInjected && event.getRepeatCount() == 0
+                && (event.getFlags() & KeyEvent.FLAG_FALLBACK) == 0
+                && (keyCode == KeyEvent.KEYCODE_ASSIST || keyCode == KeyEvent.KEYCODE_SEARCH)
+                && event.getScanCode() > 0
+                && (displayId == Display.DEFAULT_DISPLAY || displayId == Display.INVALID_DISPLAY)) {
+            InputDevice device = event.getDevice();
+            if (device != null && !device.isExternal() && !device.isVirtual()) {
+                sendSystemKeyToStatusBarAsync(event);
+            }
+        }
 
         // If screen is off then we treat the case where the keyguard is open but hidden
         // the same as if it were open and in front.

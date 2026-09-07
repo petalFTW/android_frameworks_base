@@ -1514,7 +1514,17 @@ public class VolumeDialogImpl implements VolumeDialog, Dumpable,
         };
     }
 
+    // petalOS: set false to restore the stock volume panel.
+    private static final boolean PETAL_VOLUME_PANEL_SUPPRESSED = true;
+
     private void showH(int reason, boolean keyguardLocked, int lockTaskModeState) {
+        if (PETAL_VOLUME_PANEL_SUPPRESSED) {
+            // petalOS: the bezel-anchored PetalVolumeOverlayView (driven from
+            // VolumeDialogComponent#mPetalVolumeCallbacks) replaces this panel
+            // visually. Safety/CSD warnings, state tracking and accessibility
+            // callbacks keep working; only the visual show is suppressed.
+            return;
+        }
         Trace.beginSection("VolumeDialogImpl#showH");
         Log.i(TAG, "showH r=" + Events.SHOW_REASONS[reason]);
         mHandler.removeMessages(H.SHOW);

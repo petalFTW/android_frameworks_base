@@ -28,6 +28,8 @@ object IslandConstants {
     const val METABALL_K_MAX_DP = 22f
     const val METABALL_BREAK_DISTANCE_DP = 64f
     const val DROPLET_BASE_RADIUS_DP = 14f
+    const val DROPLET_EMERGE_RADIUS_DP = 14f
+    const val DROPLET_EMERGE_MIN_DP = 10f
     const val DRAG_COMMIT_THRESHOLD_DP = 56f
     const val RUBBER_BAND_FACTOR = 0.55f
 
@@ -41,6 +43,7 @@ object IslandConstants {
     const val DUR_CONTENT_IN = 160L
     const val DUR_SPECULAR = 700L
     const val DUR_BULGE_SETTLE = 140L
+    const val DUR_NEON = 1500L
 
     // Dwell / auto-hide (ms)
     const val DWELL_NOTIF = 3000L
@@ -50,6 +53,9 @@ object IslandConstants {
     const val DWELL_CHARGING = 2000L
     const val DWELL_VOLUME = 1500L
     const val MEDIA_PAUSED_AUTOHIDE = 30_000L
+
+    /** How long a finished (100%) progress blob lingers before fading out. */
+    const val PROGRESS_DONE_DWELL_MS = 2500L
 
     // Spring parameters (stiffness, damping ratio)
     const val SPRING_EXPAND_STIFFNESS = 380f

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="petal_silent_expanded">Expanded</string>
+    <string name="petal_silent_collapsed">Collapsed</string>
+    <string name="petal_silent_minimise">Minimise silent notifications</string>
+    <string name="petal_silent_expand">Expand silent notifications</string>
+</resources>

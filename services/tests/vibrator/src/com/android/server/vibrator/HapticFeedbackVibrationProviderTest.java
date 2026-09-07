@@ -30,7 +30,7 @@ import static android.os.VibrationEffect.Composition.PRIMITIVE_QUICK_RISE;
 import static android.os.VibrationEffect.Composition.PRIMITIVE_THUD;
 import static android.os.VibrationEffect.Composition.PRIMITIVE_TICK;
 import static android.os.VibrationEffect.EFFECT_CLICK;
-import static android.os.VibrationEffect.EFFECT_TEXTURE_TICK;
+import static android.os.VibrationEffect.Composition.PRIMITIVE_LOW_TICK;
 import static android.os.VibrationEffect.EFFECT_TICK;
 import static android.view.HapticFeedbackConstants.BIOMETRIC_CONFIRM;
 import static android.view.HapticFeedbackConstants.BIOMETRIC_REJECT;
@@ -114,12 +114,12 @@ public class HapticFeedbackVibrationProviderTest {
 
         // No customization for `CLOCK_TICK`, so the default vibration is used.
         assertThat(provider.getVibration(CLOCK_TICK, USAGE_TOUCH)).isEqualTo(
-                VibrationEffect.get(EFFECT_TEXTURE_TICK));
+                VibrationEffect.startComposition().addPrimitive(PRIMITIVE_LOW_TICK, 0.25f).compose());
         assertThat(provider.getVibrationForInputDevice(CLOCK_TICK,
                 InputDevice.SOURCE_ROTARY_ENCODER)).isEqualTo(
-                VibrationEffect.get(EFFECT_TEXTURE_TICK));
+                VibrationEffect.startComposition().addPrimitive(PRIMITIVE_LOW_TICK, 0.25f).compose());
         assertThat(provider.getVibrationForInputDevice(CLOCK_TICK, InputDevice.SOURCE_TOUCHSCREEN))
-                .isEqualTo(VibrationEffect.get(EFFECT_TEXTURE_TICK));
+                .isEqualTo(VibrationEffect.startComposition().addPrimitive(PRIMITIVE_LOW_TICK, 0.25f).compose());
     }
 
     @Test
@@ -179,10 +179,10 @@ public class HapticFeedbackVibrationProviderTest {
 
         // The override for `CONTEXT_CLICK` is not used because the vibration is not supported.
         assertThat(provider.getVibration(CONTEXT_CLICK, USAGE_UNKNOWN))
-                .isEqualTo(VibrationEffect.get(EFFECT_TICK));
+                .isEqualTo(PetalHapticsEngine.defaultTap());
         // `CLOCK_TICK` has no override, so the default vibration is used.
         assertThat(provider.getVibration(CLOCK_TICK, USAGE_UNKNOWN))
-                .isEqualTo(VibrationEffect.get(EFFECT_TEXTURE_TICK));
+                .isEqualTo(VibrationEffect.startComposition().addPrimitive(PRIMITIVE_LOW_TICK, 0.25f).compose());
     }
 
     @Test
@@ -247,16 +247,16 @@ public class HapticFeedbackVibrationProviderTest {
         provider = createProviderWithoutCustomizations();
 
         assertThat(provider.getVibration(TEXT_HANDLE_MOVE, USAGE_UNKNOWN))
-                .isEqualTo(VibrationEffect.get(EFFECT_TEXTURE_TICK));
+                .isEqualTo(VibrationEffect.startComposition().addPrimitive(PRIMITIVE_LOW_TICK, 0.25f).compose());
         assertThat(provider.getVibration(TEXT_HANDLE_MOVE, USAGE_GESTURE_INPUT))
-                .isEqualTo(VibrationEffect.get(EFFECT_TEXTURE_TICK));
+                .isEqualTo(VibrationEffect.startComposition().addPrimitive(PRIMITIVE_LOW_TICK, 0.25f).compose());
         assertThat(provider.getVibrationForInputDevice(TEXT_HANDLE_MOVE,
                 InputDevice.SOURCE_ROTARY_ENCODER)).isEqualTo(
-                VibrationEffect.get(EFFECT_TEXTURE_TICK));
+                VibrationEffect.startComposition().addPrimitive(PRIMITIVE_LOW_TICK, 0.25f).compose());
         assertThat(
                 provider.getVibrationForInputDevice(
                         TEXT_HANDLE_MOVE, InputDevice.SOURCE_TOUCHSCREEN))
-                                .isEqualTo(VibrationEffect.get(EFFECT_TEXTURE_TICK));
+                                .isEqualTo(VibrationEffect.startComposition().addPrimitive(PRIMITIVE_LOW_TICK, 0.25f).compose());
     }
 
     @Test
@@ -303,7 +303,7 @@ public class HapticFeedbackVibrationProviderTest {
         provider = createProviderWithoutCustomizations();
 
         assertThat(provider.getVibration(KEYBOARD_TAP, USAGE_UNKNOWN))
-                .isEqualTo(VibrationEffect.get(EFFECT_CLICK, true /* fallback */));
+                .isEqualTo(PetalHapticsEngine.defaultTap());
         assertThat(provider.getVibration(KEYBOARD_RELEASE, USAGE_UNKNOWN))
                 .isEqualTo(VibrationEffect.get(EFFECT_TICK, false /* fallback */));
         assertThat(provider.getVibration(KEYBOARD_RELEASE, USAGE_GESTURE_INPUT))
@@ -311,7 +311,7 @@ public class HapticFeedbackVibrationProviderTest {
         assertThat(
                 provider.getVibrationForInputDevice(
                         KEYBOARD_TAP, InputDevice.SOURCE_ROTARY_ENCODER))
-                                .isEqualTo(VibrationEffect.get(EFFECT_CLICK, true /* fallback */));
+                                .isEqualTo(PetalHapticsEngine.defaultTap());
         assertThat(
                 provider.getVibrationForInputDevice(
                         KEYBOARD_RELEASE, InputDevice.SOURCE_ROTARY_ENCODER))
@@ -319,7 +319,7 @@ public class HapticFeedbackVibrationProviderTest {
         assertThat(
                 provider.getVibrationForInputDevice(
                         KEYBOARD_TAP, InputDevice.SOURCE_TOUCHSCREEN))
-                                .isEqualTo(VibrationEffect.get(EFFECT_CLICK, true /* fallback */));
+                                .isEqualTo(PetalHapticsEngine.defaultTap());
         assertThat(
                 provider.getVibrationForInputDevice(
                         KEYBOARD_RELEASE, InputDevice.SOURCE_TOUCHSCREEN))

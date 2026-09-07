@@ -4582,4 +4582,17 @@
 
     <!-- Description for the Ambient Cue accessibility action label for expanding. [CHAR LIMIT=NONE] -->
     <string name="ambient_cue_expand_action">expand</string>
+    <!-- petalOS: injected action that copies a detected one-time password to the clipboard. -->
+    <string name="petal_otp_copy_action">Copy code</string>
+    <!-- petalOS: toast shown after copying a one-time password. -->
+    <string name="petal_otp_copied">Code <xliff:g id="code" example="123456">%1$s</xliff:g> copied</string>
+    <!-- petalOS: date line format for the 3D depth lock screen clock. -->
+    <string name="petal_depth_clock_date_format">EEE d MMMM</string>
+    <!-- Accessibility label for the media volume slider in Petal QS. -->
+    <string name="petal_qs_media_volume">Media volume</string>
+    <!-- Accessibility actions for the automatic-brightness button in Petal QS. -->
+    <string name="petal_qs_enable_auto_brightness">Turn on automatic brightness</string>
+    <string name="petal_qs_disable_auto_brightness">Turn off automatic brightness</string>
+    <string name="petal_qs_no_media">No media playing</string>
+    <string name="petal_qs_no_media_hint">Open a media app to begin</string>
 </resources>

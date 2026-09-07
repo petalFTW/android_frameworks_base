@@ -31,12 +31,13 @@ class IslandWindow(
 ) {
     val rootView = IslandRootView(context, geometry)
 
+    private var layoutParams = buildLayoutParams()
     private var added = false
 
     fun addToWindow() {
         if (added) return
         try {
-            windowManager.addView(rootView, buildLayoutParams())
+            windowManager.addView(rootView, layoutParams)
             added = true
         } catch (e: RuntimeException) {
             // Window type conflict or permission issue; island is non-fatal.
@@ -52,19 +53,47 @@ class IslandWindow(
             android.util.Log.w(TAG, "Failed to remove island window", e)
         }
         added = false
+        layoutParams = buildLayoutParams()
+    }
+
+    /**
+     * Toggles window focus so an inline reply field can receive text input (the IME only
+     * attaches to focusable windows). No-op when the state doesn't change.
+     */
+    fun setFocusable(focusable: Boolean) {
+        val isFocusable = layoutParams.flags and
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE == 0
+        if (isFocusable == focusable) return
+        layoutParams = layoutParams.apply {
+            flags = if (focusable) {
+                flags and WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE.inv()
+            } else {
+                flags or WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+            }
+        }
+        if (added) {
+            try {
+                windowManager.updateViewLayout(rootView, layoutParams)
+            } catch (e: RuntimeException) {
+                android.util.Log.w(TAG, "Failed to update island window focus", e)
+            }
+        }
     }
 
     private fun buildLayoutParams(): WindowManager.LayoutParams {
-        val height = geometry.statusBarTopInset + geometry.dp(220f)
+        // Full-height so a tap anywhere outside the island clusters is delivered to the window as
+        // ACTION_OUTSIDE (see IslandRootView), which collapses an expanded blob. The touchable
+        // region stays island-only, so all other touches still pass through to the app below.
         return WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
-            height,
+            WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_STATUS_BAR_SUB_PANEL,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
                 WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
-                WindowManager.LayoutParams.FLAG_SPLIT_TOUCH,
+                WindowManager.LayoutParams.FLAG_SPLIT_TOUCH or
+                WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
@@ -74,9 +103,9 @@ class IslandWindow(
             setTrustedOverlay()
             title = "IslandWindow"
             packageName = context.packageName
-            // NOTE: backdrop blur (FLAG_BLUR_BEHIND) is intentionally NOT set here. It blurs the
-            // entire full-width window rather than just the island, and the liquid-glass tint is
-            // opaque enough that blur-behind is imperceptible through it.
+            // NOTE: backdrop blur (FLAG_BLUR_BEHIND) is intentionally NOT set here. Cross-window
+            // blur is window-shaped, so on this full-width window it would frost the entire width
+            // of the screen, not just the island blobs.
         }
     }
 

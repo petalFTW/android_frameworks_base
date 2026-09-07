@@ -16,6 +16,7 @@
 
 package com.android.systemui.island.presenter
 
+import android.app.PendingIntent
 import android.view.ViewGroup
 import androidx.annotation.ColorInt
 
@@ -28,6 +29,24 @@ import androidx.annotation.ColorInt
  * instead.
  */
 interface IslandPresenter {
+    /**
+     * Services a presenter needs from the island host: window focus control (inline reply needs
+     * the IME), dismissal holds, and keyguard-safe PendingIntent launches.
+     */
+    interface Host {
+        /** Makes the island window focusable so a text editor can take input. */
+        fun setWindowFocusable(focusable: Boolean)
+
+        /** Prevents the state machine from auto-dismissing the blob while [held]. */
+        fun setDismissalHeld(held: Boolean)
+
+        /**
+         * Launches a PendingIntent through the system UI activity starter, dismissing the
+         * keyguard if needed (matches what tapping a notification in the shade does).
+         */
+        fun launchPendingIntent(pendingIntent: PendingIntent)
+    }
+
     /** Inflate/bind the collapsed capsule content. Return the measured content width in px. */
     fun bindCollapsed(container: ViewGroup): Int
 
@@ -48,6 +67,15 @@ interface IslandPresenter {
 
     /** Called on every state change and when the signal is retired. Release everything here. */
     fun onDestroy() {}
+
+    /**
+     * Registers a listener invoked whenever the presenter's [tint] changes (e.g. a media track
+     * change derives a new accent from the fresh artwork). Pass null to unregister.
+     */
+    fun setTintListener(listener: ((IslandTint?) -> Unit)?) {}
+
+    /** Injected host services; pass null to detach. */
+    fun setHost(host: Host?) {}
 }
 
 /** Dynamic tint derived from album artwork. A null [background] means "use the theme default". */

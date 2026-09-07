@@ -19,6 +19,10 @@ package com.android.systemui.dagger;
 import com.android.systemui.controls.dagger.StartControlsStartableModule;
 import com.android.systemui.island.dagger.IslandModule;
 import com.android.systemui.keyguard.CustomizationProvider;
+import com.android.systemui.petalos.dagger.PetalClockStyleModule;
+import com.android.systemui.petalos.dagger.PetalScreenDitheringModule;
+import com.android.systemui.petalos.dagger.PetalDepthModule;
+import com.android.systemui.petalos.dagger.PetalMediaCoverModule;
 import com.android.systemui.settings.MultiUserUtilsModule;
 import com.android.systemui.statusbar.NotificationInsetsModule;
 import com.android.systemui.statusbar.QsFrameTranslateModule;
@@ -38,6 +42,10 @@ import dagger.Subcomponent;
         IslandModule.class,
         MultiUserUtilsModule.class,
         NotificationInsetsModule.class,
+        PetalClockStyleModule.class,
+        PetalScreenDitheringModule.class,
+        PetalDepthModule.class,
+        PetalMediaCoverModule.class,
         QsFrameTranslateModule.class,
         ReferenceSystemUIModule.class,
         StartControlsStartableModule.class,

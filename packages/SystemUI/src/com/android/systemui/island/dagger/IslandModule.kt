@@ -18,16 +18,32 @@ package com.android.systemui.island.dagger
 
 import com.android.systemui.CoreStartable
 import com.android.systemui.island.IslandController
+import com.android.systemui.island.StatusBarIconHider
+import com.android.systemui.statusbar.core.StatusBarInitializer.StatusBarViewLifecycleListener
 import dagger.Binds
+import dagger.Lazy
 import dagger.Module
+import dagger.Provides
 import dagger.multibindings.ClassKey
+import dagger.multibindings.ElementsIntoSet
 import dagger.multibindings.IntoMap
 
 /** Dagger bindings for the liquid-drop dynamic island. */
-@Module
+@Module(includes = [IslandStatusBarModule::class])
 abstract class IslandModule {
     @Binds
     @IntoMap
     @ClassKey(IslandController::class)
     abstract fun bindIslandController(controller: IslandController): CoreStartable
+}
+
+@Module
+object IslandStatusBarModule {
+
+    /** Registers [StatusBarIconHider] so it learns the status bar view when it's created. */
+    @Provides
+    @ElementsIntoSet
+    fun statusBarIconHiderAsLifecycleListener(
+        hider: Lazy<StatusBarIconHider>,
+    ): Set<StatusBarViewLifecycleListener> = setOf(hider.get())
 }

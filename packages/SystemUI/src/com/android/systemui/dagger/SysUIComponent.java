@@ -28,6 +28,9 @@ import com.android.systemui.dump.DumpManager;
 import com.android.systemui.island.dagger.IslandModule;
 import com.android.systemui.keyguard.KeyguardSliceProvider;
 import com.android.systemui.people.PeopleProvider;
+import com.android.systemui.petalos.dagger.PetalClockStyleModule;
+import com.android.systemui.petalos.dagger.PetalScreenDitheringModule;
+import com.android.systemui.petalos.dagger.PetalMediaCoverModule;
 import com.android.systemui.settings.MultiUserUtilsModule;
 import com.android.systemui.startable.Dependencies;
 import com.android.systemui.statusbar.NotificationInsetsModule;
@@ -76,6 +79,9 @@ import javax.inject.Provider;
         IslandModule.class,
         MultiUserUtilsModule.class,
         NotificationInsetsModule.class,
+        PetalClockStyleModule.class,
+        PetalScreenDitheringModule.class,
+        PetalMediaCoverModule.class,
         QsFrameTranslateModule.class,
         ReferenceSystemUIModule.class,
         StartControlsStartableModule.class,
