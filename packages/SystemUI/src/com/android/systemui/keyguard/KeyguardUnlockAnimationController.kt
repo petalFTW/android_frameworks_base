@@ -164,6 +164,7 @@ constructor(
     private val notificationShadeWindowController: NotificationShadeWindowController,
     private val powerManager: PowerManager,
     private val wallpaperManager: WallpaperManager,
+    private val petalSeamlessUnlockController: PetalSeamlessUnlockController,
 ) : KeyguardStateController.Callback, ISysuiUnlockAnimationController.Stub() {
 
     interface KeyguardUnlockAnimationListener {
@@ -451,11 +452,10 @@ constructor(
         listeners.remove(listener)
     }
 
-    /**
-     * Whether we should be able to do the in-window launcher animations given the current state of
-     * the device.
-     */
+    /** Whether in-window launcher animations are possible right now. */
     fun canPerformInWindowLauncherAnimations(): Boolean {
+        // petalOS: seamless unlock keeps the launcher unblanked, no icon stagger to run
+        if (petalSeamlessUnlockController.isEnabled()) return false
         // TODO(b/278086361): Refactor in-window animations.
         return !KeyguardWmStateRefactor.isEnabled &&
             isSupportedLauncherUnderneath() &&
@@ -606,6 +606,7 @@ constructor(
         }
 
         surfaceBehindRemoteAnimationTargets = targets
+        petalSeamlessUnlockController.resetWallpaperProgress()
         openingWallpaperTargets = openingWallpapers
         closingWallpaperTargets = closingWallpapers
         surfaceBehindRemoteAnimationStartTime = startTime
@@ -697,7 +698,26 @@ constructor(
         Log.d(TAG, "playCannedUnlockAnimation")
         playingCannedUnlockAnimation = true
 
+        fun exitAndFinish() {
+            keyguardViewMediator
+                .get()
+                .exitKeyguardAndFinishSurfaceBehindRemoteAnimation(false /* cancelled */)
+        }
+
         when {
+            // petalOS: seamless ColorOS-style reveal, home surface pops in at full
+            // size while keyguard content and lock/home wallpapers cross-fade in place
+            petalSeamlessUnlockController.isEnabled() &&
+                !biometricUnlockControllerLazy.get().isWakeAndUnlock -> {
+                Log.d(TAG, "playCannedUnlockAnimation, petalSeamlessUnlock")
+                petalSeamlessUnlockController.playCannedAnimation(
+                    surfaceBehindRemoteAnimationTargets ?: emptyArray(),
+                    openingWallpaperTargets,
+                    closingWallpaperTargets,
+                    ::exitAndFinish,
+                )
+            }
+
             // If we're set up for in-window launcher animations, ask Launcher to play its in-window
             // canned animation.
             willUnlockWithInWindowLauncherAnimations -> {
@@ -1023,7 +1043,12 @@ constructor(
             }
         }
 
-        if (wallpapers) {
+        if (wallpapers && petalSeamlessUnlockController.isEnabled()) {
+            if (!petalSeamlessUnlockController.isAnimating()) {
+                petalSeamlessUnlockController.setWallpaperProgress(
+                    amount, openingWallpaperTargets, closingWallpaperTargets)
+            }
+        } else if (wallpapers) {
             // Use the amount to compute the fadeInAmount and fadeOutAmount of the home and lock
             // screen wallpapers to manually imitate the canned unlock animation.
             val total = (UNLOCK_ANIMATION_DURATION_MS + CANNED_UNLOCK_START_DELAY_MS).toFloat()
@@ -1075,6 +1100,7 @@ constructor(
     fun notifyFinishedKeyguardExitAnimation(showKeyguard: Boolean) {
         // Cancel any pending actions.
         handler.removeCallbacksAndMessages(null)
+        petalSeamlessUnlockController.cancel(showKeyguard)
 
         // The lockscreen surface is gone, so it is now safe to re-show the smartspace.
         if (lockscreenSmartspace?.visibility == View.INVISIBLE) {

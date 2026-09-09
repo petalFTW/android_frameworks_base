@@ -22,6 +22,7 @@ import static com.android.systemui.util.ColorUtilKt.hexColorString;
 import android.content.Context;
 import android.content.res.ColorStateList;
 import android.graphics.Canvas;
+import android.graphics.Color;
 import android.graphics.Path;
 import android.graphics.PorterDuff;
 import android.graphics.PorterDuffColorFilter;
@@ -38,6 +39,7 @@ import androidx.annotation.Nullable;
 
 import com.android.internal.util.ContrastColorUtil;
 import com.android.systemui.Dumpable;
+import com.android.systemui.island.render.LiquidGlassDrawable;
 import com.android.systemui.common.shared.colors.SurfaceEffectColors;
 import com.android.systemui.res.R;
 import com.android.systemui.statusbar.notification.shared.NotificationAddXOnHoverToDismiss;
@@ -46,14 +48,13 @@ import com.android.systemui.util.DrawableDumpKt;
 import java.io.PrintWriter;
 import java.util.Arrays;
 
-/**
- * A view that can be used for both the dimmed and normal background of an notification.
- */
+// A view that can be used for both the dimmed and normal background of an notification.
 public class NotificationBackgroundView extends View implements Dumpable,
         ExpandableNotificationRow.DismissButtonTargetVisibilityListener {
 
     private final boolean mDontModifyCorners;
     private Drawable mBackground;
+    private final LiquidGlassDrawable mGlassFinish = new LiquidGlassDrawable();
     private int mClipTopAmount;
     private int mTopOverlap;
     private int mBottomOverlap;
@@ -137,6 +138,7 @@ public class NotificationBackgroundView extends View implements Dumpable,
             if (mBackground != null) {
                 mBackground.setBounds(backgroundBounds);
                 mBackground.draw(canvas);
+                drawGlassFinish(canvas, mBackground);
             }
 
             canvas.restore();
@@ -196,11 +198,7 @@ public class NotificationBackgroundView extends View implements Dumpable,
         return new Rect(left, top, right, bottom);
     }
 
-    /**
-     * @return Whether the background view should be right-aligned. This only matters if the
-     * actualWidth is different than the full (measured) width. In other words, this is used to
-     * define the short-shelf alignment.
-     */
+    // @return Whether the background view should be right-aligned.
     protected boolean isAlignedToRight() {
         return isLayoutRtl();
     }
@@ -231,7 +229,28 @@ public class NotificationBackgroundView extends View implements Dumpable,
             }
             drawable.setBounds(left, top, right, bottom);
             drawable.draw(canvas);
+            drawGlassFinish(canvas, drawable);
         }
+    }
+
+    private void drawGlassFinish(Canvas canvas, Drawable background) {
+        if (!petalGlassNotificationsEnabled()) return;
+        boolean dark = ContrastColorUtil.isColorDark(mTintColor == 0 ? mNormalColor : mTintColor);
+        mGlassFinish.setBounds(background.getBounds());
+        mGlassFinish.setCornerRadius(getResources().getDimension(
+                R.dimen.island_corner_expanded));
+        mGlassFinish.setRimWidth(getResources().getDisplayMetrics().density);
+        mGlassFinish.setGrainAlpha(dark ? 0x14 : 0x10);
+        mGlassFinish.setRim(dark ? 0x59FFFFFF : 0x99FFFFFF,
+                dark ? 0x14FFFFFF : 0x26000000);
+        Rect bounds = background.getBounds();
+        int save = canvas.save();
+        if (background.getAlpha() < 255) {
+            canvas.saveLayerAlpha(bounds.left, bounds.top, bounds.right, bounds.bottom,
+                    background.getAlpha());
+        }
+        mGlassFinish.draw(canvas);
+        canvas.restoreToCount(save);
     }
 
     @Override
@@ -251,10 +270,7 @@ public class NotificationBackgroundView extends View implements Dumpable,
         }
     }
 
-    /**
-     * Stateful colors are colors that will overlay on the notification original color when one of
-     * hover states, pressed states or other similar states is activated.
-     */
+    // Stateful colors are colors that will overlay on the notification original color when one of hover states, pressed states or other similar states is activated.
     private void setStatefulColors() {
         if (mTintColor != mNormalColor) {
             ColorStateList newColor = ContrastColorUtil.isColorDark(mTintColor)
@@ -263,10 +279,7 @@ public class NotificationBackgroundView extends View implements Dumpable,
         }
     }
 
-    /**
-     * Sets a background drawable. As we need to change our bounds independently of layout, we need
-     * the notion of a background independently of the regular View background..
-     */
+    // Sets a background drawable.
     public void setCustomBackground(Drawable background) {
         if (mBackground != null) {
             mBackground.setCallback(null);
@@ -301,8 +314,10 @@ public class NotificationBackgroundView extends View implements Dumpable,
 
     public void setTint(int tintColor) {
         Drawable baseLayer = getBaseBackgroundLayer();
-        if (notificationRowTransparency()) {
-            ((GradientDrawable) baseLayer.mutate()).setColor(tintColor);
+        if (notificationRowTransparency() || petalGlassNotificationsEnabled()) {
+            baseLayer.mutate().setTintList(null);
+            ((GradientDrawable) baseLayer).setColor(tintColor == Color.TRANSPARENT
+                    ? mNormalColor : tintColor);
 
         } else {
             baseLayer.mutate().setTintMode(PorterDuff.Mode.SRC_ATOP);
@@ -348,23 +363,13 @@ public class NotificationBackgroundView extends View implements Dumpable,
         invalidate();
     }
 
-    /**
-     * Sets the overlap on the top of the view with other views. As a result we should clip the
-     * background and content such that no overlap is visible anymore.
-     * This is related to setClipTopAmount, however it is a separate way to clip which is usually
-     * then combined with the clipTopAmount to take the maximum.
-     */
+    // Sets the overlap on the top of the view with other views.
     public void setTopOverlap(int topOverlap) {
         mTopOverlap = topOverlap;
         invalidate();
     }
 
-    /**
-     * Sets the overlap on the bottom of the view with other views. As a result we should clip the
-     * background and content such that no overlap is visible anymore.
-     * This is related to setClipBottomAmount, however it is a separate way to clip which is usually
-     * then combined with the clipBottomAmount to take the maximum.
-     */
+    // Sets the overlap on the bottom of the view with other views.
     public void setBottomOverlap(int bottomOverlap) {
         mBottomOverlap = bottomOverlap;
         invalidate();
@@ -406,15 +411,12 @@ public class NotificationBackgroundView extends View implements Dumpable,
         mBackground.setAlpha(drawableAlpha);
     }
 
-    /**
-     * Sets the current top and bottom radius for this background.
-     */
+    // Sets the current top and bottom radius for this background.
     public void setRadius(float topRoundness, float bottomRoundness) {
-        // petalOS: with glass notifications enabled, rows adopt the island's rounded blob
-        // silhouette regardless of the stack's per-position radii.
+        // Keep the damn island corners.
         if (petalGlassNotificationsEnabled()) {
             float glassRadius = getResources().getDimensionPixelSize(
-                    R.dimen.petal_glass_notif_corner_radius);
+                    R.dimen.island_corner_expanded);
             topRoundness = glassRadius;
             bottomRoundness = glassRadius;
         }
@@ -438,7 +440,7 @@ public class NotificationBackgroundView extends View implements Dumpable,
         return android.provider.Settings.Secure.getInt(
                 getContext().getContentResolver(),
                 com.android.systemui.island.settings.IslandSettings.KEY_GLASS_NOTIFICATIONS,
-                0) != 0;
+                1) != 0;
     }
 
     public void setBottomAmountClips(boolean clips) {
@@ -467,10 +469,7 @@ public class NotificationBackgroundView extends View implements Dumpable,
                 (GradientDrawable) background.findDrawableByLayerId(
                         R.id.notification_focus_overlay);
         for (int i = 0; i < mCornerRadii.length; i++) {
-            // in theory subtracting mFocusOverlayStroke/2 should be enough but notification
-            // background is still peeking a bit from below - probably due to antialiasing or
-            // overlay uneven scaling. So let's subtract full mFocusOverlayStroke to make sure the
-            // radius is a bit smaller and covers background corners fully
+            // Stop the damn corners peeking through.
             mFocusOverlayCornerRadii[i] = Math.max(0, mCornerRadii[i] - mFocusOverlayStroke);
         }
         overlay.setCornerRadii(mFocusOverlayCornerRadii);

@@ -24,9 +24,7 @@ import android.os.VibrationAttributes;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 
-/**
- * Shared petalOS drawing helpers and locked color constants (see the handover spec).
- */
+// Shared drawing helpers and colors.
 public final class PetalUtils {
 
     private PetalUtils() {}
@@ -100,86 +98,54 @@ public final class PetalUtils {
                 VibrationAttributes.createForUsage(VibrationAttributes.USAGE_TOUCH));
     }
 
-    /**
-     * True when the display rotation is one of the landscape ones. The bezel HUDs draw in a
-     * fixed "portrait space" (vertical capsule anchored to the left/right edge); in landscape
-     * the physical button rails map to the top/bottom screen edges instead, so the drawing is
-     * rotated onto the correct edge (bug: volume/power dialogs sit in the wrong place in
-     * landscape).
-     */
+    // Rotate the portrait geometry with the physical phone.
     public static boolean isLandscapeRotation(int rotation) {
         return rotation == android.view.Surface.ROTATION_90
                 || rotation == android.view.Surface.ROTATION_270;
     }
 
-    /**
-     * True when the physical rail maps to the screen TOP edge in landscape. With the device
-     * rotated counter-clockwise (ROTATION_90) the phone's left rail faces up; rotated clockwise
-     * (ROTATION_270) the right rail faces up.
-     */
     public static boolean edgeIsTopInLandscape(int rotation, boolean physicalLeftRail) {
-        // physicalLeftRail faces up iff the rail side matches the turn direction: left rail is up
-        // on a counter-clockwise (ROTATION_90) turn, right rail is up on a clockwise (ROTATION_270)
-        // turn. So the rail is at the top when (left rail) != (ROTATION_90).
         return physicalLeftRail != (rotation == android.view.Surface.ROTATION_90);
     }
 
-    /**
-     * Angle (degrees, clockwise) to counter-rotate a glyph so it stays screen-upright when the
-     * HUD drawing frame is rotated onto the physical rail edge in landscape. 0 in portrait.
-     */
-    public static float glyphUprightAngle(int rotation, boolean physicalLeftRail) {
-        if (!isLandscapeRotation(rotation)) {
-            return 0f;
-        }
-        // Edge-top frame is rotated +90 (glyph top points left), edge-bottom -90 (top points
-        // right); counter-rotate by the opposite amount around the glyph centre.
-        return edgeIsTopInLandscape(rotation, physicalLeftRail) ? -90f : 90f;
+    public static float glyphUprightAngle(int rotation) {
+        return rotation * 90f;
     }
 
-    /**
-     * Transforms the canvas from "portrait drawing space" into the current orientation. In
-     * landscape the drawing space edges map: drawing x=0 (bezel edge) to the screen top or
-     * bottom edge, drawing +x to the inward depth direction.
-     */
     public static void applyOrientationTransform(Canvas canvas, int rotation,
-            boolean physicalLeftRail, float viewWidth, float viewHeight) {
-        if (!isLandscapeRotation(rotation)) {
-            return;
-        }
-        if (edgeIsTopInLandscape(rotation, physicalLeftRail)) {
-            canvas.translate(viewWidth, 0f);
-            canvas.rotate(90f);
-        } else {
-            canvas.translate(0f, viewHeight);
-            canvas.rotate(-90f);
+            float viewWidth, float viewHeight) {
+        switch (rotation) {
+            case android.view.Surface.ROTATION_90:
+                canvas.translate(0f, viewHeight);
+                canvas.rotate(-90f);
+                break;
+            case android.view.Surface.ROTATION_180:
+                canvas.translate(viewWidth, viewHeight);
+                canvas.rotate(180f);
+                break;
+            case android.view.Surface.ROTATION_270:
+                canvas.translate(viewWidth, 0f);
+                canvas.rotate(90f);
+                break;
         }
     }
 
-    /** Inverse of {@link #applyOrientationTransform} for mapping touch points to drawing space. */
-    public static float[] invertOrientationTransform(int rotation, boolean physicalLeftRail,
+    // Touches must follow the same damn rotation as the drawing.
+    public static float[] invertOrientationTransform(int rotation,
             float viewWidth, float viewHeight, float x, float y) {
-        if (!isLandscapeRotation(rotation)) {
-            return new float[] {x, y};
+        switch (rotation) {
+            case android.view.Surface.ROTATION_90:
+                return new float[] {viewHeight - y, x};
+            case android.view.Surface.ROTATION_180:
+                return new float[] {viewWidth - x, viewHeight - y};
+            case android.view.Surface.ROTATION_270:
+                return new float[] {y, viewWidth - x};
+            default:
+                return new float[] {x, y};
         }
-        if (edgeIsTopInLandscape(rotation, physicalLeftRail)) {
-            return new float[] {y, viewWidth - x};
-        }
-        return new float[] {viewHeight - y, x};
     }
 
-    /**
-     * Builds the capsule body + its deep concave bezel joint as a single filled path.
-     *
-     * @param left    true for the left bezel (volume), false for the right bezel (power).
-     * @param cy      vertical center of the capsule (px).
-     * @param w       capsule width (px).
-     * @param h       capsule height (px).
-     * @param r0      front corner radius (px).
-     * @param d       joint curve depth (px).
-     * @param xTail   off-screen tail length so the closing edge is flush with the screen (px).
-     * @param edgeX   x coordinate of the bezel edge (0 for left, screen width for right).
-     */
+    // Join the capsule to the bezel.
     public static Path jointPath(boolean left, float cy, float w, float h, float r0, float d,
             float xTail, float edgeX) {
         float r = Math.max(0f, Math.min(r0, Math.min(w * 0.7f, h / 2f)));

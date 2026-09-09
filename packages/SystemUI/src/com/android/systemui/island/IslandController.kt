@@ -39,6 +39,7 @@ import com.android.systemui.island.presenter.NotificationPresenter
 import com.android.systemui.island.presenter.SystemChipPayload
 import com.android.systemui.island.presenter.SystemChipPresenter
 import com.android.systemui.island.settings.IslandSettings
+import com.android.systemui.island.signal.ExtraKeySignalSource
 import com.android.systemui.island.signal.CallSignalSource
 import com.android.systemui.island.signal.ChargingSignalSource
 import com.android.systemui.island.signal.MediaSignalSource
@@ -82,6 +83,7 @@ class IslandController @Inject constructor(
     private val callSignalSource: CallSignalSource,
     private val torchSignalSource: TorchSignalSource,
     private val chargingSignalSource: ChargingSignalSource,
+    private val extraKeySignalSource: ExtraKeySignalSource,
 ) : CoreStartable {
 
     private lateinit var geometry: IslandGeometry
@@ -125,6 +127,7 @@ class IslandController @Inject constructor(
 
     override fun start() {
         settings.start()
+        extraKeySignalSource.start()
         shadeExpansionStateManager.addStateListener(shadeStateListener)
         keyguardStateController.addCallback(keyguardStateCallback)
         scope.launch {
@@ -323,6 +326,7 @@ class IslandController @Inject constructor(
             SignalKind.CAST,
             SignalKind.DND,
             SignalKind.NFC,
+            SignalKind.EXTRA_KEY,
             -> {
                 val payload = signal.payload as? SystemChipPayload ?: return null
                 SystemChipPresenter(context, geometry, payload)

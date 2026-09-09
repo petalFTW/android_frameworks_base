@@ -36,7 +36,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -54,13 +53,8 @@ import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.launch
 
-/**
- * Petal glass slider. Vertical controls fill upwards; horizontal controls fill from the layout
- * start and reverse their gesture direction in RTL. Values are previewed locally while dragging and
- * committed on release. Pointer geometry comes from the measured control, not a fixed size.
- */
+/** Glass slider with live changes and a release callback. */
 @Composable
 fun PetalVerticalSliderPill(
     value: Float,
@@ -76,8 +70,7 @@ fun PetalVerticalSliderPill(
     iconActionDescription: String = contentDescriptionText,
     iconTint: androidx.compose.ui.graphics.Color = PetalQsSkin.GlyphDark,
 ) {
-    val scope = rememberCoroutineScope()
-    // Local drag preview; null when the pill is idle so the external value shows through.
+    // NaN means the slider is idle.
     var dragFraction by remember { mutableFloatStateOf(Float.NaN) }
     val shown = (if (dragFraction.isNaN()) value else dragFraction).coerceIn(0f, 1f)
     val currentOnCommit by rememberUpdatedState(onCommit)
@@ -97,7 +90,7 @@ fun PetalVerticalSliderPill(
     fun commit() {
         val frac = if (dragFraction.isNaN()) value else dragFraction
         dragFraction = Float.NaN
-        scope.launch { currentOnCommit(frac.coerceIn(0f, 1f)) }
+        currentOnCommit(frac.coerceIn(0f, 1f))
     }
 
     Box(
@@ -159,9 +152,7 @@ fun PetalVerticalSliderPill(
                 Modifier.align(if (horizontal) Alignment.CenterStart else Alignment.BottomCenter)
                     .size(if (horizontal) height else width),
         ) {
-            // petalOS: icon must be a plain VectorDrawable — painterResource throws for
-            // level-list / adaptive icons and would crash SystemUI while drawing QS.
-            // (ic_brightness.xml is a level-list; use ic_brightness_full instead.)
+            // Use plain vector icons; level lists crash painterResource.
             Icon(
                 painter = painterResource(id = iconRes),
                 contentDescription = iconActionDescription,

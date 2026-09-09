@@ -43,8 +43,7 @@ import com.android.internal.widget.LockPatternView;
 import com.android.settingslib.animation.AppearAnimationCreator;
 import com.android.settingslib.animation.AppearAnimationUtils;
 import com.android.settingslib.animation.DisappearAnimationUtils;
-import com.android.systemui.Flags;
-import com.android.systemui.bouncer.shared.constants.PatternBouncerConstants.ColorId;
+import com.android.systemui.petalos.PetalPatternStyle;
 import com.android.systemui.res.R;
 import com.android.systemui.statusbar.policy.DevicePostureController.DevicePostureInt;
 
@@ -73,19 +72,13 @@ public class KeyguardPatternView extends KeyguardInputView
 
     private LockPatternView mLockPatternView;
 
-    /**
-     * Keeps track of the last time we poked the wake lock during dispatching of the touch event.
-     * Initialized to something guaranteed to make us poke the wakelock when the user starts
-     * drawing the pattern.
-     * @see #dispatchTouchEvent(android.view.MotionEvent)
-     */
+    // Track the last wake-lock poke.
     private long mLastPokeTime = -UNLOCK_PATTERN_WAKE_INTERVAL_MS;
 
     BouncerKeyguardMessageArea mSecurityMessageDisplay;
     private View mEcaView;
     @Nullable private MotionLayout mContainerMotionLayout;
-    // TODO (b/293252410) - usage of mContainerConstraintLayout should be removed
-    //  when the flag is enabled/removed
+    // TODO (b/293252410): Remove after the landscape flag rollout.
     @Nullable private ConstraintLayout mContainerConstraintLayout;
     private boolean mAlreadyUsingSplitBouncer = false;
     private boolean mIsSmallLockScreenLandscapeEnabled = false;
@@ -111,10 +104,7 @@ public class KeyguardPatternView extends KeyguardInputView
                 mContext, android.R.interpolator.fast_out_linear_in));
     }
 
-    /**
-     * Use motion layout (new bouncer implementation) if LOCKSCREEN_ENABLE_LANDSCAPE flag is
-     * enabled, instead of constraint layout (old bouncer implementation)
-     */
+    // Use MotionLayout for landscape support.
     public void setIsLockScreenLandscapeEnabled(boolean isLockScreenLandscapeEnabled) {
         mIsSmallLockScreenLandscapeEnabled = isLockScreenLandscapeEnabled;
         findContainerLayout();
@@ -194,11 +184,7 @@ public class KeyguardPatternView extends KeyguardInputView
         }
     }
 
-    /**
-     * Updates the keyguard view's constraints (single or split constraints).
-     * Split constraints are only used for small landscape screens.
-     * Only called when flag LANDSCAPE_ENABLE_LOCKSCREEN is enabled.
-     */
+    // Switch between single and split layouts.
     @Override
     protected void updateConstraints(boolean useSplitBouncer) {
         if (!mIsSmallLockScreenLandscapeEnabled) return;
@@ -229,17 +215,7 @@ public class KeyguardPatternView extends KeyguardInputView
         super.onFinishInflate();
 
         mLockPatternView = findViewById(R.id.lockPatternView);
-        if (Flags.bouncerUiRevamp2()) {
-            mLockPatternView.setDotColors(mContext.getColor(ColorId.dotColor), mContext.getColor(
-                    ColorId.activatedDotColor));
-            mLockPatternView.setColors(mContext.getColor(ColorId.pathColor), 0, 0);
-            mLockPatternView.setDotSizes(
-                    getResources().getDimensionPixelSize(R.dimen.keyguard_pattern_dot_size),
-                    getResources().getDimensionPixelSize(
-                            R.dimen.keyguard_pattern_activated_dot_size));
-            mLockPatternView.setPathWidth(
-                    getResources().getDimensionPixelSize(R.dimen.keyguard_pattern_stroke_width));
-        }
+        PetalPatternStyle.applyPattern(mLockPatternView);
 
         mEcaView = findViewById(R.id.keyguard_selector_fade_container);
     }
@@ -253,8 +229,7 @@ public class KeyguardPatternView extends KeyguardInputView
     @Override
     public boolean onTouchEvent(MotionEvent ev) {
         boolean result = super.onTouchEvent(ev);
-        // as long as the user is entering a pattern (i.e sending a touch event that was handled
-        // by this screen), keep poking the wake lock so that the screen will stay on.
+        // Keep the screen awake while drawing.
         final long elapsed = SystemClock.elapsedRealtime() - mLastPokeTime;
         if (result && (elapsed > (UNLOCK_PATTERN_WAKE_INTERVAL_MS - 100))) {
             mLastPokeTime = SystemClock.elapsedRealtime();
@@ -374,7 +349,7 @@ public class KeyguardPatternView extends KeyguardInputView
 
     @Override
     public boolean hasOverlappingRendering() {
-        return false;
+        return true;
     }
 
     @Override

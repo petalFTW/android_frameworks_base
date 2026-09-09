@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="petal_key_menu">Menu</string>
+    <string name="petal_key_app_switch">Recent apps</string>
+    <string name="petal_key_search">Assistant</string>
+    <string name="petal_key_voice_search">Voice search</string>
+    <string name="petal_key_in_app_search">Search</string>
+    <string name="petal_key_launch_camera">Camera</string>
+    <string name="petal_key_sleep">Sleep</string>
+    <string name="petal_key_last_app">Previous app</string>
+    <string name="petal_key_split_screen">Split screen</string>
+    <string name="petal_key_kill_app">Close app</string>
+    <string name="petal_key_play_pause_music">Play / pause</string>
+    <string name="petal_key_screenshot">Screenshot</string>
+    <string name="petal_key_partial_screenshot">Select screenshot area</string>
+    <string name="petal_key_flashlight">Flashlight</string>
+    <string name="petal_key_next_track">Next track</string>
+    <string name="petal_key_prev_track">Previous track</string>
+    <string name="petal_key_volume_up">Volume up</string>
+    <string name="petal_key_volume_down">Volume down</string>
+    <string name="petal_key_notifications">Notifications</string>
+    <string name="petal_key_ring">Ring</string>
+    <string name="petal_key_vibrate">Vibrate</string>
+    <string name="petal_key_silent">Silent</string>
+</resources>

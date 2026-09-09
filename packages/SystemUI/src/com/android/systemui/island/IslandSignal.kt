@@ -43,6 +43,7 @@ enum class SignalKind {
     CAST,
     DND,
     NFC,
+    EXTRA_KEY,
 }
 
 /**

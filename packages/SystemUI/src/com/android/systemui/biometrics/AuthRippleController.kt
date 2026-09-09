@@ -58,14 +58,7 @@ import java.io.PrintWriter
 import javax.inject.Inject
 import javax.inject.Provider
 
-/**
- * Controls two ripple effects:
- * 1. Unlocked ripple: shows when authentication is successful
- * 2. UDFPS dwell ripple: shows when the user has their finger down on the UDFPS area and reacts to
- *    errors and successes
- *
- * The ripple uses the accent color of the current theme.
- */
+// Controls authentication and fingerprint dwell ripples.
 @SysUISingleton
 class AuthRippleController
 @Inject
@@ -147,6 +140,8 @@ constructor(
     }
 
     private fun showUnlockRippleInternal(biometricSourceType: BiometricSourceType) {
+        // Fingerprint unlock needs no screen-wide sparkle.
+        if (biometricSourceType == BiometricSourceType.FINGERPRINT) return
         val keyguardNotShowing = !keyguardStateController.isShowing
         val unlockNotAllowed =
             !keyguardUpdateMonitor.isUnlockingWithBiometricAllowed(biometricSourceType)
@@ -194,8 +189,7 @@ constructor(
     private fun showUnlockedRipple() {
         notificationShadeWindowController.setForcePluginOpen(true, this)
 
-        // This code path is not used if the KeyguardTransitionRepository is managing the light
-        // reveal scrim.
+        // The transition repository owns the scrim when ambient AOD is enabled.
         if (!ambientAod()) {
             if (statusBarStateController.isDozing || biometricUnlockController.isWakeAndUnlock) {
                 circleReveal?.let {
@@ -236,10 +230,7 @@ constructor(
                         addListener(
                             object : AnimatorListenerAdapter() {
                                 override fun onAnimationEnd(animation: Animator) {
-                                    // Reset light reveal scrim to the default, so the
-                                    // CentralSurfaces
-                                    // can handle any subsequent light reveal changes
-                                    // (ie: from dozing changes)
+                                    // Restore the default reveal for the next wake.
                                     if (lightRevealScrim.revealEffect == circleReveal) {
                                         lightRevealScrim.revealEffect = LiftReveal
                                     }
@@ -255,9 +246,7 @@ constructor(
         }
     }
 
-    /**
-     * Whether we're animating the light reveal scrim from a call to [onKeyguardFadingAwayChanged].
-     */
+    // Whether we're animating the light reveal scrim from a call to [onKeyguardFadingAwayChanged].
     fun isAnimatingLightRevealScrim(): Boolean {
         return lightRevealScrimAnimator?.isRunning ?: false
     }

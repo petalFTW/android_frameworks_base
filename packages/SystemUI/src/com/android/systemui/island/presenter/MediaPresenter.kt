@@ -36,14 +36,11 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.android.systemui.island.IslandGeometry
-import com.android.systemui.island.render.EqualizerView
+import com.android.systemui.island.render.RecordView
 import com.android.systemui.island.render.GlassSeekBar
 import com.android.systemui.island.render.PaletteTinter
 
-/**
- * Renders the media island: collapsed is an equalizer + play/pause glyph, expanded is album art,
- * title/artist, a seek slider and transport controls (§4.5). The island is tinted from the artwork.
- */
+// Spin the record while the music plays.
 class MediaPresenter(
     private val context: Context,
     private val geometry: IslandGeometry,
@@ -54,7 +51,7 @@ class MediaPresenter(
     private var tintListener: ((IslandTint?) -> Unit)? = null
     private var playing = false
     private var playPause: ImageView? = null
-    private var equalizer: EqualizerView? = null
+    private var record: RecordView? = null
     private var seekBar: GlassSeekBar? = null
     private var titleView: TextView? = null
     private var artistView: TextView? = null
@@ -94,20 +91,13 @@ class MediaPresenter(
             gravity = Gravity.CENTER_VERTICAL
             setPadding(geometry.dp(10f), 0, geometry.dp(12f), 0)
         }
-        equalizer = EqualizerView(context).apply {
-            barCount = 3
-            setMetrics(
-                geometry.equalizerBarWidth,
-                geometry.equalizerGap,
-                geometry.equalizerMaxHeight,
-            )
-            cachedTint?.accent?.let { setBarColor(it) }
+        record?.stop()
+        record = RecordView(context).apply {
+            cachedTint?.accent?.let { setRecordColor(it) }
         }
-        val eqLp = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            (geometry.equalizerMaxHeight * 1.2f).toInt(),
-        ).apply { gravity = Gravity.CENTER_VERTICAL }
-        row.addView(equalizer, eqLp)
+        row.addView(record, LinearLayout.LayoutParams(
+            geometry.iconSize, geometry.iconSize,
+        ).apply { gravity = Gravity.CENTER_VERTICAL })
 
         playPause = ImageView(context).apply {
             setOnClickListener { togglePlayback() }
@@ -122,8 +112,7 @@ class MediaPresenter(
         container.addView(row)
         updateTransport()
 
-        val barsWidth = (geometry.equalizerBarWidth * 3 + geometry.equalizerGap * 2).toInt()
-        return geometry.dp(10f) + barsWidth + geometry.dp(8f) +
+        return geometry.dp(10f) + geometry.iconSize + geometry.dp(8f) +
             geometry.iconSize + geometry.dp(12f)
     }
 
@@ -142,7 +131,7 @@ class MediaPresenter(
                 geometry.expandedPadding, geometry.expandedPadding)
         }
 
-        // Top row: album art + title/artist + equalizer
+        // Top row: album art + title/artist + record
         val topRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -184,22 +173,14 @@ class MediaPresenter(
             },
         )
 
-        equalizer = EqualizerView(context).apply {
-            barCount = 6
-            setMetrics(
-                geometry.equalizerBarWidth,
-                geometry.equalizerGap,
-                geometry.equalizerMaxHeightExpanded,
-            )
-            setBarColor(accent)
+        record?.stop()
+        record = RecordView(context).apply {
+            setRecordColor(accent)
+            active = playing
         }
-        topRow.addView(
-            equalizer,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                (geometry.equalizerMaxHeightExpanded * 1.2f).toInt(),
-            ).apply { marginStart = geometry.dp(10f) },
-        )
+        topRow.addView(record, LinearLayout.LayoutParams(
+            geometry.dp(28f), geometry.dp(28f),
+        ).apply { marginStart = geometry.dp(10f) })
 
         root.addView(topRow)
 
@@ -311,7 +292,8 @@ class MediaPresenter(
         seekBar = null
         playPause = null
         accentButtonBg = null
-        equalizer = null
+        record?.stop()
+        record = null
     }
 
     /**
@@ -355,7 +337,7 @@ class MediaPresenter(
     private fun applyAccentToContent() {
         val accent = currentAccent()
         val onAccent = if (Color.luminance(accent) > 0.5f) 0xFF101012.toInt() else Color.WHITE
-        equalizer?.setBarColor(accent)
+        record?.setRecordColor(accent)
         seekBar?.progressColor = accent
         accentButtonBg?.setColor(accent)
         playPause?.setColorFilter(onAccent)
@@ -373,7 +355,7 @@ class MediaPresenter(
         val duration = metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L
         seekBar?.isEnabled = duration > 0
         updateTransport()
-        equalizer?.active = playing
+        record?.active = playing
     }
 
     /** Loads the album art, preferring embedded bitmaps and falling back to the art URI. */
@@ -416,7 +398,7 @@ class MediaPresenter(
         val glyph =
             if (playing) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play
         playPause?.setImageResource(glyph)
-        equalizer?.active = playing
+        record?.active = playing
         if (playing) startProgressTicker() else stopProgressTicker()
     }
 

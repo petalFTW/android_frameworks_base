@@ -33,6 +33,7 @@ import com.android.internal.os.BinderCallHeavyHitterWatcher.BinderCallHeavyHitte
 import com.android.internal.os.BinderInternal;
 import com.android.internal.os.BinderInternal.CallSession;
 import com.android.internal.gmscompat.GmsHooks;
+import com.android.internal.gmscompat.WalletCompat;
 import com.android.internal.util.FastPrintWriter;
 import com.android.internal.util.FunctionalUtils.ThrowingRunnable;
 import com.android.internal.util.FunctionalUtils.ThrowingSupplier;
@@ -1438,9 +1439,17 @@ public class Binder implements IBinder {
             }
         }
 
+        final boolean walletCompat = GmsCompat.isEnabled() && GmsCompat.isGmsCore();
+        boolean previousWalletScope = false;
         try {
+            if (walletCompat) {
+                previousWalletScope = WalletCompat.beginTransaction(this, code, data, callingUid);
+            }
             return execTransactInternal(code, data, reply, flags, callingUid);
         } finally {
+            if (walletCompat) {
+                WalletCompat.endTransaction(previousWalletScope);
+            }
             reply.recycle();
             data.recycle();
 

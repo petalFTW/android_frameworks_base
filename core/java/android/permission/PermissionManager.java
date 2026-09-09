@@ -2250,4 +2250,13 @@ public final class PermissionManager {
             e.rethrowFromSystemServer();
         }
     }
+
+    /** @hide Restricted to the preinstalled GmsCompat app, for its own Android user. */
+    public boolean setGmsWalletPrivilegedPhoneState(boolean granted) {
+        try {
+            return mPermissionManager.setGmsWalletPrivilegedPhoneState(granted);
+        } catch (RemoteException e) {
+            throw e.rethrowFromSystemServer();
+        }
+    }
 }

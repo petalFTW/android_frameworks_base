@@ -27,7 +27,6 @@ import androidx.compose.animation.graphics.res.animatedVectorResource
 import androidx.compose.animation.graphics.res.rememberAnimatedVectorPainter
 import androidx.compose.animation.graphics.vector.AnimatedImageVector
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -40,6 +39,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialTheme
@@ -48,7 +48,6 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -56,7 +55,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.paint
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -65,7 +63,6 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorProducer
-import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.DefaultAlpha
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -84,7 +81,7 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.toggleableState
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import com.android.compose.modifiers.size
 import com.android.compose.modifiers.thenIf
@@ -133,8 +130,6 @@ fun LargeTileContent(
 ) {
     val isDualTarget = toggleClick != null
     // petalOS: the skin renders tiles fully icon-only; with no label text the icon is
-    // centered in the card like the concept's media / slider cards. Stock behaviour
-    // (start-aligned icon + labels) is untouched when the skin is off.
     val petalCenterIcon =
         label.isEmpty() && com.android.systemui.petalos.PetalQsSkin.isEnabled(LocalContext.current)
     Row(
@@ -262,7 +257,6 @@ fun SmallTileContent(
         }
     if (loadedDrawable is Animatable) {
         // Skip initial animation, icons should animate only as the state change
-        // and not when first composed
         var shouldSkipInitialAnimation by remember { mutableStateOf(true) }
         LaunchedEffect(Unit) { shouldSkipInitialAnimation = animateToEnd }
 
@@ -282,7 +276,6 @@ fun SmallTileContent(
                     val painter = rememberDrawablePainter(loadedDrawable)
 
                     // rememberDrawablePainter automatically starts the animation. Using
-                    // SideEffect here to immediately stop it if needed
                     DisposableEffect(painter) {
                         if (loadedDrawable is AnimatedVectorDrawable) {
                             loadedDrawable.forceAnimationOnUI()
@@ -326,48 +319,13 @@ private fun TileLabel(
     modifier: Modifier = Modifier,
     isVisible: () -> Boolean = { true },
 ) {
-    var textSize by remember { mutableIntStateOf(0) }
-
-    val iterations = if (isVisible()) TILE_MARQUEE_ITERATIONS else 0
-
     BasicText(
         text = text,
         color = color,
         style = style,
         maxLines = 1,
-        onTextLayout = { textSize = it.size.width },
-        modifier =
-            modifier
-                .fillMaxWidth()
-                .graphicsLayer {
-                    if (textSize > size.width) {
-                        compositingStrategy = CompositingStrategy.Offscreen
-                    }
-                }
-                .drawWithContent {
-                    drawContent()
-                    if (textSize > size.width) {
-                        // Draw a blur over the end of the text
-                        val edgeWidthPx = TileLabelBlurWidth.toPx()
-                        if (layoutDirection == LayoutDirection.Rtl) {
-                            drawFadedEdge(
-                                startX = 0f,
-                                endX = edgeWidthPx,
-                                colors = listOf(Color.Transparent, Color.Black),
-                            )
-                        } else {
-                            drawFadedEdge(
-                                startX = size.width - edgeWidthPx,
-                                endX = size.width,
-                                colors = listOf(Color.Black, Color.Transparent),
-                            )
-                        }
-                    }
-                }
-                .basicMarquee(
-                    iterations = iterations,
-                    initialDelayMillis = TILE_INITIAL_DELAY_MILLIS,
-                ),
+        autoSize = TextAutoSize.StepBased(minFontSize = 6.sp, maxFontSize = style.fontSize),
+        modifier = modifier.fillMaxWidth(),
     )
 }
 
@@ -375,12 +333,7 @@ fun Modifier.tileTestTag(iconOnly: Boolean): Modifier {
     return sysuiResTag(if (iconOnly) TEST_TAG_SMALL else TEST_TAG_LARGE)
 }
 
-/**
- * Apply the correct padding for large tiles
- *
- * Large tiles have a different end padding based on the content, such as if it's a dual target tile
- * or if it has a side drawable.
- */
+// Apply the correct padding for large tiles
 fun Modifier.largeTilePadding(isDualTarget: Boolean = false): Modifier {
     return padding(
         start = TileStartPadding,
@@ -463,7 +416,6 @@ private fun NonClippedImage(
         }
 
     // Explicitly use a simple Layout implementation here as Spacer squashes any non fixed
-    // constraint with zero
     Layout(
         modifier
             .then(semantics)

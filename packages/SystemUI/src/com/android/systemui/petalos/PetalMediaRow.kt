@@ -29,11 +29,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -41,15 +36,11 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.android.settingslib.display.BrightnessUtils
 import com.android.systemui.brightness.shared.model.GammaBrightness
 import com.android.systemui.brightness.ui.viewmodel.BrightnessSliderViewModel
@@ -99,62 +90,38 @@ fun PetalMediaRow(
         if (gamma < 0) 0.5f else (gamma - minGamma) / (maxGamma - minGamma).coerceAtLeast(1f)
     val volumeFraction = if (maxVolume <= 0) 0f else volume.toFloat() / maxVolume.toFloat()
 
-    fun commitBrightness(frac: Float) {
+    fun updateBrightness(frac: Float, commit: Boolean) {
         val value =
             (minGamma + frac * (maxGamma - minGamma))
                 .toInt()
                 .coerceIn(minGamma.toInt(), maxGamma.toInt())
         scope.launch {
-            brightnessViewModel.onDrag(Drag.Dragging(GammaBrightness(value)))
-            brightnessViewModel.onDrag(Drag.Stopped(GammaBrightness(value)))
+            val brightness = GammaBrightness(value)
+            brightnessViewModel.onDrag(
+                if (commit) Drag.Stopped(brightness) else Drag.Dragging(brightness)
+            )
+        }
+    }
+
+    fun updateVolume(frac: Float) {
+        val next = (frac * maxVolume).toInt().coerceIn(0, maxVolume)
+        if (next != volume) {
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, next, 0)
+            volume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
         }
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = modifier.fillMaxWidth()) {
         val mediaShape =
             androidx.compose.foundation.shape.RoundedCornerShape(PetalQsSkin.TileCardCornerRadius)
-        // The system media card contains routing, transport and app-specific actions.
-        // Give it the full shade width and its natural height on both media backends.
-        Box(
-            modifier =
-                Modifier.fillMaxWidth()
+        if (mediaVisible) {
+            Box(
+                modifier = Modifier.fillMaxWidth()
                     .clip(mediaShape)
                     .background(PetalQsSkin.TileGlassDark)
                     .border(1.dp, PetalQsSkin.TileGlassBorderBrush, mediaShape)
-        ) {
-            if (mediaVisible) {
+            ) {
                 media()
-            } else {
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_music_note),
-                        contentDescription = null,
-                        tint = PetalQsSkin.TileGlyphOnDark,
-                        modifier = Modifier.size(28.dp),
-                    )
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = stringResource(R.string.petal_qs_no_media),
-                            color = PetalQsSkin.TileGlyphOnDark,
-                            fontSize = 14.sp,
-                            lineHeight = 18.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Text(
-                            text = stringResource(R.string.petal_qs_no_media_hint),
-                            color = PetalQsSkin.TileGlyphOnDarkMuted,
-                            fontSize = 12.sp,
-                            lineHeight = 16.sp,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                }
             }
         }
         // Short horizontal controls leave the media card its full usable width.
@@ -173,10 +140,8 @@ fun PetalMediaRow(
                         R.drawable.ic_qs_brightness_auto_off
                     },
                 contentDescriptionText = stringResource(R.string.accessibility_brightness),
-                // The pill shows a local drag preview; the view model's live currentBrightness
-                // state drives the resting fill, so nothing to write here.
-                onValueChange = {},
-                onCommit = ::commitBrightness,
+                onValueChange = { updateBrightness(it, commit = false) },
+                onCommit = { updateBrightness(it, commit = true) },
                 onIconClick = { brightnessViewModel.onIconClick() },
                 iconActionDescription =
                     stringResource(
@@ -191,16 +156,8 @@ fun PetalMediaRow(
                 orientation = Orientation.Horizontal,
                 iconRes = if (volume <= 0) R.drawable.ic_speaker_mute else R.drawable.ic_speaker_on,
                 contentDescriptionText = stringResource(R.string.petal_qs_media_volume),
-                onValueChange = { frac ->
-                    volume = (frac * maxVolume).toInt().coerceIn(0, maxVolume)
-                },
-                onCommit = { frac ->
-                    audioManager.setStreamVolume(
-                        AudioManager.STREAM_MUSIC,
-                        (frac * maxVolume).toInt().coerceIn(0, maxVolume),
-                        0,
-                    )
-                },
+                onValueChange = ::updateVolume,
+                onCommit = ::updateVolume,
                 onIconClick = {
                     // Restore the user's previous level after muting from this button.
                     val next =

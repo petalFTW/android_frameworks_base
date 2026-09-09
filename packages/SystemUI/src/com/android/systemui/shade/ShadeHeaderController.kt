@@ -43,7 +43,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.ComposeView
 import androidx.constraintlayout.motion.widget.MotionLayout
-import androidx.core.view.doOnLayout
 import androidx.core.view.isVisible
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.android.app.animation.Interpolators
@@ -101,15 +100,7 @@ import javax.inject.Inject
 import javax.inject.Named
 import kotlinx.coroutines.flow.MutableStateFlow
 
-/**
- * Controller for QS header.
- *
- * [header] is a [MotionLayout] that has two transitions:
- * * [HEADER_TRANSITION_ID]: [QQS_HEADER_CONSTRAINT] <-> [QS_HEADER_CONSTRAINT] for portrait
- *   handheld device configuration.
- * * [LARGE_SCREEN_HEADER_TRANSITION_ID]: [LARGE_SCREEN_HEADER_CONSTRAINT] for all other
- *   configurations
- */
+/** Controls the QS header transitions. */
 @SysUISingleton
 class ShadeHeaderController
 @Inject
@@ -210,10 +201,7 @@ constructor(
             }
         }
 
-    /**
-     * Whether the QQS/QS part of the shade is visible. This is particularly important in
-     * Lockscreen, as the shade is visible but QS is not.
-     */
+    /** Tracks whether QS is visible. */
     var qsVisible = false
         set(value) {
             if (field == value) {
@@ -223,10 +211,7 @@ constructor(
             onShadeExpandedChanged()
         }
 
-    /**
-     * Whether we are in a configuration with large screen width. In this case, the header is a
-     * single line.
-     */
+    /** Uses a single header row on large screens. */
     var largeScreenActive = false
         set(value) {
             if (field == value) {
@@ -569,11 +554,7 @@ constructor(
     }
 
     private fun updateCarrierGroupPadding() {
-        clock.doOnLayout {
-            val maxClockWidth =
-                (clock.width * resources.getFloat(R.dimen.qqs_expand_clock_scale)).toInt()
-            mShadeCarrierGroup.setPaddingRelative(maxClockWidth, 0, 0, 0)
-        }
+        mShadeCarrierGroup.setPaddingRelative(0, 0, 0, 0)
     }
 
     private fun updateConstraintsForInsets(view: MotionLayout, insets: WindowInsets) {
@@ -645,10 +626,7 @@ constructor(
         updateTransition()
     }
 
-    /**
-     * If not using [combinedHeaders] this should only be visible on large screen. Else, it should
-     * be visible any time the QQS/QS shade is open.
-     */
+    /** Show the header when its shade is open. */
     private fun updateVisibility() {
         val visibility =
             if (qsDisabled) {
@@ -756,11 +734,7 @@ constructor(
         updateState(state, constraints)
     }
 
-    /**
-     * Updates the [ConstraintSet] for the case of combined headers.
-     *
-     * Only non-`null` changes are applied to reduce the number of rebuilding in the [MotionLayout].
-     */
+    /** Apply only changed header constraints. */
     private fun MotionLayout.updateAllConstraints(updates: ConstraintsChanges) {
         if (updates.qqsConstraintsChanges != null) {
             updateConstraints(QQS_HEADER_CONSTRAINT, updates.qqsConstraintsChanges)

@@ -238,17 +238,28 @@ class PetalDepthClockView(context: Context) : View(context) {
 
         val rawHour = hourText
         val rawMinute = minuteText
-        val useColon = !vertical
+        val square = org.petalos.config.DepthClockMaterials.isSquare(style)
+        // square styles always stack: hours on top, minutes below
+        val stack = vertical || square
+        val useColon = !stack
         val hour = if (useColon) "$rawHour:" else rawHour
         val minute = rawMinute
 
         // Digit size: fill the width (vertical stacks one pair per row; horizontal fits both).
         val probe = Paint(fillPaint).apply { textSize = 100f }
-        val unitWidth = if (vertical) probe.measureText("00") else probe.measureText("00:00")
-        val targetWidth = width * (if (vertical) 0.62f else 0.78f) * scale
+        val unitWidth = if (stack) probe.measureText("00") else probe.measureText("00:00")
+        val targetWidth = width * (when {
+            square -> 0.92f
+            stack -> 0.62f
+            else -> 0.78f
+        }) * scale
         val textSize = 100f * targetWidth / unitWidth.coerceAtLeast(1f)
         // Keep the digits inside the screen.
-        val heightCap = height * 0.5f * scale / (if (vertical) 2.3f else 1.4f)
+        val heightCap = height * 0.5f * scale / (when {
+            square -> 2.1f
+            stack -> 2.3f
+            else -> 1.4f
+        })
         val finalTextSize = minOf(textSize, heightCap)
 
         fillPaint.textSize = finalTextSize
@@ -264,7 +275,7 @@ class PetalDepthClockView(context: Context) : View(context) {
         val hh = textBounds(hour)
         val mm = textBounds(minute)
         val centerX = width * anchorX + dx
-        if (vertical) {
+        if (stack) {
             val lineStep = finalTextSize * 1.25f
             val baseline = height * anchor - (hh.top + lineStep + mm.bottom) / 2f + dy
             drawStyled(canvas, hour, centerX - hh.centerX(), baseline, style)

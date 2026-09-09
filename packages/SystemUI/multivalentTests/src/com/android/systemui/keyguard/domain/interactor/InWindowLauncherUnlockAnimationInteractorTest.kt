@@ -52,6 +52,7 @@ class InWindowLauncherUnlockAnimationInteractorTest : SysuiTestCase() {
             kosmos.inWindowLauncherUnlockAnimationRepository,
             kosmos.applicationCoroutineScope,
             kosmos.applicationCoroutineScope,
+            kosmos.applicationContext,
             kosmos.keyguardTransitionInteractor,
             { kosmos.keyguardSurfaceBehindRepository },
             kosmos.activityManagerWrapper,

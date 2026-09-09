@@ -56,6 +56,7 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
@@ -268,38 +269,35 @@ fun ContentScope.ExpandedShadeHeader(
     val textColor = ShadeHeader.Colors.textColor
 
     Box(modifier = modifier.sysuiResTag(ShadeHeader.TestTags.Root)) {
-        if (viewModel.isPrivacyChipVisible) {
-            Box(modifier = Modifier.height(ShadeHeader.Dimensions.StatusBarHeight).fillMaxWidth()) {
-                PrivacyChip(
-                    privacyList = viewModel.privacyItems,
-                    onClick = viewModel::onPrivacyChipClicked,
-                    modifier = Modifier.align(Alignment.CenterEnd),
-                )
-            }
-        }
         Column(
             verticalArrangement = Arrangement.spacedBy(space = 16.dp, alignment = Alignment.Bottom),
             modifier =
                 Modifier.fillMaxWidth()
                     .defaultMinSize(minHeight = ShadeHeader.Dimensions.ExpandedHeight),
         ) {
-            Box(modifier = Modifier.fillMaxWidth()) {
-                Clock(
-                    onClick = viewModel::onClockClicked,
-                    modifier = Modifier.align(Alignment.CenterStart),
-                    scale = 2.57f,
-                    textColor = textColor,
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                ShadeCarrierGroup(
+                    viewModel = viewModel,
+                    modifier = Modifier.element(ShadeHeader.Elements.ShadeCarrierGroup).weight(1f),
+                    constrainCarriers = true,
                 )
-                Box(
-                    modifier =
-                        Modifier.element(ShadeHeader.Elements.ShadeCarrierGroup).fillMaxWidth()
-                ) {
-                    ShadeCarrierGroup(
-                        viewModel = viewModel,
-                        modifier = Modifier.align(Alignment.CenterEnd),
+                if (viewModel.isPrivacyChipVisible) {
+                    PrivacyChip(
+                        privacyList = viewModel.privacyItems,
+                        onClick = viewModel::onPrivacyChipClicked,
                     )
                 }
             }
+            Clock(
+                onClick = viewModel::onClockClicked,
+                scale = 2.57f,
+                reserveScaledSpace = true,
+                textColor = textColor,
+            )
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -335,10 +333,7 @@ fun ContentScope.ExpandedShadeHeader(
     }
 }
 
-/**
- * The status bar that appears above both the Notifications and Quick Settings shade overlays when
- * overlay shade is enabled.
- */
+/** Header for the notification and QS shades. */
 @Composable
 fun ContentScope.OverlayShadeHeader(
     viewModel: ShadeHeaderViewModel,
@@ -450,10 +445,7 @@ fun QuickSettingsOverlayHeader(viewModel: ShadeHeaderViewModel, modifier: Modifi
     }
 }
 
-/*
- * Places startContent and endContent according to the location of the display cutout.
- * Assumes it is globally positioned at (0, 0) and the same size as the screen.
- */
+/** Place header content around the display cutout. */
 @Composable
 private fun CutoutAwareShadeHeader(
     modifier: Modifier = Modifier,
@@ -513,6 +505,7 @@ private fun ContentScope.Clock(
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
     scale: Float = 1f,
+    reserveScaledSpace: Boolean = false,
     textColor: Color? = null,
 ) {
     val layoutDirection = LocalLayoutDirection.current
@@ -539,21 +532,41 @@ private fun ContentScope.Clock(
                 update = { view -> textColor?.let { view.setTextColor(it.toArgb()) } },
                 modifier =
                     modifier
-                        .wrapContentWidth(unbounded = true)
-                        // use graphicsLayer instead of Modifier.scale to anchor transform to the
-                        // (start, top) corner
-                        .graphicsLayer {
-                            scaleX = animatedScale
-                            scaleY = animatedScale
-                            transformOrigin =
-                                TransformOrigin(
-                                    when (layoutDirection) {
-                                        LayoutDirection.Ltr -> 0f
-                                        LayoutDirection.Rtl -> 1f
-                                    },
-                                    0.5f,
-                                )
-                        }
+                        .then(
+                            if (reserveScaledSpace) {
+                                Modifier.layout { measurable, constraints ->
+                                    val placeable = measurable.measure(
+                                        constraints.copy(minWidth = 0, minHeight = 0,
+                                            maxWidth = Constraints.Infinity)
+                                    )
+                                    val fittedScale = minOf(animatedScale,
+                                        constraints.maxWidth.toFloat() / placeable.width.coerceAtLeast(1))
+                                    val width = (placeable.width * fittedScale).roundToInt()
+                                        .coerceIn(constraints.minWidth, constraints.maxWidth)
+                                    val height = (placeable.height * fittedScale).roundToInt()
+                                        .coerceIn(constraints.minHeight, constraints.maxHeight)
+                                    layout(width, height) {
+                                        placeable.placeRelativeWithLayer(0, (height - placeable.height) / 2) {
+                                            scaleX = fittedScale
+                                            scaleY = fittedScale
+                                            transformOrigin = TransformOrigin(
+                                                if (layoutDirection == LayoutDirection.Ltr) 0f else 1f,
+                                                0.5f,
+                                            )
+                                        }
+                                    }
+                                }
+                            } else {
+                                Modifier.wrapContentWidth(unbounded = true).graphicsLayer {
+                                    scaleX = animatedScale
+                                    scaleY = animatedScale
+                                    transformOrigin = TransformOrigin(
+                                        if (layoutDirection == LayoutDirection.Ltr) 0f else 1f,
+                                        0.5f,
+                                    )
+                                }
+                            }
+                        )
                         .thenIf(onClick != null) { Modifier.clickable { onClick?.invoke() } },
             )
         }
@@ -646,9 +659,13 @@ private fun BatteryIconLegacy(
 
 @OptIn(ExperimentalKairosApi::class)
 @Composable
-private fun ShadeCarrierGroup(viewModel: ShadeHeaderViewModel, modifier: Modifier = Modifier) {
+private fun ShadeCarrierGroup(
+    viewModel: ShadeHeaderViewModel,
+    modifier: Modifier = Modifier,
+    constrainCarriers: Boolean = false,
+) {
     if (StatusBarMobileIconKairos.isEnabled) {
-        ShadeCarrierGroupKairos(viewModel, modifier)
+        ShadeCarrierGroupKairos(viewModel, modifier, constrainCarriers)
         return
     }
 
@@ -667,7 +684,8 @@ private fun ShadeCarrierGroup(viewModel: ShadeHeaderViewModel, modifier: Modifie
                                 ) as ShadeCarrierGroupMobileIconViewModel),
                         )
                         .also { it.setOnClickListener { viewModel.onShadeCarrierGroupClicked() } }
-                }
+                },
+                modifier = Modifier.thenIf(constrainCarriers) { Modifier.weight(1f, fill = false) },
             )
         }
     }
@@ -678,6 +696,7 @@ private fun ShadeCarrierGroup(viewModel: ShadeHeaderViewModel, modifier: Modifie
 private fun ShadeCarrierGroupKairos(
     viewModel: ShadeHeaderViewModel,
     modifier: Modifier = Modifier,
+    constrainCarriers: Boolean = false,
 ) {
     Row(modifier = modifier) {
         ActivatedKairosSpec(
@@ -708,7 +727,8 @@ private fun ShadeCarrierGroupKairos(
                             .also {
                                 it.setOnClickListener { viewModel.onShadeCarrierGroupClicked() }
                             }
-                    }
+                    },
+                    modifier = Modifier.thenIf(constrainCarriers) { Modifier.weight(1f, fill = false) },
                 )
             }
         }

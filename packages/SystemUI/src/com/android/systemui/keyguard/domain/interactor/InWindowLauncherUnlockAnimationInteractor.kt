@@ -16,6 +16,7 @@
 
 package com.android.systemui.keyguard.domain.interactor
 
+import android.content.Context
 import com.android.systemui.dagger.SysUISingleton
 import com.android.systemui.dagger.qualifiers.Application
 import com.android.systemui.dagger.qualifiers.Background
@@ -36,6 +37,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import org.petalos.config.PetalConfig
 
 @SysUISingleton
 class InWindowLauncherUnlockAnimationInteractor
@@ -44,6 +46,7 @@ constructor(
     private val repository: InWindowLauncherUnlockAnimationRepository,
     @Application scope: CoroutineScope,
     @Background val backgroundScope: CoroutineScope,
+    @Application private val context: Context,
     transitionInteractor: KeyguardTransitionInteractor,
     surfaceBehindRepository: dagger.Lazy<KeyguardSurfaceBehindRepository>,
     private val activityManager: ActivityManagerWrapper,
@@ -60,7 +63,11 @@ constructor(
                 edge = Edge.create(to = Scenes.Gone),
                 edgeWithoutSceneContainer = Edge.create(to = GONE),
             )
-            .map { transitioningToGone -> transitioningToGone && isLauncherUnderneath() }
+            .map { transitioningToGone ->
+                // petalOS: seamless unlock leaves the launcher unblanked, no in-window anim
+                transitioningToGone && isLauncherUnderneath() &&
+                    !PetalConfig.isSeamlessUnlockEnabled(context)
+            }
             .stateIn(scope, SharingStarted.Eagerly, false)
 
     /**

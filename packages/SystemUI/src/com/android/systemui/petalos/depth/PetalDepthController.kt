@@ -16,6 +16,9 @@
 
 package com.android.systemui.petalos.depth
 
+import android.content.BroadcastReceiver
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.Context
 import android.database.ContentObserver
 import android.graphics.Bitmap
@@ -39,8 +42,10 @@ import com.android.systemui.keyguard.ui.view.KeyguardRootView
 import com.android.systemui.plugins.keyguard.ui.clocks.ClockViewIds
 import com.android.systemui.petalos.PetalLockScreenMediaCover
 import com.android.systemui.shared.R as sharedR
+import com.android.systemui.res.R
 import com.android.systemui.shade.domain.interactor.ShadeInteractor
 import com.android.systemui.statusbar.StatusBarState
+import com.android.systemui.statusbar.policy.KeyguardStateController
 import com.android.systemui.plugins.statusbar.StatusBarStateController
 import com.android.systemui.util.concurrency.DelayableExecutor
 import java.io.PrintWriter
@@ -51,15 +56,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import org.petalos.config.PetalConfig
 
-/**
- * petalOS 3D depth lock screen: draws the wallpaper's segmented subject above the keyguard clock
- * so the clock reads as sitting *behind* the subject. The cutout is produced once (photo import +
- * ML segmentation) by the PetalDepth app and handed over through a content URI; this controller
- * only loads and renders it on the keyguard.
- *
- * Layering: subject < notifications, because notifications live in the SharedNotificationContainer
- * sibling that draws above [KeyguardRootView].
- */
+// petalOS 3D depth lock screen: draws the wallpaper's segmented subject above the keyguard clock
 @SysUISingleton
 class PetalDepthController @Inject constructor(
     @Application private val context: Context,
@@ -67,6 +64,7 @@ class PetalDepthController @Inject constructor(
     @Main private val mainExecutor: DelayableExecutor,
     private val keyguardRootView: KeyguardRootView,
     private val statusBarStateController: StatusBarStateController,
+    private val keyguardStateController: KeyguardStateController,
     private val shadeInteractor: ShadeInteractor,
     private val mediaCover: PetalLockScreenMediaCover,
 ) : CoreStartable {
@@ -75,6 +73,10 @@ class PetalDepthController @Inject constructor(
         private const val TAG = "PetalDepth"
         /** Fallback parallax offset in dp for the subject layer. */
         private const val DEFAULT_TILT_DP = 10f
+        /** Match the seamless unlock fade so the depth layers land as home appears. */
+        private const val FADE_OUT_MS = 260L
+        /** Tag guard so updateVisibility spam can't stack fades on the same layer. */
+        private const val TAG_FADING = "petal_fading"
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -86,8 +88,12 @@ class PetalDepthController @Inject constructor(
     private var enabled = false
     private var clockStyle = 0
     private var cutoutGeneration = 0
+    private var loadRequest = 0
     private var shadeExpanded = false
     private var mediaCoverActive = false
+
+    // set when the unlock sequence kicks off, hides the depth layers with a fade instead of
+    private var keyguardGoingAway = false
 
     /** Whether the petal 3D clock is currently shown (drives the stock clock hide). */
     private var petalClockVisible = false
@@ -109,6 +115,13 @@ class PetalDepthController @Inject constructor(
     private val stateListener = object : StatusBarStateController.StateListener {
         override fun onStateChanged(newState: Int) = updateVisibility()
         override fun onDozingChanged(isDozing: Boolean) = updateVisibility()
+    }
+
+    private val keyguardStateListener = object : KeyguardStateController.Callback {
+        override fun onKeyguardGoingAwayChanged() {
+            keyguardGoingAway = keyguardStateController.isKeyguardGoingAway
+            updateVisibility()
+        }
     }
 
     // --- tilt parallax ----------------------------------------------------------------------
@@ -133,7 +146,6 @@ class PetalDepthController @Inject constructor(
             tiltY += (tiltTargetY - tiltY) * 0.15f
             subjectView.setTilt(tiltX, tiltY)
             // Both layers must use the same filtered sample. Feeding the clock the raw sensor
-            // target while the subject eased toward it made the composition visibly wobble.
             clockView.setSubjectTilt(tiltX, tiltY)
             if (Math.abs(tiltTargetX - tiltX) > 0.1f || Math.abs(tiltTargetY - tiltY) > 0.1f) {
                 scheduleTiltFrame()
@@ -151,9 +163,6 @@ class PetalDepthController @Inject constructor(
             if (event.sensor.type != Sensor.TYPE_ROTATION_VECTOR &&
                 event.sensor.type != Sensor.TYPE_GAME_ROTATION_VECTOR) return
             // Map device tilt to small px offsets on screen.
-            // getOrientation() needs a 9-element rotation matrix, not the raw rotation
-            // vector — passing event.values directly crashes with AIOOBE (boot loop when
-            // depth parallax is enabled on the keyguard).
             val rotationMatrix = FloatArray(9)
             SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
             val values = FloatArray(3)
@@ -168,7 +177,6 @@ class PetalDepthController @Inject constructor(
             val density = context.resources.displayMetrics.density
             val maxPx = tiltMaxDp * density
             // Work relative to the pose at registration and ignore tiny sensor noise. This makes
-            // motion deliberate rather than a permanently shaking subject.
             fun normalized(delta: Float): Float {
                 val deadZone = 0.018f
                 val d = if (kotlin.math.abs(delta) < deadZone) 0f else delta
@@ -192,6 +200,11 @@ class PetalDepthController @Inject constructor(
     // --- lifecycle ---------------------------------------------------------------------------
 
     override fun start() {
+        context.registerReceiver(object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                refreshFromSettings()
+            }
+        }, IntentFilter(Intent.ACTION_USER_UNLOCKED), null, mainHandler)
         val resolver = context.contentResolver
         resolver.registerContentObserver(
             Settings.System.getUriFor(PetalConfig.KEY_DEPTH_ENABLED), false, settingsObserver)
@@ -219,13 +232,12 @@ class PetalDepthController @Inject constructor(
             Settings.System.getUriFor(PetalConfig.KEY_DEPTH_TILT_DP), false, settingsObserver)
 
         statusBarStateController.addCallback(stateListener)
+        keyguardStateController.addCallback(keyguardStateListener)
         scope.launch {
             // The legacy expanded-window flag is also true on the ordinary lock screen.
-            // Actual shade/QS expansion excludes the resting keyguard.
             shadeInteractor.anyExpansion.collect { onShadeExpansionChanged(it > 0f) }
         }
-        // The lock-screen media cover takes precedence while playing: hide the depth subject over
-        // the album art and bring it back once the cover is restored.
+        // Album art hides the subject, while the depth clock stays.
         mediaCoverActive = mediaCover.isCoverApplied()
         mediaCover.addCoverStateListener { applied ->
             mediaCoverActive = applied
@@ -256,8 +268,6 @@ class PetalDepthController @Inject constructor(
         clockView.setScale(PetalConfig.getDepthClockScalePct(context) / 100f)
         tiltMaxDp = PetalConfig.getDepthTiltDp(context).toFloat()
         // PetalConfig.DISABLED (-1) means "automatic"; translate to TRANSPARENT which the clock
-        // treats as auto light/dark. A raw -1 would be read as opaque white by the current
-        // TRANSPARENT check.
         val clockColor = PetalConfig.getDepthClockColor(context)
         clockView.setAccentColor(
             if (clockColor == PetalConfig.DISABLED) Color.TRANSPARENT else clockColor
@@ -265,6 +275,7 @@ class PetalDepthController @Inject constructor(
         clockView.setDateEnabled(PetalConfig.isDepthClockDateEnabled(context))
 
         if (!enabled || uri == null) {
+            loadRequest++
             subjectView.setSubject(null)
             clockView.setBackdrop(null)
             updateVisibility()
@@ -281,10 +292,10 @@ class PetalDepthController @Inject constructor(
 
     private fun loadCutout(uri: Uri) {
         val generation = cutoutGeneration
+        val request = ++loadRequest
         bgScope.launch {
             var bitmap = decodeCutout(uri)
             // torn/in-flight file or transient decode failure: retry, else the subject is gone
-            // until the user re-applies in Depth Studio
             var attempts = 0
             while (bitmap == null && attempts < 3) {
                 attempts++
@@ -299,7 +310,7 @@ class PetalDepthController @Inject constructor(
                 }
             }.getOrNull()
             mainExecutor.execute {
-                if (enabled && generation == cutoutGeneration) {
+                if (enabled && generation == cutoutGeneration && request == loadRequest) {
                     subjectView.setSubject(bitmap)
                     clockView.setBackdrop(frost)
                 }
@@ -322,34 +333,86 @@ class PetalDepthController @Inject constructor(
     /** Subject and clock show only on the lock screen, awake, with the shade fully collapsed. */
     private fun updateVisibility() {
         if (!attached) return
+        if (keyguardGoingAway && PetalConfig.isSeamlessUnlockEnabled(context)
+                && !statusBarStateController.isDozing) {
+            // The parent owns this fade; a second fade makes the cutout vanish early.
+            stopParallax(resetTilt = false)
+            clockView.stopTicking()
+            reassertStockClockHide()
+            return
+        }
         val onKeyguard =
             statusBarStateController.state == StatusBarState.KEYGUARD &&
                 !statusBarStateController.isDozing
         val visible = enabled && subjectView.hasSubject && onKeyguard && !shadeExpanded &&
-            !mediaCoverActive
-        subjectView.visibility = if (visible) android.view.View.VISIBLE else android.view.View.GONE
+            !mediaCoverActive && !keyguardGoingAway
 
-        // The 3D clock works standalone (no subject cutout needed) but follows the same
-        // visibility rules; the stock clock is hidden while a petal clock style is active.
+        // unlock started: fade out with the keyguard so the depth layers dissolve into home
+        if (keyguardGoingAway && subjectView.visibility == android.view.View.VISIBLE) {
+            fadeOutLayer(subjectView)
+        } else if (subjectView.visibility == android.view.View.VISIBLE) {
+            // unlock got cancelled or state flipped back: stop the fade, its end action GONEs
+            subjectView.tag = null
+            subjectView.animate().cancel()
+            subjectView.visibility = if (visible) android.view.View.VISIBLE else android.view.View.GONE
+            subjectView.setAlpha(1f)
+        } else if (visible) {
+            subjectView.visibility = android.view.View.VISIBLE
+            subjectView.setAlpha(1f)
+        } else if (!keyguardGoingAway) {
+            subjectView.visibility = android.view.View.GONE
+            subjectView.setAlpha(1f)
+        }
+        // while goingAway, leave the fading subject alone, null alpha snaps it back to opaque
+
+        // Keep the depth clock over album art.
         val clockVisible = enabled && clockStyle > 0 && onKeyguard && !shadeExpanded &&
-            !mediaCoverActive
+            !keyguardGoingAway
         petalClockVisible = clockVisible
-        clockView.visibility = if (clockVisible) android.view.View.VISIBLE else android.view.View.GONE
+        if (clockView.visibility == android.view.View.VISIBLE) {
+            if (clockVisible) {
+                clockView.tag = null
+                clockView.animate().cancel()
+                clockView.setAlpha(1f)
+            } else {
+                fadeOutLayer(clockView)
+            }
+        } else if (clockVisible && !keyguardGoingAway) {
+            // this fucking thing never came back once GONE, clock died after the first hide
+            clockView.tag = null
+            clockView.animate().cancel()
+            clockView.visibility = android.view.View.VISIBLE
+            clockView.setAlpha(1f)
+        } else if (!clockVisible && !keyguardGoingAway) {
+            clockView.visibility = android.view.View.GONE
+            clockView.setAlpha(1f)
+        }
         if (clockVisible) clockView.startTicking() else clockView.stopTicking()
-        if (visible && parallaxEnabled) startParallax() else stopParallax()
+        if (visible && parallaxEnabled && !keyguardGoingAway) startParallax() else stopParallax()
         reassertStockClockHide()
     }
 
-    /**
-     * Hides the stock large/small lock screen clocks while the petal 3D clock is visible.
-     *
-     * Invoked both from [updateVisibility] and on every layout of the keyguard root (via
-     * [clockLayoutListener]), because the stock clock faces are bound lazily and can be added /
-     * made visible after the controller already started.
-     */
+    // fade to zero, then drop visibility, done on the keyguard window's own animator clock
+    private fun fadeOutLayer(layer: android.view.View) {
+        if (layer.tag == TAG_FADING) return
+        layer.tag = TAG_FADING
+        layer.animate()
+            .alpha(0f)
+            .setDuration(FADE_OUT_MS)
+            .withEndAction {
+                layer.tag = null
+                layer.visibility = android.view.View.GONE
+                layer.setAlpha(1f)
+            }
+            .start()
+    }
+
+    // re-assert the hide on every layout too, stock clock faces bind lazily and race us
     private fun reassertStockClockHide() {
         if (!attached) return
-        val hideStock = petalClockVisible
+        // keep stock hidden while the petal clock is still dissolving, it ghosts through mid fade
+        val hideStock = petalClockVisible ||
+            (keyguardGoingAway && clockView.visibility == android.view.View.VISIBLE)
         val targetVisibility = if (hideStock) android.view.View.INVISIBLE else android.view.View.VISIBLE
         val large = keyguardRootView.findViewById<android.view.View>(
             ClockViewIds.LOCKSCREEN_CLOCK_VIEW_LARGE)
@@ -360,7 +423,7 @@ class PetalDepthController @Inject constructor(
                 clock.visibility = targetVisibility
             }
         }
-        // the stock date smartspace bleeds through the petal clock otherwise
+        // stock date smartspace + the legacy KeyguardSliceView date bleed through otherwise
         for (dateId in intArrayOf(
             sharedR.id.date_smartspace_view, sharedR.id.date_smartspace_view_large
         )) {
@@ -368,6 +431,14 @@ class PetalDepthController @Inject constructor(
             val target = if (hideStock) android.view.View.GONE else android.view.View.VISIBLE
             if (date.visibility != target) {
                 date.visibility = target
+            }
+        }
+        // no smartspace = AOSP falls back to KeyguardSliceView for the date, hide it too
+        val sliceDate = keyguardRootView.findViewById<android.view.View>(R.id.keyguard_slice_view)
+        if (sliceDate != null) {
+            val sliceTarget = if (enabled) android.view.View.GONE else android.view.View.VISIBLE
+            if (sliceDate.visibility != sliceTarget) {
+                sliceDate.visibility = sliceTarget
             }
         }
     }
@@ -392,7 +463,7 @@ class PetalDepthController @Inject constructor(
             sensorListener, sensor, SensorManager.SENSOR_DELAY_UI)
     }
 
-    private fun stopParallax() {
+    private fun stopParallax(resetTilt: Boolean = true) {
         if (sensorRegistered) {
             context.getSystemService(SensorManager::class.java)?.unregisterListener(sensorListener)
         }
@@ -401,6 +472,7 @@ class PetalDepthController @Inject constructor(
         baselinePitch = null
         mainHandler.removeCallbacks(tiltRunnable)
         tiltFrameScheduled = false
+        if (!resetTilt) return
         tiltTargetX = 0f
         tiltTargetY = 0f
         tiltX = 0f

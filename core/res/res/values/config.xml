@@ -6336,8 +6336,9 @@
     <!-- The min scale for the wallpaper when it's zoomed out -->
     <item name="config_wallpaperMinScale" format="float" type="dimen">1</item>
 
-    <!-- The max scale for the wallpaper when it's zoomed in -->
-    <item name="config_wallpaperMaxScale" format="float" type="dimen">1.10</item>
+    <!-- The max scale for the wallpaper when it's zoomed in. petalOS: 1.0 keeps home
+         wallpaper 1:1 with what Depth Studios previews. -->
+    <item name="config_wallpaperMaxScale" format="float" type="dimen">1.0</item>
 
     <!-- If true, the wallpaper will scale regardless of the value of shouldZoomOutWallpaper() -->
     <bool name="config_alwaysScaleWallpaper">false</bool>

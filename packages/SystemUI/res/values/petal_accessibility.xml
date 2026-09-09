@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="petal_accessibility_restart_systemui">Restart System UI</string>
+    <string name="petal_accessibility_bootloader">Restart to bootloader</string>
+    <string name="petal_accessibility_recovery">Restart to recovery</string>
+    <string name="petal_accessibility_arm_bootloader">Prepare restart to bootloader</string>
+    <string name="petal_accessibility_arm_recovery">Prepare restart to recovery</string>
+    <string name="petal_accessibility_cancel_advanced">Cancel advanced restart</string>
+    <string name="petal_accessibility_volume">Volume</string>
+</resources>

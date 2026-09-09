@@ -18,6 +18,7 @@ package com.android.systemui.petalos;
 
 import android.content.Context;
 import android.graphics.PixelFormat;
+import android.hardware.display.DisplayManager;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
@@ -25,18 +26,15 @@ import android.os.Process;
 import android.os.VibrationEffect;
 import android.view.Gravity;
 import android.view.WindowManager;
+import android.view.accessibility.AccessibilityManager;
 
 import com.android.systemui.plugins.GlobalActions.GlobalActionsManager;
 
-/**
- * Hosts the petalOS volume overlay and power menu as full-screen, bezel-anchored
- * overlay windows. The volume overlay is non-touchable (display only); the power
- * menu is interactive and performs the committed action on selection.
- */
+// Hosts the petalOS volume overlay and power menu as full-screen, bezel-anchored
 public class PetalOverlayHost {
 
     private static final long VOLUME_DISMISS_DELAY_MS = 1600L;
-    private static final long DISMISS_TEARDOWN_MS = 350L;
+    private static final long DISMISS_TEARDOWN_MS = 900L;
 
     /** Notified on every power-menu show/hide transition, whatever caused it. */
     public interface OnPowerMenuVisibilityListener {
@@ -63,9 +61,49 @@ public class PetalOverlayHost {
 
     private final Runnable mVolumeDismissRunnable = this::dismissVolume;
 
+    private boolean mWatchingDisplay;
+    private final DisplayManager.DisplayListener mDisplayListener =
+            new DisplayManager.DisplayListener() {
+                @Override
+                public void onDisplayAdded(int displayId) {}
+
+                @Override
+                public void onDisplayRemoved(int displayId) {}
+
+                @Override
+                public void onDisplayChanged(int displayId) {
+                    if (mContext.getDisplay() == null
+                            || mContext.getDisplay().getDisplayId() != displayId) return;
+                    if (mVolumeView != null) {
+                        mVolumeView.refreshRotation();
+                        mWindowManager.updateViewLayout(mVolumeView, volumeLayoutParams(false));
+                    }
+                    if (mPowerView != null) {
+                        mPowerView.refreshRotation();
+                        mWindowManager.updateViewLayout(mPowerView, powerLayoutParams(false));
+                    }
+                }
+            };
+
     public PetalOverlayHost(Context context) {
         mContext = context;
         mWindowManager = context.getSystemService(WindowManager.class);
+    }
+
+    private void watchDisplay() {
+        if (!mWatchingDisplay) {
+            mContext.getSystemService(DisplayManager.class)
+                    .registerDisplayListener(mDisplayListener, mHandler);
+            mWatchingDisplay = true;
+        }
+    }
+
+    private void stopWatchingDisplayIfHidden() {
+        if (mWatchingDisplay && mVolumeView == null && mPowerView == null) {
+            mContext.getSystemService(DisplayManager.class)
+                    .unregisterDisplayListener(mDisplayListener);
+            mWatchingDisplay = false;
+        }
     }
 
     public boolean isPowerMenuShowing() {
@@ -94,6 +132,7 @@ public class PetalOverlayHost {
 
     /** Show (or refresh) the volume overlay with the given level and mute state. */
     public void showVolume(int level, int levelMin, int levelMax, boolean muted, boolean shake) {
+        watchDisplay();
         if (mVolumeView == null) {
             mVolumeView = new PetalVolumeOverlayView(mContext);
             mVolumeView.setOnDismissListener(() -> dismissVolume());
@@ -113,7 +152,7 @@ public class PetalOverlayHost {
                         mVolumeScrubListener.onVolumeScrubEnd();
                     }
                     mHandler.removeCallbacks(mVolumeDismissRunnable);
-                    mHandler.postDelayed(mVolumeDismissRunnable, VOLUME_DISMISS_DELAY_MS);
+                    mHandler.postDelayed(mVolumeDismissRunnable, volumeDismissDelay());
                 }
             });
             mWindowManager.addView(mVolumeView, volumeLayoutParams(false));
@@ -141,16 +180,21 @@ public class PetalOverlayHost {
         }
         int range = levelMax - levelMin;
         float fraction = range > 0 ? (float) (level - levelMin) / (float) range : 0f;
-        mVolumeView.setVolume(fraction, muted);
+        mVolumeView.setVolume(fraction, muted, range);
         mVolumeView.show();
         if (shake) {
             mVolumeView.shake();
         }
 
         // Re-arm the auto-dismiss on every adjustment so the overlay stays up while the
-        // user is holding the volume key, then retracts and is fully torn down.
         mHandler.removeCallbacks(mVolumeDismissRunnable);
-        mHandler.postDelayed(mVolumeDismissRunnable, VOLUME_DISMISS_DELAY_MS);
+        mHandler.postDelayed(mVolumeDismissRunnable, volumeDismissDelay());
+    }
+
+    private int volumeDismissDelay() {
+        AccessibilityManager manager = mContext.getSystemService(AccessibilityManager.class);
+        return manager.getRecommendedTimeoutMillis((int) VOLUME_DISMISS_DELAY_MS,
+                AccessibilityManager.FLAG_CONTENT_CONTROLS);
     }
 
     public void dismissVolume() {
@@ -170,10 +214,12 @@ public class PetalOverlayHost {
                 }
             }, DISMISS_TEARDOWN_MS);
         }
+        stopWatchingDisplayIfHidden();
     }
 
     /** Show the power menu. */
     public void showPowerMenu() {
+        watchDisplay();
         if (mPowerView != null) {
             return;
         }
@@ -243,14 +289,11 @@ public class PetalOverlayHost {
                 }
             }, DISMISS_TEARDOWN_MS);
         }
+        stopWatchingDisplayIfHidden();
     }
 
     private WindowManager.LayoutParams volumeLayoutParams(boolean notTouchable) {
         // petalOS bug fix: the volume HUD window used to be MATCH_PARENT touchable, which
-        // swallowed every touch on screen (no dismiss, no scrolling) while it was up. The
-        // window is now sized to just the HUD drawing frame at the rocker anchor, so taps
-        // outside it pass through to whatever is underneath; ACTION_OUTSIDE on the window
-        // dismisses the HUD.
         final float density = mContext.getResources().getDisplayMetrics().density;
         final int depth = PetalVolumeOverlayView.hudDepthPx(density);
         final int length = PetalVolumeOverlayView.hudLengthPx(density);
@@ -269,33 +312,31 @@ public class PetalOverlayHost {
                 WindowManager.LayoutParams.TYPE_VOLUME_OVERLAY,
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
                         | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
-                        | WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                        | WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM
                         | WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH
-                        | (notTouchable ? WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE : 0),
+                        | (notTouchable ? WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                                | WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE : 0),
                 PixelFormat.TRANSLUCENT);
         lp.gravity = Gravity.LEFT | Gravity.TOP;
         lp.setTitle("PetalOSVolumeHud");
         lp.setFitInsetsTypes(0);
         // petalOS bug fix: without the trusted-overlay input privilege the HUD's drag stream can
-        // be pilfered/cancelled by system gesture monitors (the HUD hugs the screen edge where
-        // the back-gesture monitor lives). That killed the scrub mid-drag as soon as the finger
-        // left the window frame and made the HUD ignore further touches until it was torn down.
         lp.setTrustedOverlay();
 
+        final float anchorFraction = PetalUiConfig.getVolumeAnchorFraction(mContext);
         if (landscape) {
-            // The physical rail maps to the top/bottom screen edge; hug that edge, centred.
-            if (PetalUtils.edgeIsTopInLandscape(rotation, edgeLeft)) {
-                lp.x = (screenW - length) / 2;
-                lp.y = 0;
-            } else {
-                lp.x = (screenW - length) / 2;
-                lp.y = screenH - depth;
-            }
+            float screenAnchor = rotation == android.view.Surface.ROTATION_90
+                    ? anchorFraction : 1f - anchorFraction;
+            lp.x = clamp(Math.round(screenW * screenAnchor - length / 2f), 0,
+                    Math.max(0, screenW - length));
+            lp.y = PetalUtils.edgeIsTopInLandscape(rotation, edgeLeft) ? 0 : screenH - depth;
         } else {
-            final float anchorFraction = PetalUiConfig.getVolumeAnchorFraction(mContext);
-            lp.y = clamp((int) (screenH * anchorFraction - length / 2f), 0,
+            boolean upsideDown = rotation == android.view.Surface.ROTATION_180;
+            float screenAnchor = upsideDown ? 1f - anchorFraction : anchorFraction;
+            lp.y = clamp(Math.round(screenH * screenAnchor - length / 2f), 0,
                     Math.max(0, screenH - length));
-            lp.x = edgeLeft ? 0 : screenW - depth;
+            lp.x = edgeLeft != upsideDown ? 0 : screenW - depth;
         }
         return lp;
     }
@@ -306,7 +347,6 @@ public class PetalOverlayHost {
 
     private WindowManager.LayoutParams powerLayoutParams(boolean notTouchable) {
         // TYPE_STATUS_BAR_SUB_PANEL layers above the keyguard, matching the stock
-        // GlobalActionsDialogLite so the power menu is visible while the device is locked.
         return baseLayoutParams(WindowManager.LayoutParams.TYPE_STATUS_BAR_SUB_PANEL, notTouchable);
     }
 
@@ -317,13 +357,16 @@ public class PetalOverlayHost {
                 type,
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
                         | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
-                        | (notTouchable ? WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE : 0)
-                        | WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | (notTouchable ? WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+                                | WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE : 0)
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+                        | WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM
                         | WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
                 PixelFormat.TRANSLUCENT);
         lp.setTrustedOverlay();
         lp.gravity = Gravity.LEFT | Gravity.TOP;
         lp.setTitle("PetalOSSystemDialog");
+        lp.setFitInsetsTypes(0);
         return lp;
     }
 }

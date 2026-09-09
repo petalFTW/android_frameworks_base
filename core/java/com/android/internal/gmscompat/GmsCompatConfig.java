@@ -21,6 +21,8 @@ import java.util.function.Function;
 // Instances of this object should be immutable after publication, make sure to never change it afterwards
 public class GmsCompatConfig implements Parcelable {
     public long version;
+    // User preference, not a config-holder rule. Serial-only diagnostic; default off.
+    public boolean walletAttestationSerialAccess;
     public final ArrayMap<String, ArrayMap<String, GmsFlag>> flags = new ArrayMap<>();
     public ArrayMap<String, GmsFlag> gservicesFlags;
     public final ArrayMap<String, ArrayMap<String, StubDef>> stubs = new ArrayMap<>();
@@ -97,6 +99,7 @@ public class GmsCompatConfig implements Parcelable {
             }
         }
         writeStringArrayMapMap(forceComponentEnabledSettingsMap, Parcel::writeString, Parcel::writeInt, p);
+        p.writeBoolean(walletAttestationSerialAccess);
     }
 
     public static final Creator<GmsCompatConfig> CREATOR = new Creator<>() {
@@ -125,6 +128,7 @@ public class GmsCompatConfig implements Parcelable {
 
             readStringArrayMapMap(p, r.forceComponentEnabledSettingsMap,
                     Parcel::readString, Parcel::readInt);
+            r.walletAttestationSerialAccess = p.readBoolean();
 
             if (GmsCompat.isEnabled()) {
                 String pkgName = GmsCompat.appContext().getPackageName();

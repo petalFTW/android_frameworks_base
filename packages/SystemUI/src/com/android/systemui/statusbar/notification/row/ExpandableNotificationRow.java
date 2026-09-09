@@ -1770,25 +1770,18 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
             }
             boolean isTransparent = usesTransparentBackground() || glassNotifications;
             if (isColorized) {
-                // For colorized notifications, use a color that matches the tint color at 90% alpha
-                // when the row is transparent.
+                // Keep the app color readable.
                 color = ColorUtils.setAlphaComponent(
                         color, (int) (0xFF * (isTransparent ? 0.9f : 1)));
             } else {
-                // For non-colorized notifications, use the semi-transparent normal color token
-                // when the row is transparent, and the opaque color token otherwise.
+                // Pick the card surface.
                 if (!isTransparent && mBgTint == NO_COLOR) {
                     color = mOpaqueColor;
                 } else if (glassNotifications && mBgTint == NO_COLOR) {
-                    // petalOS: translucent liquid-glass surface (matching the island) so the shade
-                    // blur shows through, tinted by the notification's accent color.
-                    if (!notificationRowTransparency()) {
-                        color = ColorUtils.setAlphaComponent(mNormalColor, 0xC0);
-                    }
-                    int accent = getNotificationColor();
-                    if (accent != Notification.COLOR_DEFAULT) {
-                        color = ColorUtils.blendARGB(color, accent, 0.18f);
-                    }
+                    // Match the island's no-blur surface.
+                    boolean dark = (getResources().getConfiguration().uiMode
+                            & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
+                    color = dark ? 0xF2101012 : 0xF7F3F3F6;
                 }
             }
         }
@@ -1802,18 +1795,7 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
     /** Whether the petalOS notification glass restyle is enabled via the petal hub. */
     private boolean glassNotificationsEnabled() {
         return Settings.Secure.getInt(getContext().getContentResolver(),
-                IslandSettings.KEY_GLASS_NOTIFICATIONS, 0) != 0;
-    }
-
-    /** The notification's accent color, or {@link Notification#COLOR_DEFAULT} when unset. */
-    private int getNotificationColor() {
-        if (NotificationBundleUi.isEnabled()) {
-            return mEntryAdapter != null ? mEntryAdapter.getSbn().getNotification().color
-                    : Notification.COLOR_DEFAULT;
-        }
-        NotificationEntry entry = getEntryLegacy();
-        return entry != null && entry.getSbn() != null
-                ? entry.getSbn().getNotification().color : Notification.COLOR_DEFAULT;
+                IslandSettings.KEY_GLASS_NOTIFICATIONS, 1) != 0;
     }
 
     public void closeRemoteInput() {

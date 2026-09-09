@@ -1362,6 +1362,28 @@ private class FrameLayoutTouchPassthrough(
     var downX = 0f
     var preventingIntercept = false
 
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            downX = event.x
+            downY = event.y
+        }
+        val handled = super.dispatchTouchEvent(event)
+        if (event.actionMasked == MotionEvent.ACTION_MOVE) {
+            val dx = event.x - downX
+            val dy = event.y - downY
+            // Hand this damn swipe back when QS runs out of scroll.
+            if (preventingIntercept && event.pointerCount == 1 &&
+                dy < -touchSlop && Math.abs(dy) > Math.abs(dx) && !canScrollQs.forward()) {
+                parent?.requestDisallowInterceptTouchEvent(false)
+            }
+        } else if (event.actionMasked == MotionEvent.ACTION_UP ||
+            event.actionMasked == MotionEvent.ACTION_CANCEL) {
+            parent?.requestDisallowInterceptTouchEvent(false)
+            preventingIntercept = false
+        }
+        return handled
+    }
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val action = event.actionMasked
         when (action) {

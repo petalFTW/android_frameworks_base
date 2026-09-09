@@ -28,7 +28,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -53,6 +52,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.integerResource
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.android.compose.animation.Easings
 import com.android.compose.modifiers.thenIf
@@ -64,6 +64,7 @@ import com.android.systemui.bouncer.ui.composable.MotionTestKeys.entryCompleted
 import com.android.systemui.bouncer.ui.viewmodel.PatternBouncerViewModel
 import com.android.systemui.bouncer.ui.viewmodel.PatternDotViewModel
 import com.android.systemui.compose.modifiers.sysuiResTag
+import com.android.systemui.petalos.PetalPatternStyle
 import kotlin.math.min
 import kotlin.math.pow
 import kotlin.math.sqrt
@@ -72,14 +73,7 @@ import kotlinx.coroutines.launch
 import platform.test.motion.compose.values.MotionTestValueKey
 import platform.test.motion.compose.values.motionTestValues
 
-/**
- * UI for the input part of a pattern-requiring version of the bouncer.
- *
- * The user can press, hold, and drag their pointer to select dots along a grid of dots.
- *
- * If [centerDotsVertically] is `true`, the dots should be centered vertically; if `false`, the dots
- * will be pushed towards the bottom.
- */
+// Draw the pattern grid.
 @Composable
 @VisibleForTesting
 fun PatternBouncer(
@@ -94,10 +88,10 @@ fun PatternBouncer(
     val colCount = viewModel.columnCount
     val rowCount = viewModel.rowCount
 
-    val idleDotColor = MaterialTheme.colorScheme.onSurface
-    val activeDotColor = MaterialTheme.colorScheme.onPrimary
+    val idleDotColor = Color(PetalPatternStyle.DOT_COLOR)
+    val activeDotColor = Color(PetalPatternStyle.ACTIVE_COLOR)
     val dotRadius = with(density) { (DOT_DIAMETER_DP / 2).dp.toPx() }
-    val lineColor = MaterialTheme.colorScheme.primary
+    val lineColor = Color(PetalPatternStyle.ACTIVE_COLOR)
     val lineStrokeWidth = with(density) { LINE_STROKE_WIDTH_DP.dp.toPx() }
 
     // All dots that should be rendered on the grid.
@@ -113,8 +107,7 @@ fun PatternBouncer(
 
     // Map of animatables for the scale of each dot, keyed by dot.
     val dotScalingAnimatables = remember(dots) { dots.associateWith { Animatable(1f) } }
-    // Map of animatables for the lines that connect between selected dots, keyed by the destination
-    // dot of the line.
+    // Track each incoming line by its destination dot.
     val lineFadeOutAnimatables = remember(dots) { dots.associateWith { Animatable(1f) } }
     val lineFadeOutAnimationDurationMs =
         integerResource(R.integer.lock_pattern_line_fade_out_duration)
@@ -137,8 +130,7 @@ fun PatternBouncer(
 
     // When the current dot is changed, we need to update our animations.
     LaunchedEffect(currentDot, isAnimationEnabled) {
-        // Perform haptic feedback, but only if the current dot is not null, so we don't perform it
-        // when the UI first shows up or when the user lifts their pointer/finger.
+        // Vibrate when a dot is selected.
         if (currentDot != null) {
             viewModel.performDotFeedback(view)
         }
@@ -150,9 +142,7 @@ fun PatternBouncer(
         // Make sure that the current dot is scaled up while the other dots are scaled back down.
         dotScalingAnimatables.entries.forEach { (dot, animatable) ->
             val isSelected = dot == currentDot
-            // Launch using the longer-lived scope because we want these animations to proceed to
-            // completion even if the LaunchedEffect is canceled because its key objects have
-            // changed.
+            // Let the animation finish when the current dot changes.
             scope.launch {
                 if (isSelected) {
                     animatable.animateTo(
@@ -179,18 +169,13 @@ fun PatternBouncer(
         selectedDots.forEach { dot ->
             lineFadeOutAnimatables[dot]?.let { line ->
                 if (!line.isRunning) {
-                    // Launch using the longer-lived scope because we want these animations to
-                    // proceed to completion even if the LaunchedEffect is canceled because its key
-                    // objects have changed.
+                    // Let the animation finish when the current dot changes.
                     scope.launch {
                         if (dot == currentDot) {
-                            // Reset the fade-out animation for the current dot. When the
-                            // current dot is switched, this entire code block runs again for
-                            // the newly selected dot.
+                            // Reset the current line fade.
                             line.snapTo(1f)
                         } else {
-                            // For all non-current dots, make sure that the lines are fading
-                            // out.
+                            // Fade earlier lines.
                             line.animateTo(
                                 targetValue = 0f,
                                 animationSpec =
@@ -225,15 +210,9 @@ fun PatternBouncer(
     val dotDrawingArea =
         remember(colCount, rowCount) {
             DpSize(
-                // Because the width also includes spacing to the left and right of the leftmost and
-                // rightmost dots in the grid and because UX mocks specify the width without that
-                // spacing, the actual width needs to be defined slightly bigger than the UX mock
-                // width.
+                // Include the outer horizontal spacing.
                 width = (262 * colCount / 2).dp,
-                // Because the height also includes spacing above and below the topmost and
-                // bottommost dots in the grid and because UX mocks specify the height without that
-                // spacing, the actual height needs to be defined slightly bigger than the UX mock
-                // height.
+                // Include the outer vertical spacing.
                 height = (262 * rowCount / 2).dp,
             )
         }
@@ -257,9 +236,7 @@ fun PatternBouncer(
                                 inputPosition = null
                                 if (isAnimationEnabled) {
                                     lineFadeOutAnimatables.values.forEach { animatable ->
-                                        // Launch using the longer-lived scope because we want these
-                                        // animations to proceed to completion even if the
-                                        // surrounding scope is canceled.
+                                        // Let the animation finish when the current dot changes.
                                         scope.launch { animatable.animateTo(1f) }
                                     }
                                 }
@@ -280,12 +257,22 @@ fun PatternBouncer(
                     }
             }
     ) {
+        AndroidView(
+            factory = { context ->
+                android.view.View(context).apply {
+                    importantForAccessibility = android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO
+                    PetalPatternStyle.applyGlass(this)
+                }
+            },
+            modifier = Modifier.width(dotDrawingArea.width)
+                .height(dotDrawingArea.height)
+                .align(Alignment.Center),
+        )
         Canvas(
             Modifier.sysuiResTag("bouncer_pattern_root")
                 .width(dotDrawingArea.width)
                 .height(dotDrawingArea.height)
-                // Need to clip to bounds to make sure that the lines don't follow the input pointer
-                // when it leaves the bounds of the dot grid.
+                // Keep the trailing line inside the grid.
                 .clipToBounds()
                 .align(Alignment.Center)
                 .onGloballyPositioned { coordinates -> gridCoordinates = coordinates }
@@ -349,9 +336,7 @@ fun PatternBouncer(
                         }
                     }
 
-                    // Draw the line between the most recently-selected dot and the input pointer
-                    // position. Note that `inputPosition` is calculated relative to enclosing
-                    // `Box`.
+                    // Draw the trailing line to the pointer.
                     inputPosition?.let { lineEndInParent ->
                         val lineEnd = lineEndInParent.minus(nonNullCoordinates.positionInParent())
                         currentDot?.let { dot ->
@@ -444,16 +429,9 @@ private fun pixelOffset(
     )
 }
 
-/**
- * Returns the alpha for a line between dots where dots are normally [gridSpacing] apart from each
- * other on the dot grid and the line ends [lineLength] away from the origin dot.
- *
- * The reason [lineLength] can be different from [gridSpacing] is that all lines originate in dots
- * but one line might end where the user input pointer is, which isn't always a dot position.
- */
+// Fade the line near its starting dot.
 private fun lineAlpha(gridSpacing: Float, lineLength: Float = gridSpacing): Float {
-    // Custom curve for the alpha of a line as a function of its distance from its source dot. The
-    // farther the user input pointer goes from the line, the more opaque the line gets.
+    // Fade in as the pointer leaves the dot.
     return ((lineLength / gridSpacing - 0.3f) * 4f).coerceIn(0f, 1f)
 }
 
@@ -506,17 +484,7 @@ private suspend fun showFailureAnimation(
     }
 }
 
-/**
- * Returns the amount of offset along the axis, in pixels, that should be applied to all dots.
- *
- * @param availableSize The size of the container, along the axis of interest.
- * @param spacingPerDot The amount of pixels that each dot should take (including the area around
- *   that dot).
- * @param dotCount The number of dots along the axis (e.g. if the axis of interest is the
- *   horizontal/x axis, this is the number of columns in the dot grid).
- * @param isCentered Whether the dots should be centered along the axis of interest; if `false`, the
- *   dots will be pushed towards to end/bottom of the axis.
- */
+// Position the grid within the available space.
 private fun offset(
     availableSize: Int,
     spacingPerDot: Float,
@@ -531,11 +499,11 @@ private fun offset(
     }
 }
 
-private const val DOT_DIAMETER_DP = 14
-private const val SELECTED_DOT_DIAMETER_DP = (DOT_DIAMETER_DP * 1.5).toInt()
+private const val DOT_DIAMETER_DP = PetalPatternStyle.DOT_SIZE_DP
+private const val SELECTED_DOT_DIAMETER_DP = PetalPatternStyle.ACTIVE_DOT_SIZE_DP
 private const val SELECTED_DOT_REACTION_ANIMATION_DURATION_MS = 83
 private const val SELECTED_DOT_RETRACT_ANIMATION_DURATION_MS = 750
-private const val LINE_STROKE_WIDTH_DP = 22
+private const val LINE_STROKE_WIDTH_DP = PetalPatternStyle.PATH_WIDTH_DP
 private const val FAILURE_ANIMATION_DOT_DIAMETER_DP = (DOT_DIAMETER_DP * 0.81f).toInt()
 private const val FAILURE_ANIMATION_DOT_SHRINK_ANIMATION_DURATION_MS = 50
 private const val FAILURE_ANIMATION_DOT_SHRINK_STAGGER_DELAY_MS = 33

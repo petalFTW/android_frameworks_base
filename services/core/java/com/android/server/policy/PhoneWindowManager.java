@@ -2393,6 +2393,19 @@ public class PhoneWindowManager implements WindowManagerPolicy {
             default:
                 break;
         }
+        // Show the action this damn key actually ran.
+        if (action != Action.NOTHING && !event.isCanceled()
+                && (event.getKeyCode() == KeyEvent.KEYCODE_ASSIST
+                        || event.getKeyCode() == KeyEvent.KEYCODE_SEARCH)) {
+            Intent feedback = new Intent("org.petalos.action.EXTRA_KEY_FEEDBACK")
+                    .setPackage("com.android.systemui")
+                    .putExtra("action", action.name());
+            if (action == Action.RINGER_MODE) {
+                feedback.putExtra("ringer_mode", getAudioManagerInternal().getRingerModeInternal());
+            }
+            mContext.sendBroadcastAsUser(feedback, UserHandle.CURRENT,
+                    android.Manifest.permission.STATUS_BAR_SERVICE);
+        }
     }
 
     private void toggleRingerMode() {

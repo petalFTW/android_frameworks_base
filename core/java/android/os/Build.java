@@ -43,6 +43,7 @@ import android.view.View;
 
 import com.android.internal.util.FrameworkStatsLog;
 import com.android.internal.gmscompat.GmsHooks;
+import com.android.internal.gmscompat.WalletCompat;
 
 import dalvik.system.VMRuntime;
 
@@ -267,7 +268,8 @@ public class Build {
     @SuppressAutoDoc // No support for device / profile owner.
     @RequiresPermission(Manifest.permission.READ_PRIVILEGED_PHONE_STATE)
     public static String getSerial() {
-        if (GmsCompat.isEnabled() && !GmsCompat.isAndroidAuto()) {
+        if (GmsCompat.isEnabled() && !GmsCompat.isAndroidAuto()
+                && !WalletCompat.allowRealSerial()) {
             return GmsHooks.getSerial();
         }
 

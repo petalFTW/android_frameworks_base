@@ -20,6 +20,7 @@ import android.content.Context
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
 import android.view.ViewGroup
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.android.systemui.island.IslandGeometry
@@ -29,12 +30,10 @@ data class SystemChipPayload(
     val label: String,
     val accent: Int,
     val toggleAction: (() -> Unit)? = null,
+    val iconRes: Int = 0,
 )
 
-/**
- * Renders a minimal system chip: a coloured dot + bold label. Used for torch, charging, volume,
- * screen recording, hotspot, cast, DND and NFC (§6.2).
- */
+// Give system actions a damn icon and label.
 class SystemChipPresenter(
     private val context: Context,
     private val geometry: IslandGeometry,
@@ -47,7 +46,11 @@ class SystemChipPresenter(
             gravity = Gravity.CENTER_VERTICAL
             setPadding(geometry.capsulePaddingStart, 0, geometry.capsulePaddingEnd, 0)
         }
-        val dot = TextView(context).apply {
+        val dot = if (payload.iconRes != 0) ImageView(context).apply {
+            setImageResource(payload.iconRes)
+            imageTintList = android.content.res.ColorStateList.valueOf(payload.accent)
+            importantForAccessibility = android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        } else TextView(context).apply {
             background = GradientDrawable().apply {
                 shape = GradientDrawable.OVAL
                 setColor(payload.accent)

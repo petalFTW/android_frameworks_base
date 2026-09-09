@@ -48,6 +48,7 @@ import android.content.AttributionSourceState;
 import android.content.Context;
 import android.content.PermissionChecker;
 import android.content.pm.FeatureInfo;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageManagerInternal;
 import android.content.pm.ParceledListSlice;
@@ -55,6 +56,7 @@ import android.content.pm.PermissionGroupInfo;
 import android.content.pm.PermissionInfo;
 import android.content.pm.permission.SplitPermissionInfoParcelable;
 import android.health.connect.HealthConnectManager;
+import android.ext.PackageId;
 import android.os.Binder;
 import android.os.IBinder;
 import android.os.Process;
@@ -74,6 +76,8 @@ import android.util.Slog;
 import android.util.SparseArray;
 
 import com.android.internal.annotations.GuardedBy;
+import com.android.internal.gmscompat.GmsCompatApp;
+import com.android.internal.gmscompat.WalletCompat;
 import com.android.internal.util.ArrayUtils;
 import com.android.internal.util.Preconditions;
 import com.android.server.LocalServices;
@@ -279,6 +283,59 @@ public class PermissionManagerService extends IPermissionManager.Stub {
         // Invalidate cached package info (e.g. GosPackageState) so it is re-read on next access.
         // Full permission recompute is not ported; state is re-read on next process start.
         PackageManager.invalidatePackageInfoCache();
+    }
+
+    @Override
+    public boolean setGmsWalletPrivilegedPhoneState(boolean granted) {
+        // Never expose a general-purpose permission manager to GmsCompat. Both the
+        // target and permission are fixed, and the user is derived from the caller.
+        mContext.enforceCallingPermission(
+                Manifest.permission.UPDATE_AND_INVALIDATE_PERMISSION_STATE,
+                "setGmsWalletPrivilegedPhoneState");
+        final int callingUid = Binder.getCallingUid();
+        final int userId = UserHandle.getUserId(callingUid);
+        final ApplicationInfo caller = mPackageManagerInt.getApplicationInfo(
+                GmsCompatApp.PKG_NAME, 0, Process.SYSTEM_UID, userId);
+        if (caller == null || caller.uid != callingUid || !caller.isSystemApp()) {
+            throw new SecurityException("Only preinstalled GmsCompat may manage Wallet access");
+        }
+
+        final String packageName = PackageId.GMS_CORE_NAME;
+        final ApplicationInfo target = mPackageManagerInt.getApplicationInfo(
+                packageName, 0, Process.SYSTEM_UID, userId);
+        if (target == null) return !granted;
+        if (target.ext().getPackageId() != PackageId.GMS_CORE || target.isPrivilegedApp()) {
+            throw new SecurityException("Wallet access requires genuine sandboxed Play services");
+        }
+        if (granted && target.longVersionCode != WalletCompat.SUPPORTED_GMS_VERSION) return false;
+
+        final String permission = Manifest.permission.READ_PRIVILEGED_PHONE_STATE;
+        final String deviceId = VirtualDeviceManager.PERSISTENT_DEVICE_ID_DEFAULT;
+        final long identity = Binder.clearCallingIdentity();
+        try {
+            final boolean wasGranted = mPermissionManagerServiceImpl.checkPermission(
+                    packageName, permission, deviceId, userId) == PackageManager.PERMISSION_GRANTED;
+            if (wasGranted == granted) return true;
+            // This permission is signature|privileged|role in this ROM. Use the
+            // existing system-authorized role-permission grant/revoke path.
+            if (granted) {
+                mPermissionManagerServiceImpl.grantRuntimePermission(
+                        packageName, permission, deviceId, userId);
+            } else {
+                mPermissionManagerServiceImpl.revokeRuntimePermission(packageName, permission,
+                        deviceId, userId, "Wallet compatibility disabled");
+            }
+            final boolean nowGranted = mPermissionManagerServiceImpl.checkPermission(
+                    packageName, permission, deviceId, userId) == PackageManager.PERMISSION_GRANTED;
+            if (nowGranted != granted) return false;
+            PackageManager.invalidatePackageInfoCache();
+            // Role permissions don't receive the runtime-permission revoke kill.
+            // Restart only this user's GMS so cached permission/identifier state is dropped.
+            killUid(UserHandle.getAppId(target.uid), userId, "Wallet permission changed");
+            return true;
+        } finally {
+            Binder.restoreCallingIdentity(identity);
+        }
     }
 
     private String getPersistentDeviceId(int deviceId) {

@@ -29,6 +29,7 @@ val Kosmos.inWindowLauncherUnlockAnimationInteractor by
             repository = inWindowLauncherUnlockAnimationRepository,
             scope = applicationCoroutineScope,
             backgroundScope = applicationCoroutineScope,
+            context = applicationContext,
             transitionInteractor = keyguardTransitionInteractor,
             surfaceBehindRepository = Lazy { keyguardSurfaceBehindRepository },
             activityManager = activityManagerWrapper,

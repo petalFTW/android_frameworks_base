@@ -58,7 +58,6 @@ import androidx.core.graphics.drawable.updateBounds
 import com.android.app.tracing.traceSection
 import com.android.settingslib.Utils
 import com.android.systemui.Flags
-import com.android.systemui.FontSizeUtils
 import com.android.systemui.animation.Expandable
 import com.android.systemui.animation.LaunchableView
 import com.android.systemui.animation.LaunchableViewDelegate
@@ -172,7 +171,6 @@ constructor(
             addUpdateListener { animation ->
                 setAllColors(
                     // These casts will throw an exception if some property is missing. We should
-                    // always have all properties.
                     animation.getAnimatedValue(BACKGROUND_NAME) as Int,
                     animation.getAnimatedValue(LABEL_NAME) as Int,
                     animation.getAnimatedValue(SECONDARY_LABEL_NAME) as Int,
@@ -267,8 +265,16 @@ constructor(
     }
 
     fun updateResources() {
-        FontSizeUtils.updateFontSize(label, R.dimen.qs_tile_text_size)
-        FontSizeUtils.updateFontSize(secondaryLabel, R.dimen.qs_tile_text_size)
+        val maxTextSize = resources.getDimensionPixelSize(R.dimen.qs_tile_text_size)
+        val minTextSize = android.util.TypedValue.applyDimension(
+            android.util.TypedValue.COMPLEX_UNIT_SP, 6f, resources.displayMetrics).toInt()
+        for (textView in listOf(label, secondaryLabel)) {
+            textView.setHorizontallyScrolling(false)
+            textView.ellipsize = TextUtils.TruncateAt.END
+            textView.setAutoSizeTextTypeUniformWithConfiguration(
+                minTextSize.coerceAtMost(maxTextSize - 1).coerceAtLeast(1), maxTextSize, 1,
+                android.util.TypedValue.COMPLEX_UNIT_PX)
+        }
 
         val iconSize = context.resources.getDimensionPixelSize(R.dimen.qs_icon_size)
         icon.layoutParams.apply {
@@ -309,9 +315,6 @@ constructor(
         if (collapsed) {
             labelContainer.ignoreLastView = true
             // Ideally, it'd be great if the parent could set this up when measuring just this child
-            // instead of the View class having to support this. However, due to the mysteries of
-            // LinearLayout's double measure pass, we cannot overwrite `measureChild` or any of its
-            // sibling methods to have special behavior for labelContainer.
             labelContainer.forceUnspecifiedMeasure = true
             secondaryLabel.alpha = 0f
         }
@@ -396,7 +399,6 @@ constructor(
                 measuredHeight
             }
         // Limit how much we affect the height, so we don't have rounding artifacts when the tile
-        // is too short.
         val constrainedSquishiness = constrainSquishiness(squishinessFraction)
         bottom = top + (actualHeight * constrainedSquishiness).toInt()
         scrollY = (actualHeight - height) / 2
@@ -451,7 +453,6 @@ constructor(
 
                 override fun onEffectFinishedReversing() {
                     // The long-press effect properties finished at the same starting point.
-                    // This is the same as if the properties were reset
                     haveLongPressPropertiesBeenReset = true
                 }
 
@@ -500,11 +501,6 @@ constructor(
 
     override fun onStateChanged(state: QSTile.State) {
         // We cannot use the handler here because sometimes, the views are not attached (if they
-        // are in a page that the ViewPager hasn't attached). Instead, we use a runnable where
-        // all its instances are `equal` to each other, so they can be used to remove them from the
-        // queue.
-        // This means that at any given time there's at most one enqueued runnable to change state.
-        // However, as we only ever care about the last state posted, this is fine.
         val runnable = StateChangeRunnable(state.copy())
         removeCallbacks(runnable)
         post(runnable)
@@ -526,8 +522,6 @@ constructor(
                 if (clickable && showRippleEffect) {
                     qsTileBackground.also {
                         // In case that the colorBackgroundDrawable was used as the background, make
-                        // sure
-                        // it has the correct callback instead of null
                         backgroundDrawable.callback = it
                     }
                 } else {
@@ -794,8 +788,6 @@ constructor(
             initializeLongPressProperties(measuredHeight, measuredWidth)
         } else {
             // Long-press effects might have been enabled before but the new state does not
-            // handle a long-press. In this case, we go back to the behaviour of a regular tile
-            // and clean-up the resources
             showRippleEffect = isClickable
             initialLongPressProperties = null
             finalLongPressProperties = null
@@ -859,9 +851,7 @@ constructor(
         return resources.getStringArray(arrayResId)[Tile.STATE_UNAVAILABLE]
     }
 
-    /*
-     * The view should not be animated if it's not on screen and no part of it is visible.
-     */
+    // The view should not be animated if it's not on screen and no part of it is visible.
     protected open fun animationsEnabled(): Boolean {
         if (!isShown) {
             return false
@@ -1106,7 +1096,6 @@ constructor(
         }
 
         // We want all instances of this runnable to be equal to each other, so they can be used to
-        // remove previous instances from the Handler/RunQueue of this view
         override fun equals(other: Any?): Boolean {
             return other is StateChangeRunnable
         }

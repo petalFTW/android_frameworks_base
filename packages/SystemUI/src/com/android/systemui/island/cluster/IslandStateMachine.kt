@@ -92,6 +92,22 @@ class IslandStateMachine(
             armDwell(signal)
             return true
         }
+        // Let the key speak, then bring the sticky blob back.
+        if (signal.kind == SignalKind.EXTRA_KEY && !dismissalHeld) {
+            if (cur.isSticky) {
+                queue.removeAll { it.id == cur.id }
+                if (queue.size >= 3) queue.removeLast()
+                queue.addFirst(cur)
+            }
+            show(signal)
+            return true
+        }
+        if (cur.kind == SignalKind.EXTRA_KEY && signal.isSticky) {
+            queue.removeAll { it.id == signal.id }
+            if (queue.size >= 3) queue.removeLast()
+            queue.addFirst(signal)
+            return true
+        }
         // A sticky signal is showing and a non-sticky one arrives -> queue it.
         if (cur.isSticky && !signal.isSticky) {
             if (queue.size >= 3) queue.removeFirst()

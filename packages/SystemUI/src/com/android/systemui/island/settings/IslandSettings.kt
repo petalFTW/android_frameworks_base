@@ -137,7 +137,7 @@ class IslandSettings @Inject constructor(
         Settings.Secure.getInt(context.contentResolver, KEY_HAPTICS, 1) != 0
 
     fun glassNotifications(): Boolean =
-        Settings.Secure.getInt(context.contentResolver, KEY_GLASS_NOTIFICATIONS, 0) != 0
+        Settings.Secure.getInt(context.contentResolver, KEY_GLASS_NOTIFICATIONS, 1) != 0
 
     fun leftMarginDp(): Int =
         Settings.Secure.getInt(context.contentResolver, KEY_LEFT_MARGIN_DP, 12)

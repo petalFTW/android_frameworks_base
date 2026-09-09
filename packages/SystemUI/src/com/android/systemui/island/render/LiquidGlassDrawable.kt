@@ -24,6 +24,8 @@ import android.graphics.Color
 import android.graphics.ColorFilter
 import android.graphics.LinearGradient
 import android.graphics.Paint
+import android.graphics.Matrix
+import android.graphics.Rect
 import android.graphics.Path
 import android.graphics.PathMeasure
 import android.graphics.PixelFormat
@@ -33,15 +35,7 @@ import android.graphics.drawable.Drawable
 import androidx.annotation.ColorInt
 import kotlin.random.Random
 
-/**
- * The "liquid glass" surface: a translucent tint fill, a film-grain speckle, a thin light rim on
- * the top and left edges, and a specular sheen that slides across on every appearance/state change.
- * Backdrop blur and the drop shadow are handled by the window and the view respectively (see
- * IslandWindow/IslandView).
- *
- * Zero allocation in [draw]: the grain bitmap + shader is cached; only the rim shader is rebuilt per
- * draw (matching the original implementation).
- */
+/** Smoked glass, grain and an animated rim. */
 class LiquidGlassDrawable : Drawable() {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val grainPaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -49,6 +43,13 @@ class LiquidGlassDrawable : Drawable() {
     private val sheenPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val path = Path()
     private val rect = RectF()
+    private val rimRect = RectF()
+    private val rimPath = Path()
+    private val wrappedNeon = Path()
+    private val sheenMatrix = Matrix()
+    private var geometryDirty = true
+    private var rimShaderDirty = true
+    private var neonBlur: BlurMaskFilter? = null
 
     @ColorInt
     private var tint = Color.TRANSPARENT
@@ -99,6 +100,7 @@ class LiquidGlassDrawable : Drawable() {
         if (rimTop != top || rimBottom != bottom) {
             rimTop = top
             rimBottom = bottom
+            rimShaderDirty = true
             invalidateSelf()
         }
     }
@@ -106,6 +108,7 @@ class LiquidGlassDrawable : Drawable() {
     fun setCornerRadius(radiusPx: Float) {
         if (cornerRadius != radiusPx) {
             cornerRadius = radiusPx
+            geometryDirty = true
             invalidateSelf()
         }
     }
@@ -113,6 +116,7 @@ class LiquidGlassDrawable : Drawable() {
     fun setRimWidth(widthPx: Float) {
         if (rimWidthPx != widthPx) {
             rimWidthPx = widthPx
+            geometryDirty = true
             invalidateSelf()
         }
     }
@@ -146,8 +150,7 @@ class LiquidGlassDrawable : Drawable() {
     override fun draw(canvas: Canvas) {
         val bounds = bounds
         if (bounds.isEmpty) return
-        rect.set(bounds)
-        buildPath()
+        updateGeometry()
 
         // Tint fill
         paint.color = tint
@@ -158,37 +161,23 @@ class LiquidGlassDrawable : Drawable() {
         // Film grain
         canvas.drawPath(path, grainPaint)
 
-        // Rim: vertical gradient stroke, inset by half the stroke width
-        if (rimPaint.strokeWidth != rimWidthPx) rimPaint.strokeWidth = rimWidthPx
-        val rimShader = LinearGradient(
-            0f, rect.top, 0f, rect.bottom, rimTop, rimBottom, Shader.TileMode.CLAMP
-        )
-        rimPaint.shader = rimShader
-        val inset = rimWidthPx / 2f
-        val rimRect = RectF(
-            rect.left + inset, rect.top + inset, rect.right - inset, rect.bottom - inset
-        )
-        path.reset()
-        path.addRoundRect(rimRect, cornerRadius, cornerRadius, Path.Direction.CW)
-        canvas.drawPath(path, rimPaint)
-        rimPaint.shader = null
+        if (rimShaderDirty) {
+            rimPaint.shader = LinearGradient(
+                0f, rect.top, 0f, rect.bottom, rimTop, rimBottom, Shader.TileMode.CLAMP
+            )
+            rimShaderDirty = false
+        }
+        canvas.drawPath(rimPath, rimPaint)
 
         // Neon rim sweep
-        if (neonProgress >= 0f) drawNeon(canvas, rimRect)
+        if (neonProgress >= 0f) drawNeon(canvas)
 
         // Specular sheen
         if (specularProgress in 0f..1f) drawSheen(canvas)
     }
 
-    /**
-     * Draws a glowing "comet" of app-coloured neon travelling once around the rim. A fixed-length
-     * chain follows a bright head; the whole thing fades in as it leaves the start point and fades
-     * out once the tail has caught up with the start (i.e. it has completed the loop).
-     */
-    private fun drawNeon(canvas: Canvas, rimRect: RectF) {
-        neonMeasurePath.reset()
-        neonMeasurePath.addRoundRect(rimRect, cornerRadius, cornerRadius, Path.Direction.CW)
-        neonMeasure.setPath(neonMeasurePath, false)
+    // Sweep the rim.
+    private fun drawNeon(canvas: Canvas) {
         val perimeter = neonMeasure.length
         if (perimeter <= 0f) return
 
@@ -204,9 +193,9 @@ class LiquidGlassDrawable : Drawable() {
         } else {
             // The head has wrapped past the start; stitch the two ends of the loop.
             neonMeasure.getSegment(tail, perimeter, neonSegment, true)
-            val wrap = Path()
-            neonMeasure.getSegment(0f, wrapped, wrap, true)
-            neonSegment.addPath(wrap)
+            wrappedNeon.reset()
+            neonMeasure.getSegment(0f, wrapped, wrappedNeon, true)
+            neonSegment.addPath(wrappedNeon)
         }
 
         val alpha = neonAlpha(neonProgress)
@@ -215,7 +204,7 @@ class LiquidGlassDrawable : Drawable() {
 
         neonGlowPaint.color = neonWithAlpha((alpha * 0x30).toInt())
         neonGlowPaint.strokeWidth = glowWidth
-        neonGlowPaint.maskFilter = BlurMaskFilter(glowWidth, BlurMaskFilter.Blur.NORMAL)
+        neonGlowPaint.maskFilter = neonBlur
         canvas.drawPath(neonSegment, neonGlowPaint)
         neonGlowPaint.maskFilter = null
 
@@ -242,35 +231,49 @@ class LiquidGlassDrawable : Drawable() {
         val travel = w + bandW
         val x = rect.left - bandW + specularProgress * travel
 
-        sheenShader = LinearGradient(
-            x, 0f, x + bandW, 0f,
-            intArrayOf(
-                Color.argb(0x00, 0xFF, 0xFF, 0xFF),
-                Color.argb(0x38, 0xFF, 0xFF, 0xFF),
-                Color.argb(0x00, 0xFF, 0xFF, 0xFF),
-            ),
-            null,
-            Shader.TileMode.CLAMP,
-        )
-        sheenPaint.shader = sheenShader
-        sheenPaint.xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SRC_ATOP)
+        sheenMatrix.setTranslate(x, 0f)
+        sheenShader?.setLocalMatrix(sheenMatrix)
 
         val save = canvas.save()
         // clip to the rounded rect and rotate ~22deg around the centre
-        buildPath()
         canvas.clipPath(path)
         canvas.rotate(-22f, rect.centerX(), rect.centerY())
         canvas.drawRect(
             x, rect.top - h, x + bandW, rect.bottom + h, sheenPaint
         )
         canvas.restoreToCount(save)
-        sheenPaint.shader = null
-        sheenPaint.xfermode = null
     }
 
-    private fun buildPath() {
+    override fun onBoundsChange(bounds: Rect) {
+        geometryDirty = true
+        rimShaderDirty = true
+    }
+
+    private fun updateGeometry() {
+        if (!geometryDirty) return
+        rect.set(bounds)
         path.reset()
         path.addRoundRect(rect, cornerRadius, cornerRadius, Path.Direction.CW)
+        rimRect.set(rect)
+        rimRect.inset(rimWidthPx / 2f, rimWidthPx / 2f)
+        rimPath.reset()
+        rimPath.addRoundRect(rimRect, cornerRadius, cornerRadius, Path.Direction.CW)
+        neonMeasurePath.set(rimPath)
+        neonMeasure.setPath(neonMeasurePath, false)
+        rimPaint.strokeWidth = rimWidthPx
+        neonBlur = if (rimWidthPx > 0f) {
+            BlurMaskFilter(rimWidthPx * 5f, BlurMaskFilter.Blur.NORMAL)
+        } else null
+        sheenShader = LinearGradient(
+            0f, 0f, rect.width() * 0.4f, 0f,
+            intArrayOf(0x00FFFFFF, 0x38FFFFFF, 0x00FFFFFF),
+            null, Shader.TileMode.CLAMP,
+        )
+        sheenPaint.shader = sheenShader
+        sheenPaint.xfermode = android.graphics.PorterDuffXfermode(
+            android.graphics.PorterDuff.Mode.SRC_ATOP
+        )
+        geometryDirty = false
     }
 
     override fun setAlpha(alpha: Int) {

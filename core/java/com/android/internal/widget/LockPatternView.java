@@ -1551,11 +1551,15 @@ public class LockPatternView extends View {
     }
 
     /**
-     * Set dot sizes in dp
+     * Set dot sizes. Also resets the radius of every cell state to the new default dot
+     * size so idle dots are drawn at the updated size; otherwise the cell radii are
+     * only refreshed by the dot activation/deactivation animations.
      */
     public void setDotSizes(int dotSizeDp, int dotSizeActivatedDp) {
         mDotSize = dotSizeDp;
         mDotSizeActivated = dotSizeActivatedDp;
+        resetPatternCellSize();
+        invalidate();
     }
 
     /**
