@@ -17,19 +17,19 @@
 package com.android.systemui.petalos.dagger
 
 import com.android.systemui.CoreStartable
-import com.android.systemui.petalos.PetalLockScreenMediaCover
+import com.android.systemui.petalos.PetalCdLockScreenController
 import dagger.Binds
 import dagger.Module
 import dagger.multibindings.ClassKey
 import dagger.multibindings.IntoMap
 
-// dagger binding for the media cover
+// dagger wiring for the cd player
 @Module
-abstract class PetalMediaCoverModule {
+abstract class PetalCdPlayerModule {
     @Binds
     @IntoMap
-    @ClassKey(PetalLockScreenMediaCover::class)
-    abstract fun bindPetalLockScreenMediaCover(
-        impl: PetalLockScreenMediaCover,
+    @ClassKey(PetalCdLockScreenController::class)
+    abstract fun bindPetalCdLockScreenController(
+        impl: PetalCdLockScreenController,
     ): CoreStartable
 }

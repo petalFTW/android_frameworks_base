@@ -24,22 +24,22 @@ import android.os.VibrationAttributes;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 
-// Shared drawing helpers and colors.
+// drawing helpers shared by the overlays
 public final class PetalUtils {
 
     private PetalUtils() {}
 
-    // Body capsule + joint (one fill).
+    // capsule body and joint, single fill
     public static final int COLOR_DIALOG = 0xFF0C0C0E;
 
-    // Volume fill pill states.
+    // volume pill colors
     public static final int COLOR_FILL_WHITE = 0xFFFFFFFF;
     public static final int COLOR_FILL_MUTED = 0xFF8E8E93;
     public static final int COLOR_FILL_MAX = 0xFFFF453A;
     public static final int COLOR_GLYPH_DARK = 0xFF161618;
     public static final int COLOR_GLYPH_LIGHT = 0xEBFFFFFF;
 
-    // Power squircle colors (base / neon glow).
+    // power button base and glow colors
     public static final int COLOR_POWER_OFF = 0xFFFF3B3B;
     public static final int COLOR_POWER_OFF_GLOW = 0xFFFF2D2D;
     public static final int COLOR_REBOOT = 0xFF34C759;
@@ -47,7 +47,7 @@ public final class PetalUtils {
     public static final int COLOR_SYSUI = 0xFF3B7BFF;
     public static final int COLOR_SYSUI_GLOW = 0xFF4D7BFF;
 
-    // Long-press "gold" confirmation color.
+    // gold used to confirm a long press
     public static final int COLOR_GOLD = 0xFFFFB300;
     public static final int COLOR_GOLD_GLOW = 0xFFFFC94D;
 
@@ -63,7 +63,7 @@ public final class PetalUtils {
         return a + (b - a) * t;
     }
 
-    /** Darken/lighten a color by {@code amount} per channel (like the prototype's {@code shade}). */
+    // shift a color per channel
     public static int shade(int color, int amount) {
         int r = clamp(Color.red(color) + amount, 0, 255);
         int g = clamp(Color.green(color) + amount, 0, 255);
@@ -71,7 +71,7 @@ public final class PetalUtils {
         return Color.rgb(r, g, b);
     }
 
-    /** Linear-blend two colors by {@code t} (0 = {@code a}, 1 = {@code b}). */
+    // blend two colors
     public static int mix(int a, int b, float t) {
         t = clamp(t, 0f, 1f);
         return Color.rgb(
@@ -80,12 +80,12 @@ public final class PetalUtils {
                 (int) (Color.blue(a) + (Color.blue(b) - Color.blue(a)) * t));
     }
 
-    /** Copy {@code color} with a new alpha channel. */
+    // same color, new alpha
     public static int alpha(int color, int a) {
         return Color.argb(clamp(a, 0, 255), Color.red(color), Color.green(color), Color.blue(color));
     }
 
-    /** Fire a predefined haptic effect (click/tick/heavy-click) on the touch vibrator. */
+    // haptic tick on the touch vibrator
     public static void vibrate(Context context, int effectId) {
         if (context == null) {
             return;
@@ -98,7 +98,7 @@ public final class PetalUtils {
                 VibrationAttributes.createForUsage(VibrationAttributes.USAGE_TOUCH));
     }
 
-    // Rotate the portrait geometry with the physical phone.
+    // true for the two landscape rotations
     public static boolean isLandscapeRotation(int rotation) {
         return rotation == android.view.Surface.ROTATION_90
                 || rotation == android.view.Surface.ROTATION_270;
@@ -130,7 +130,7 @@ public final class PetalUtils {
         }
     }
 
-    // Touches must follow the same damn rotation as the drawing.
+    // map touches back through the rotation
     public static float[] invertOrientationTransform(int rotation,
             float viewWidth, float viewHeight, float x, float y) {
         switch (rotation) {
@@ -145,7 +145,7 @@ public final class PetalUtils {
         }
     }
 
-    // Join the capsule to the bezel.
+    // path that joins the capsule to the bezel
     public static Path jointPath(boolean left, float cy, float w, float h, float r0, float d,
             float xTail, float edgeX) {
         float r = Math.max(0f, Math.min(r0, Math.min(w * 0.7f, h / 2f)));

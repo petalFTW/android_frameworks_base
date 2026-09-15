@@ -23,7 +23,7 @@ import dagger.Module
 import dagger.multibindings.ClassKey
 import dagger.multibindings.IntoMap
 
-/** Dagger bindings for the petalOS lock screen clock style feature. */
+// dagger boilerplate for the clock styles
 @Module
 abstract class PetalClockStyleModule {
     @Binds

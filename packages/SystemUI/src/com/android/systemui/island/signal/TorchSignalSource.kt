@@ -32,10 +32,7 @@ import javax.inject.Inject
 
 private const val ACCENT_TORCH = 0xFFFFD60A.toInt()
 
-/**
- * Reacts to torch state changes (§11.4). Only the back-facing flash triggers the island; tapping
- * the chip toggles the torch off.
- */
+// torch on shows a chip, tapping it turns the torch off
 class TorchSignalSource @Inject constructor(
     @Application private val context: Context,
     private val settings: IslandSettings,

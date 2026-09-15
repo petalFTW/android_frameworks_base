@@ -22,34 +22,30 @@ import androidx.core.graphics.ColorUtils
 import androidx.palette.graphics.Palette
 import com.android.systemui.island.presenter.IslandTint
 
-/**
- * Derives the three-tone island tint from album artwork (§5.3).
- */
+// pulls a tint out of the album art
 object PaletteTinter {
     private const val TINT_BG_ALPHA = 0xE0
     private const val FALLBACK_RGB = 0xFF303034.toInt()
 
-    /** Extract the tint from an album-art bitmap. Call off the main thread. */
+    /** Pull an IslandTint from album art. Not for the main thread. */
     fun extract(bitmap: Bitmap): IslandTint {
         val swatch = Palette.from(bitmap).maximumColorCount(16).generate().let {
             it.vibrantSwatch ?: it.darkVibrantSwatch ?: it.mutedSwatch
         }
         val rgb = swatch?.rgb ?: FALLBACK_RGB
 
-        // tintBg: blend the swatch 82% toward black (blend BEFORE applying alpha).
+        // background: swatch blended most of the way to black
         val bg = ColorUtils.blendARGB(rgb, Color.BLACK, 0.82f)
         val background = Color.argb(TINT_BG_ALPHA, Color.red(bg), Color.green(bg), Color.blue(bg))
 
-        // tintAccent: clamp lightness into [0.55, 0.72], raise saturation to min(1, s * 1.25).
+        // accent: clamp lightness and bump saturation
         val hsl = FloatArray(3)
         ColorUtils.colorToHSL(rgb, hsl)
         hsl[1] = (hsl[1] * 1.25f).coerceAtMost(1f)
         hsl[2] = hsl[2].coerceIn(0.55f, 0.72f)
         val accent = ColorUtils.HSLToColor(hsl)
 
-        // tintOnBg: white if it meets 4.5:1 contrast against the tinted background, else dark.
-        // calculateContrast rejects translucent backgrounds, so composite the tinted background
-        // over the island's black base first.
+        // blend over black first or the contrast math breaks
         val opaqueBackground = ColorUtils.compositeColors(background, Color.BLACK)
         val onBackground =
             if (ColorUtils.calculateContrast(Color.WHITE, opaqueBackground) >= 4.5f) {

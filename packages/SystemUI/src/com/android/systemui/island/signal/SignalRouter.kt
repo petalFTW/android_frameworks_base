@@ -23,10 +23,7 @@ import com.android.systemui.island.IslandSignal
 import com.android.systemui.island.cluster.IslandStateMachine
 import javax.inject.Inject
 
-/**
- * Receives all island signals and routes them to the correct cluster's state machine (§10). Also
- * tracks which notification keys the island is handling, for heads-up suppression (§11.1).
- */
+// sends signals to the right cluster and tracks heads-up keys
 @SysUISingleton
 class SignalRouter @Inject constructor() {
     private val machines = mutableMapOf<Cluster, IslandStateMachine>()
@@ -56,16 +53,12 @@ class SignalRouter @Inject constructor() {
 
     fun isHandledByIsland(key: String): Boolean = handledHeadsUpKeys.contains(key)
 
-    /** Records that the user just opened a notification so its re-post doesn't re-emerge. */
+    /** remember when a notif was opened so its re-post stays quiet */
     fun markOpened(key: String) {
         recentlyOpened[key] = SystemClock.elapsedRealtime()
     }
 
-    /**
-     * True when the notification was opened within the last [RECENT_OPEN_WINDOW_MS]. Opening an
-     * app often makes it remove + re-post the notification (marking it read), which would
-     * otherwise make the island re-emerge as if a brand-new message arrived.
-     */
+    // if it was opened very recently, ignore it
     fun isRecentlyOpened(key: String): Boolean {
         val opened = recentlyOpened[key] ?: return false
         if (SystemClock.elapsedRealtime() - opened > RECENT_OPEN_WINDOW_MS) {

@@ -25,20 +25,11 @@ import android.view.View
 import android.view.ViewGroup
 import com.android.systemui.res.R
 
-/**
- * The subject layer of the petalOS 3D depth lock screen.
- *
- * Draws the segmented wallpaper subject (RGBA cutout, screen-sized by construction — the depth
- * editor crops the photo exactly like the lock wallpaper it sets) on top of the keyguard clock.
- * Notifications render above this view because they live in a sibling container of
- * [com.android.systemui.keyguard.ui.view.KeyguardRootView].
- *
- * The layer is display-only: touches fall through to views underneath.
- */
+// draws the cutout over the lockscreen clock
 class PetalDepthSubjectView(context: Context) : View(context) {
 
     companion object {
-        /** Elevation keeps the layer above every sibling in the keyguard root. */
+        // stay above every other view
         const val LAYER_ELEVATION = 100f
     }
 
@@ -47,14 +38,14 @@ class PetalDepthSubjectView(context: Context) : View(context) {
 
     private var subject: Bitmap? = null
 
-    /** True when a cutout is loaded (controller checks before showing the layer). */
+    // set once a cutout is loaded
     val hasSubject: Boolean
         get() = subject != null
 
-    /** Dimensions for dump output only. */
+    // only used by dump
     fun subjectForDump(): Bitmap? = subject
 
-    /** Smoothed parallax offsets in px (already scaled by density by the controller). */
+    // current parallax offset in px
     private var tiltX = 0f
     private var tiltY = 0f
 
@@ -72,7 +63,7 @@ class PetalDepthSubjectView(context: Context) : View(context) {
         invalidate()
     }
 
-    /** Sets the smoothed parallax offsets in pixels. */
+    // update the parallax offset
     fun setTilt(px: Float, py: Float) {
         if (tiltX != px || tiltY != py) {
             tiltX = px
@@ -85,15 +76,16 @@ class PetalDepthSubjectView(context: Context) : View(context) {
         val bitmap = subject ?: return
         if (width <= 0 || height <= 0) return
 
-        // Keep a 1:1 mapping with the lock wallpaper. Scaling the transparent full-screen cutout
-        // by 1.05 made the same pixels sit at different coordinates even when motion was zero.
+        // draw 1:1 over the wallpaper
         dstRect.set(tiltX, tiltY, width + tiltX, height + tiltY)
         canvas.drawBitmap(bitmap, null, dstRect, paint)
     }
 
-    /** Convenience for the controller: size the layer to fill the keyguard root. */
+    // fill the keyguard root
     fun attachToRoot(root: ViewGroup) {
         val cl = root as androidx.constraintlayout.widget.ConstraintLayout
+        // stable res id, the binder recognises depth layers by it
+        id = R.id.petal_depth_subject
         val lp = androidx.constraintlayout.widget.ConstraintLayout.LayoutParams(
             androidx.constraintlayout.widget.ConstraintLayout.LayoutParams.MATCH_CONSTRAINT,
             androidx.constraintlayout.widget.ConstraintLayout.LayoutParams.MATCH_CONSTRAINT,

@@ -44,13 +44,7 @@ import javax.inject.Inject
 import kotlin.math.max
 import org.petalos.config.PetalConfig
 
-/**
- * Replaces the lock screen wallpaper with the current track's cover art while media is playing,
- * and restores the previous wallpaper when it stops. When enabled, the lock screen media player is
- * disabled (the cover art takes its place).
- *
- * Enabled via [PetalConfig.KEY_LOCK_MEDIA_COVER], toggled from the petalOS Hub settings app.
- */
+// swaps the lock wallpaper for whatever is playing
 @SysUISingleton
 class PetalLockScreenMediaCover @Inject constructor(
     @Application private val context: Context,
@@ -65,7 +59,7 @@ class PetalLockScreenMediaCover @Inject constructor(
     private var coverApplied = false
     private var originalWallpaper: Bitmap? = null
 
-    /** Notified when the cover is applied to / removed from the lock screen wallpaper. */
+    // fired when the cover art toggles
     fun interface CoverStateListener {
         fun onCoverStateChanged(coverApplied: Boolean)
     }
@@ -86,20 +80,16 @@ class PetalLockScreenMediaCover @Inject constructor(
         coverStateListeners.forEach { it.onCoverStateChanged(coverApplied) }
     }
 
-    /** Controller the metadata callback is currently registered on, if any. */
+    // the controller we attached the callback to
     private var trackedController: MediaController? = null
 
-    /** Hash of the metadata whose artwork is currently applied; avoids redundant rewrites. */
+    // hash of what's already up, avoids redraws
     private var appliedMetaHash = 0
 
-    /**
-     * Serial executor for all wallpaper work. Wallpaper set/restore does binder + disk I/O:
-     * running it on the main thread trips StrictMode (the red screen border flash) and janks
-     * the shade. A single thread also guarantees applies happen in submission order.
-     */
+    // one io thread or strictmode yells
     private val applyExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
 
-    /** Bumped on every request; a decoded artwork only applies if it is still the newest. */
+    // bump this so late decodes get thrown away
     private val applyGeneration = java.util.concurrent.atomic.AtomicInteger()
 
     private val settingsObserver = object : ContentObserver(handler) {
@@ -111,11 +101,7 @@ class PetalLockScreenMediaCover @Inject constructor(
             onSessionsChanged(controllers.orEmpty())
         }
 
-    /**
-     * Track changes within a session don't trigger [MediaSessionManager]'s sessions-changed
-     * listener (the session list itself is unchanged), so observe the active controller
-     * directly to re-apply the cover art when the song changes.
-     */
+    // skips don't change the session list, so watch the controller
     private val mediaCallback = object : MediaController.Callback() {
         override fun onMetadataChanged(metadata: MediaMetadata?) {
             val controller = trackedController ?: return
@@ -138,6 +124,12 @@ class PetalLockScreenMediaCover @Inject constructor(
             false,
             settingsObserver,
         )
+        // also watch the cd player, it fights for the lockscreen
+        context.contentResolver.registerContentObserver(
+            Settings.System.getUriFor(PetalConfig.KEY_LOCK_CD_PLAYER),
+            false,
+            settingsObserver,
+        )
         refreshEnabled()
     }
 
@@ -146,19 +138,29 @@ class PetalLockScreenMediaCover @Inject constructor(
         if (now == enabled) return
         enabled = now
         if (enabled) {
-            // The cover art replaces the lock screen media player.
+            // only one can own the lockscreen, so kill cd here
+            Settings.System.putInt(
+                context.contentResolver,
+                PetalConfig.KEY_LOCK_CD_PLAYER,
+                0,
+            )
+            // cover art hides the stock media controls
             Settings.Secure.putInt(
                 context.contentResolver,
                 Settings.Secure.MEDIA_CONTROLS_LOCK_SCREEN,
                 0,
             )
             sessionManager.addOnActiveSessionsChangedListener(sessionListener, null, handler)
+            reconcile()
         } else {
-            Settings.Secure.putInt(
-                context.contentResolver,
-                Settings.Secure.MEDIA_CONTROLS_LOCK_SCREEN,
-                1,
-            )
+            // cd has its own controls, leave stock alone
+            if (!PetalConfig.isLockCdPlayerEnabled(context)) {
+                Settings.Secure.putInt(
+                    context.contentResolver,
+                    Settings.Secure.MEDIA_CONTROLS_LOCK_SCREEN,
+                    1,
+                )
+            }
             sessionManager.removeOnActiveSessionsChangedListener(sessionListener)
             trackedController?.unregisterCallback(mediaCallback)
             trackedController = null
@@ -166,12 +168,20 @@ class PetalLockScreenMediaCover @Inject constructor(
         }
     }
 
+    // reboot can leave stale art, so restore first
+    private fun reconcile() {
+        if (!coverApplied && backupFile().exists()) restoreWallpaperAsync()
+        onSessionsChanged(runCatching {
+            sessionManager.getActiveSessions(null).orEmpty()
+        }.getOrDefault(emptyList()))
+    }
+
     private fun onSessionsChanged(controllers: List<MediaController>) {
         if (!enabled) return
         val playing = controllers.firstOrNull {
             it.playbackState?.state == PlaybackState.STATE_PLAYING
         }
-        // Observe the chosen controller so track changes re-apply the artwork.
+        // track the chosen one so skips refresh art
         if (trackedController != playing) {
             trackedController?.unregisterCallback(mediaCallback)
             trackedController = playing
@@ -190,8 +200,7 @@ class PetalLockScreenMediaCover @Inject constructor(
             restoreWallpaperAsync()
             return
         }
-        // Skip when the artwork for this exact metadata is already on screen (a play/pause or
-        // position-only update re-reports the same metadata).
+        // same art still showing, bail
         if (coverApplied && metadata.hashCode() == appliedMetaHash) return
         val embedded = metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
             ?: metadata.getBitmap(MediaMetadata.METADATA_KEY_ART)
@@ -207,9 +216,7 @@ class PetalLockScreenMediaCover @Inject constructor(
         }
         val metaHash = metadata.hashCode()
         val gen = applyGeneration.incrementAndGet()
-        // Decode off-thread, then apply on the serial executor. A stale decode (an older
-        // track finishing after a newer one) is dropped instead of overwriting the cover —
-        // that race was what made the lock screen show the previous song's artwork.
+        // decode on another thread, and drop it if it's stale
         Thread {
             val bitmap = decodeArtwork(uri)
             mainExecutor.execute {
@@ -223,7 +230,7 @@ class PetalLockScreenMediaCover @Inject constructor(
         }.start()
     }
 
-    /** Runs wallpaper work on the serial background executor; skips if a newer request landed. */
+    // serial executor keeps wallpaper calls in order
     private fun applyAsync(block: () -> Unit) {
         val gen = applyGeneration.incrementAndGet()
         applyExecutor.execute {
@@ -238,9 +245,7 @@ class PetalLockScreenMediaCover @Inject constructor(
     private fun setLockWallpaper(bitmap: Bitmap, metaHash: Int) {
         runCatching {
             if (!coverApplied) {
-                // Capture the true original once. After a reboot the on-disk backup is the only
-                // authoritative copy (the live lock wallpaper is the stale cover art), so never
-                // read the live wallpaper when a backup exists.
+                // the backup is the original, never read live art for this
                 if (originalWallpaper == null) {
                     originalWallpaper = if (backupFile().exists()) {
                         loadBackupBitmap()
@@ -253,9 +258,7 @@ class PetalLockScreenMediaCover @Inject constructor(
                 }
             }
             val scaled = scaleToScreen(bitmap)
-            // An explicit full-frame visibleCropHint stops the wallpaper service from
-            // re-centering/re-cropping, so the art (and later the restored wallpaper) show
-            // exactly the pixels we set — this is what kept the wallpaper drifting off-center.
+            // full-frame rect stops the service recentering
             wallpaperManager.setBitmap(
                 scaled,
                 Rect(0, 0, scaled.width, scaled.height),
@@ -278,8 +281,7 @@ class PetalLockScreenMediaCover @Inject constructor(
         originalWallpaper = null
         runCatching {
             if (original != null) {
-                // Same explicit full-frame crop as when applying: restore exactly the saved
-                // pixels without letting the service re-crop them off-center.
+                // put the saved pixels back, same full frame
                 wallpaperManager.setBitmap(
                     original,
                     Rect(0, 0, original.width, original.height),
@@ -287,8 +289,7 @@ class PetalLockScreenMediaCover @Inject constructor(
                     WallpaperManager.FLAG_LOCK,
                 )
             } else if (hasBackup) {
-                // No distinct lock wallpaper existed before the cover; clear so the lock screen
-                // follows the home wallpaper again.
+                // there was no lock wallpaper, clear it
                 wallpaperManager.clear(WallpaperManager.FLAG_LOCK)
             }
         }.onFailure { Log.w(TAG, "Failed to restore lock screen wallpaper", it) }
@@ -304,11 +305,7 @@ class PetalLockScreenMediaCover @Inject constructor(
 
     private fun backupFile(): File = File(context.filesDir, "petal_lock_media_cover.bin")
 
-    /**
-     * Persists the original lock wallpaper so it can be restored even after a reboot that happens
-     * while media is playing (the in-memory copy is lost on process death). A leading marker byte
-     * distinguishes "no distinct lock wallpaper" (0) from "PNG follows" (1).
-     */
+    // save the original so a reboot can put it back
     private fun persistBackup(bitmap: Bitmap?) {
         runCatching {
             FileOutputStream(backupFile()).use { out ->
@@ -331,7 +328,7 @@ class PetalLockScreenMediaCover @Inject constructor(
         }
     }.getOrNull()
 
-    /** Scales the artwork to fill the screen (center-crop) at native resolution. */
+    // fill the screen and center crop
     private fun scaleToScreen(bitmap: Bitmap): Bitmap {
         val dm = context.resources.displayMetrics
         val targetW = dm.widthPixels.coerceAtLeast(1)

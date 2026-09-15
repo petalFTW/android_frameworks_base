@@ -32,7 +32,7 @@ import javax.inject.Inject
 
 private const val ACCENT_CHARGING = 0xFF30D158.toInt()
 
-/** Shows a transient charging chip when power is connected (§11.5). */
+/** pops a charging chip when you plug in */
 class ChargingSignalSource @Inject constructor(
     @Application private val context: Context,
     private val settings: IslandSettings,

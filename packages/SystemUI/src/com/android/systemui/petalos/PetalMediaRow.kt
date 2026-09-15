@@ -48,7 +48,7 @@ import com.android.systemui.brightness.ui.viewmodel.Drag
 import com.android.systemui.res.R
 import kotlinx.coroutines.launch
 
-/** Full-width media followed by a pair of horizontal brightness and volume controls. */
+// media card with the two sliders underneath
 @Composable
 fun PetalMediaRow(
     brightnessViewModel: BrightnessSliderViewModel,
@@ -62,10 +62,10 @@ fun PetalMediaRow(
 
     val minGamma = BrightnessUtils.GAMMA_SPACE_MIN.toFloat()
     val maxGamma = BrightnessUtils.GAMMA_SPACE_MAX.toFloat()
-    // Live gamma brightness from the slider view model (-1 until the hydrator emits).
+    // gamma comes in as -1 until it loads
     val gamma = brightnessViewModel.currentBrightness.value
 
-    // Media volume: read through AudioManager, refreshed on VOLUME_CHANGED_ACTION broadcasts.
+    // volume pulled straight from audiomanager
     val audioManager = remember { context.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
     var volume by remember {
         mutableIntStateOf(audioManager.getStreamVolume(AudioManager.STREAM_MUSIC))
@@ -124,7 +124,7 @@ fun PetalMediaRow(
                 media()
             }
         }
-        // Short horizontal controls leave the media card its full usable width.
+        // sliders sit in their own row
         Row(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             modifier = Modifier.fillMaxWidth(),
@@ -159,7 +159,7 @@ fun PetalMediaRow(
                 onValueChange = ::updateVolume,
                 onCommit = ::updateVolume,
                 onIconClick = {
-                    // Restore the user's previous level after muting from this button.
+                    // unmute goes back to the old level
                     val next =
                         if (volume > 0) {
                             volumeBeforeMute = volume

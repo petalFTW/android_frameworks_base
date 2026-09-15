@@ -23,17 +23,7 @@ import android.view.ViewConfiguration
 import com.android.systemui.island.IslandGeometry
 import kotlin.math.abs
 
-/**
- * Gesture handling for a single island: tap to expand / run primary action, tap a button to invoke
- * it, swipe up to dismiss, swipe down to expand or drag-resize, swipe left/right to dismiss with
- * rubber-band feedback, long press for the context menu.
- *
- * Because the island is a [ViewGroup], the gestures are wired through
- * [android.view.ViewGroup.onInterceptTouchEvent] / [android.view.ViewGroup.onTouchEvent] rather
- * than a plain [android.view.View.OnTouchListener] (which [ViewGroup] never consults). A drag is
- * intercepted from children once the touch slop is exceeded; taps are left to children so buttons
- * (action pills, transport controls) still receive their click events.
- */
+// gestures for the island. tapped into intercept and touch events
 class IslandTouchHandler(
     private val view: IslandView,
     private val geometry: IslandGeometry,
@@ -48,22 +38,17 @@ class IslandTouchHandler(
     private var dragging = false
     private var longPressed = false
 
-    /**
-     * False when [onTouchEvent] hasn't seen ACTION_DOWN yet — this happens right after
-     * [onInterceptTouchEvent] starts intercepting mid-gesture (the framework sends MOVE/CANCEL
-     * without a fresh DOWN). The first MOVE then seeds the gesture state instead of computing
-     * drag deltas against stale coordinates.
-     */
+    // cleared on down. first move after an intercept sets the start point
     private var gotDown = false
 
-    /** Once the drag axis is locked, this records whether it's horizontal. */
+    // set once we pick an axis, doesn't change mid drag
     private var horizontalAxis = false
 
     private var velocityTracker: VelocityTracker? = null
 
     private val longPressRunnable = Runnable { onLongPress() }
 
-    /** Called from [IslandView.onInterceptTouchEvent]; intercepts once a drag is detected. */
+    // grabs the gesture as soon as it looks like a drag
     fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
@@ -93,7 +78,7 @@ class IslandTouchHandler(
         return dragging
     }
 
-    /** Called from [IslandView.onTouchEvent]; handles taps and applies drags. */
+    // taps and drags get handled here
     fun onTouchEvent(ev: MotionEvent): Boolean {
         if (velocityTracker == null) velocityTracker = VelocityTracker.obtain()
         velocityTracker?.addMovement(ev)
@@ -113,7 +98,7 @@ class IslandTouchHandler(
             }
             MotionEvent.ACTION_MOVE -> {
                 if (!gotDown) {
-                    // First event after mid-gesture interception: seed the gesture state.
+                    // first move after an intercept, we need a starting point
                     downX = ev.x
                     downY = ev.y
                     startX = ev.x
@@ -142,10 +127,7 @@ class IslandTouchHandler(
                 view.removeCallbacks(longPressRunnable)
                 val dx = ev.x - downX
                 val dy = ev.y - downY
-                // Any release that isn't a drag and didn't already trigger a long-press is a
-                // tap, regardless of how long the finger was down. Capping taps at the framework's
-                // short tap-timeout dropped normal (slightly slow) presses, so action pills and
-                // the inline-reply OK button would intermittently do nothing.
+                // no timeout on taps, any quick release counts
                 if (!dragging && !longPressed && gotDown && abs(dx) < touchSlop &&
                     abs(dy) < touchSlop
                 ) {

@@ -31,7 +31,7 @@ import com.android.systemui.res.R
 import java.util.Calendar
 import java.util.Locale
 
-// Keep preview and lockscreen geometry in sync.
+// used by both the preview and the real lockscreen
 class PetalDepthClockView(context: Context) : View(context) {
 
     companion object {
@@ -45,7 +45,7 @@ class PetalDepthClockView(context: Context) : View(context) {
         const val STYLE_VOGUE = 8
         const val STYLE_MONOLITH = 9
 
-        /** Fraction of the subject's parallax offset — the clock sits further back. */
+        // clock trails the subject on purpose
         const val PARALLAX_RATE = 0.45f
         private const val TICK_MS = 1000L
     }
@@ -55,6 +55,13 @@ class PetalDepthClockView(context: Context) : View(context) {
 
     private val materials = org.petalos.config.DepthClockMaterials()
     private var backdrop: android.graphics.Bitmap? = null
+
+    private var liquidBackdrop: android.graphics.Bitmap? = null
+
+    fun setLiquidBackdrop(bitmap: android.graphics.Bitmap?) {
+        liquidBackdrop = bitmap
+        invalidate()
+    }
 
     fun setBackdrop(bitmap: android.graphics.Bitmap?) {
         backdrop = bitmap
@@ -77,11 +84,11 @@ class PetalDepthClockView(context: Context) : View(context) {
     private var showDate = true
     private var twentyFourHour = true
 
-    /** Vertical anchor of the clock block as a fraction of the view height (0.05..0.85). */
+    // vertical position, clamped 0.05-0.85
     private var anchor = 0.20f
-    /** Horizontal centre of the clock block (0.1..0.9). */
+    // horizontal center, clamped to 0.1-0.9
     private var anchorX = 0.5f
-    /** Size multiplier for the digits (0.6..1.6). */
+    // digit scale, clamped 0.6-1.6
     private var scale = 1f
 
     private var hourText = ""
@@ -107,7 +114,7 @@ class PetalDepthClockView(context: Context) : View(context) {
         applyTypeface(style)
     }
 
-    /** Per-style typography: poster-black, editorial serif, thin neon, condensed default. */
+    // every style gets its own font
     private fun applyTypeface(forStyle: Int) {
         val face =
             when (forStyle) {
@@ -132,7 +139,7 @@ class PetalDepthClockView(context: Context) : View(context) {
         invalidate()
     }
 
-    /** Sets the vertical anchor of the clock block as a fraction of the view height. */
+    // vertical placement
     fun setAnchor(fraction: Float) {
         anchor = fraction.coerceIn(0.05f, 0.85f)
         invalidate()
@@ -143,7 +150,7 @@ class PetalDepthClockView(context: Context) : View(context) {
         invalidate()
     }
 
-    /** Sets the digit size multiplier (0.6..1.6). */
+    // how big the digits get
     fun setScale(factor: Float) {
         scale = factor.coerceIn(0.6f, 1.6f)
         invalidate()
@@ -165,7 +172,7 @@ class PetalDepthClockView(context: Context) : View(context) {
         invalidate()
     }
 
-    /** Receives the subject's tilt target; applies a reduced rate for depth. */
+    // clock only follows a fraction of the tilt
     fun setSubjectTilt(px: Float, py: Float) {
         val nx = px * PARALLAX_RATE
         val ny = py * PARALLAX_RATE
@@ -215,9 +222,11 @@ class PetalDepthClockView(context: Context) : View(context) {
         datePaint.color = Color.argb(210, Color.red(base), Color.green(base), Color.blue(base))
     }
 
-    /** Convenience for the controller: size the layer to fill the keyguard root. */
+    // stretch across the keyguard root
     fun attachToRoot(root: android.view.ViewGroup) {
         val cl = root as androidx.constraintlayout.widget.ConstraintLayout
+        // must be the stable res id or the blueprint binder wipes us
+        id = R.id.petal_depth_clock
         val lp = androidx.constraintlayout.widget.ConstraintLayout.LayoutParams(
             androidx.constraintlayout.widget.ConstraintLayout.LayoutParams.MATCH_CONSTRAINT,
             androidx.constraintlayout.widget.ConstraintLayout.LayoutParams.MATCH_CONSTRAINT,
@@ -239,13 +248,13 @@ class PetalDepthClockView(context: Context) : View(context) {
         val rawHour = hourText
         val rawMinute = minuteText
         val square = org.petalos.config.DepthClockMaterials.isSquare(style)
-        // square styles always stack: hours on top, minutes below
+        // square styles stack, hours over minutes
         val stack = vertical || square
         val useColon = !stack
         val hour = if (useColon) "$rawHour:" else rawHour
         val minute = rawMinute
 
-        // Digit size: fill the width (vertical stacks one pair per row; horizontal fits both).
+        // size digits to fill the width
         val probe = Paint(fillPaint).apply { textSize = 100f }
         val unitWidth = if (stack) probe.measureText("00") else probe.measureText("00:00")
         val targetWidth = width * (when {
@@ -254,7 +263,7 @@ class PetalDepthClockView(context: Context) : View(context) {
             else -> 0.78f
         }) * scale
         val textSize = 100f * targetWidth / unitWidth.coerceAtLeast(1f)
-        // Keep the digits inside the screen.
+        // cap the height so it fits
         val heightCap = height * 0.5f * scale / (when {
             square -> 2.1f
             stack -> 2.3f
@@ -267,7 +276,7 @@ class PetalDepthClockView(context: Context) : View(context) {
         strokePaint.strokeWidth = finalTextSize * 0.035f
         datePaint.textSize = finalTextSize * 0.12f
 
-        // Parallax offsets (reduced rate vs the subject).
+        // dx/dy from the smoothed tilt
         val dx = tiltX
         val dy = tiltY
 
@@ -313,9 +322,11 @@ class PetalDepthClockView(context: Context) : View(context) {
         }
     }
 
-    /** Draws one text run in the requested style at (x = left, y = baseline). */
+    // draw a single run in the given style
     private fun drawStyled(canvas: Canvas, text: String, x: Float, y: Float, forStyle: Int) {
-        if (materials.draw(canvas, text, x, y, forStyle, fillPaint, backdrop, width, height)) return
+        if (materials.draw(canvas, text, x, y, forStyle, fillPaint,
+                if (forStyle == org.petalos.config.DepthClockMaterials.LIQUID)
+                    liquidBackdrop ?: backdrop else backdrop, width, height)) return
         when (forStyle) {
             STYLE_OUTLINE -> {
                 drawSoftShadow(canvas, text, x, y)
@@ -335,7 +346,7 @@ class PetalDepthClockView(context: Context) : View(context) {
                 fillPaint.shader = null
             }
             STYLE_HYBRID -> {
-                // Alternate per character: solid / outline (HyperOS mixed-digit look).
+                // flip fill and outline every other char
                 var cx = x
                 var solid = true
                 for (ch in text) {
@@ -360,7 +371,7 @@ class PetalDepthClockView(context: Context) : View(context) {
         }
     }
 
-    /** HyperOS poster look: ultra-black digits with a hard two-tone split. */
+    // poster look with a hard split
     private fun drawBlockbuster(canvas: Canvas, text: String, x: Float, y: Float) {
         fillPaint.shader = LinearGradient(
             0f, y - fillPaint.textSize, 0f, y + fillPaint.textSize * 0.1f,
@@ -373,7 +384,7 @@ class PetalDepthClockView(context: Context) : View(context) {
         fillPaint.shader = null
     }
 
-    /** Neon sign: thin core stroke over a wide colored bloom. */
+    // fat glow under a thin bright core
     private fun drawNeon(canvas: Canvas, text: String, x: Float, y: Float) {
         glowPaint.typeface = fillPaint.typeface
         glowPaint.textSize = fillPaint.textSize
@@ -383,13 +394,13 @@ class PetalDepthClockView(context: Context) : View(context) {
             withAlpha(fillPaint.color, 180))
         canvas.drawText(text, x, y, glowPaint)
         canvas.drawText(text, x, y, glowPaint)
-        // Hot white core.
+        // bright core last
         glowPaint.setShadowLayer(fillPaint.textSize * 0.08f, 0f, 0f, Color.WHITE)
         canvas.drawText(text, x, y, glowPaint)
         glowPaint.setShadowLayer(0f, 0f, 0f, Color.TRANSPARENT)
     }
 
-    /** Gold leaf: serif outline with a warm halo. */
+    // serif outline with a warm glow
     private fun drawGoldOutline(canvas: Canvas, text: String, x: Float, y: Float) {
         glowPaint.typeface = strokePaint.typeface
         glowPaint.textSize = strokePaint.textSize
@@ -402,7 +413,7 @@ class PetalDepthClockView(context: Context) : View(context) {
         canvas.drawText(text, x, y, strokePaint)
     }
 
-    /** Editorial serif with wide tracking (magazine cover look). */
+    // serif with wide tracking
     private fun drawEditorial(canvas: Canvas, text: String, x: Float, y: Float) {
         val spacing = fillPaint.textSize * 0.18f
         val plain = fillPaint.measureText(text)
@@ -426,7 +437,7 @@ class PetalDepthClockView(context: Context) : View(context) {
         }
     }
 
-    /** Fake-3D extruded digits: layered dark extrusion behind the front face. */
+    // fake extrude, just offset copies
     private fun drawMonolith(canvas: Canvas, text: String, x: Float, y: Float) {
         val depth = fillPaint.textSize * 0.09f
         val steps = 14

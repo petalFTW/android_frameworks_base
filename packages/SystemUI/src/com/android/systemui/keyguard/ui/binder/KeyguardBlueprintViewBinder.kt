@@ -41,7 +41,8 @@ import com.android.systemui.util.kotlin.pairwise
 object KeyguardBlueprintViewBinder {
     private fun isDepthLayer(id: Int): Boolean =
         id == com.android.systemui.res.R.id.petal_depth_clock ||
-            id == com.android.systemui.res.R.id.petal_depth_subject
+            id == com.android.systemui.res.R.id.petal_depth_subject ||
+            id == com.android.systemui.res.R.id.petal_cd_player
 
     @JvmStatic
     fun bind(

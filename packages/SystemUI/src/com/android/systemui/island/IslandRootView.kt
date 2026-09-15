@@ -30,21 +30,19 @@ import android.view.View
 import android.view.ViewTreeObserver
 import android.widget.FrameLayout
 import com.android.systemui.island.cluster.IslandView
+import com.android.systemui.island.render.IslandMiniNotifSource
 
-/**
- * Hosts both clusters (LEFT + RIGHT) in the island window and restricts the window's touchable
- * region to just the visible islands, so status-bar pulldowns and touches pass through everywhere
- * else (§12.2). Also draws the soft drop shadow that sits just underneath each island.
- */
+// holds both islands and fences off touches
 class IslandRootView(
     context: Context,
     private val geometry: IslandGeometry,
+    miniNotifSource: IslandMiniNotifSource? = null,
 ) : FrameLayout(context), ViewTreeObserver.OnComputeInternalInsetsListener {
 
-    val leftIsland = IslandView(context, Cluster.LEFT, geometry)
-    val rightIsland = IslandView(context, Cluster.RIGHT, geometry)
+    val leftIsland = IslandView(context, Cluster.LEFT, geometry, miniNotifSource)
+    val rightIsland = IslandView(context, Cluster.RIGHT, geometry, miniNotifSource)
 
-    /** Invoked when a touch lands outside both islands (collapses any expanded blob). */
+    // fired on a tap outside both islands
     var onOutsideTouch: (() -> Unit)? = null
 
     private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -55,7 +53,7 @@ class IslandRootView(
     private var dark = true
 
     init {
-        // Let the emergence droplet bulge past an island's leading edge without clipping.
+        // don't clip, the droplet needs to spill over
         clipChildren = false
         clipToPadding = false
         leftIsland.visibility = android.view.View.GONE

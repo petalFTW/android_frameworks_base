@@ -60,10 +60,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
-/**
- * Entry point for the dual-anchor liquid-drop dynamic island (§10.1). Owns the window, the two
- * clusters' state machines, the presenters and the signal sources.
- */
+// top-level wiring; window, state machines, presenters
 @SysUISingleton
 class IslandController @Inject constructor(
     @Application private val context: Context,
@@ -84,6 +81,7 @@ class IslandController @Inject constructor(
     private val torchSignalSource: TorchSignalSource,
     private val chargingSignalSource: ChargingSignalSource,
     private val extraKeySignalSource: ExtraKeySignalSource,
+    private val miniNotifSource: com.android.systemui.island.render.IslandMiniNotifSource,
 ) : CoreStartable {
 
     private lateinit var geometry: IslandGeometry
@@ -98,12 +96,7 @@ class IslandController @Inject constructor(
             override fun onThemeChanged() = applyTheme()
         }
 
-    /**
-     * The status bar re-shows its icons (clock, notification + system icons) whenever the shade
-     * transitions, which undoes [StatusBarIconHider]'s hide. Re-apply coverage on every shade
-     * state change, and once more after a fully-closed shade so a lingering media blob keeps the
-     * icons hidden even after the icon fade-in completes.
-     */
+    // shade brings the icons back, so re-hide after every change
     private val shadeStateListener =
         ShadeStateListener { state ->
             refreshStatusBarCoverage()
@@ -112,11 +105,7 @@ class IslandController @Inject constructor(
             }
         }
 
-    /**
-     * The keyguard re-shows the status bar icons when it locks and unlocks; re-assert coverage a
-     * beat after the transition so a visible media blob keeps them hidden once the icon fade-in
-     * completes.
-     */
+    // keyguard does the same thing; hide again once it settles
     private val keyguardStateCallback =
         object : KeyguardStateController.Callback {
             override fun onKeyguardShowingChanged() {
@@ -125,9 +114,30 @@ class IslandController @Inject constructor(
             }
         }
 
+    // bridge says a crossfade started, spray the media blob
+    private val bridgeTransitionReceiver =
+        object : android.content.BroadcastReceiver() {
+            override fun onReceive(c: Context?, intent: android.content.Intent?) {
+                val duration = intent?.getIntExtra(EXTRA_TRANSITION_DURATION, 10000)
+                    ?.toLong() ?: 10000L
+                val root = window?.rootView ?: return
+                if (leftMachine.current?.kind == SignalKind.MEDIA) {
+                    root.leftIsland.startChromaShimmer(duration)
+                }
+                if (rightMachine.current?.kind == SignalKind.MEDIA) {
+                    root.rightIsland.startChromaShimmer(duration)
+                }
+            }
+        }
+
     override fun start() {
         settings.start()
         extraKeySignalSource.start()
+        context.registerReceiver(
+            bridgeTransitionReceiver,
+            android.content.IntentFilter(ACTION_BRIDGE_TRANSITION),
+            Context.RECEIVER_EXPORTED,
+        )
         shadeExpansionStateManager.addStateListener(shadeStateListener)
         keyguardStateController.addCallback(keyguardStateCallback)
         scope.launch {
@@ -139,8 +149,7 @@ class IslandController @Inject constructor(
                 window?.rootView?.rightIsland?.setAnimationMode(mode)
             }
         }
-        // Quick settings and the shade re-show status bar icons on open/close; re-assert coverage
-        // on every transition so a visible blob keeps them hidden.
+        // shade/qs re-show icons, keep re-asserting
         scope.launch {
             shadeInteractor.isAnyExpanded.collect { refreshStatusBarCoverage() }
         }
@@ -153,12 +162,11 @@ class IslandController @Inject constructor(
         if (enabled) {
             if (window == null) {
                 geometry = IslandGeometry(context, windowManager)
-                val w = IslandWindow(context, windowManager, geometry)
+                val w = IslandWindow(context, windowManager, geometry, miniNotifSource)
                 window = w
                 leftMachine.setNotifDwellMs(settings.notifDwellMs())
                 w.rootView.onOutsideTouch = {
-                    // A tap anywhere else collapses a currently-expanded blob (bug: expanded
-                    // media/notification island never dismissed on outside tap).
+                    // tap outside closes whatever is open
                     if (w.rootView.leftIsland.isExpanded) leftMachine.userCollapse()
                     if (w.rootView.rightIsland.isExpanded) rightMachine.userCollapse()
                 }
@@ -199,8 +207,7 @@ class IslandController @Inject constructor(
                 }
 
                 override fun launchPendingIntent(pendingIntent: android.app.PendingIntent) {
-                    // Dismisses the keyguard (via bouncer when secure) before launching, the
-                    // same path a shade notification tap takes.
+                    // dismiss keyguard first, otherwise the pi goes nowhere
                     activityStarter.startPendingIntentDismissingKeyguard(pendingIntent)
                 }
             }
@@ -215,8 +222,7 @@ class IslandController @Inject constructor(
                     view.visibility = View.VISIBLE
                     view.show(signal, presenter, form)
                     refreshStatusBarCoverage()
-                    // Refresh once more after the next layout so a freshly sized blob covers the
-                    // status bar icons immediately (covers NONE/instant animation mode too).
+                    // relayout can move the blob, recheck after
                     view.doOnLayout { refreshStatusBarCoverage() }
                 }
 
@@ -239,7 +245,7 @@ class IslandController @Inject constructor(
                 override fun onDismiss() {
                     view.dismiss()
                     refreshStatusBarCoverage()
-                    // Re-check once the dissolve/translate-off animation has finished.
+                    // dissolve takes a moment, check again when it's done
                     mainExecutor.executeDelayed({ refreshStatusBarCoverage() }, 260L)
                 }
 
@@ -249,7 +255,7 @@ class IslandController @Inject constructor(
         view.callbacks =
             object : IslandView.Callbacks {
                 override fun onExpandedStateChanged(island: IslandView, expanded: Boolean) {
-                    // Collision rule: left wins, right collapses to its minimum form.
+                    // left wins collisions. don't ask
                     if (island.cluster == Cluster.LEFT && expanded) {
                         val rightView = window?.rootView?.rightIsland ?: return
                         if (rightView.isExpanded) rightMachine.userCollapse()
@@ -274,12 +280,11 @@ class IslandController @Inject constructor(
                 }
 
                 override fun onUserDismiss(island: IslandView) {
-                    // Capture the id before userDismiss() pops the queue and swaps `current`.
+                    // grab the id before dismiss replaces it
                     val signalId = machine.current?.id
                     machine.userDismiss()
                     island.presenterForSignal()?.onDismiss()
-                    // A user-initiated swipe should also remove the notification from the
-                    // notification center (auto-expiry dismissals must NOT cancel it).
+                    // a real swipe cancels the notif, timed expiry must not
                     if (signalId?.startsWith(NOTIF_ID_PREFIX) == true) {
                         notificationSignalSource.cancelFromIsland(
                             signalId.removePrefix(NOTIF_ID_PREFIX)
@@ -293,8 +298,7 @@ class IslandController @Inject constructor(
                     val signalId = machine.current?.id
                     val handled = island.presenterForSignal()?.onPrimaryAction() == true
                     if (handled) {
-                        // Remember this notification so the app's read-marking re-post doesn't
-                        // re-emerge the island (bug: tapping a notification re-shows it).
+                        // mark it opened so it doesn't pop back up
                         if (signalId?.startsWith(NOTIF_ID_PREFIX) == true) {
                             signalRouter.markOpened(signalId.removePrefix(NOTIF_ID_PREFIX))
                         }
@@ -335,7 +339,7 @@ class IslandController @Inject constructor(
         }
     }
 
-    /** Hides the status bar icons currently sitting behind a visible blob. */
+    // hide the bar icons the blob is sitting on
     private fun refreshStatusBarCoverage() {
         val root = window?.rootView ?: return
         statusBarIconHider.updateCoverage(
@@ -372,5 +376,7 @@ class IslandController @Inject constructor(
     companion object {
         private const val TAG = "IslandController"
         private const val NOTIF_ID_PREFIX = "notif:"
+        private const val ACTION_BRIDGE_TRANSITION = "org.rab1d.bridge.action.TRANSITION"
+        private const val EXTRA_TRANSITION_DURATION = "duration"
     }
 }

@@ -19,6 +19,6 @@ package com.android.systemui.petalos
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.staticCompositionLocalOf
 
-/** Optional media row inside the Petal tile grid. */
+// optional media slot in the tile grid
 val LocalPetalMediaRow =
     staticCompositionLocalOf<(@Composable () -> Unit)?> { null }

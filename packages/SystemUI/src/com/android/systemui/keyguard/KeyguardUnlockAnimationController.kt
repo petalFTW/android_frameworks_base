@@ -705,8 +705,8 @@ constructor(
         }
 
         when {
-            // petalOS: seamless ColorOS-style reveal, home surface pops in at full
-            // size while keyguard content and lock/home wallpapers cross-fade in place
+            // petalOS: seamless ColorOS-style reveal, lock ui dissolves while wallpaper and
+            // home punch out from the sensor point and settle
             petalSeamlessUnlockController.isEnabled() &&
                 !biometricUnlockControllerLazy.get().isWakeAndUnlock -> {
                 Log.d(TAG, "playCannedUnlockAnimation, petalSeamlessUnlock")

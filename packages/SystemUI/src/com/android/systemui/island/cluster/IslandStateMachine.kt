@@ -26,10 +26,7 @@ import com.android.systemui.util.concurrency.DelayableExecutor
 
 enum class IslandState { HIDDEN, EMERGING, COLLAPSED, EXPANDING, EXPANDED, COLLAPSING, DISSOLVING, DRAGGING, MORPHING }
 
-/**
- * One state machine per cluster. Owns the current signal, a depth-3 queue, dwell timers and the
- * priority/transition rules of §6.
- */
+// one of these per side. holds the current signal, a queue and the dwell timers
 class IslandStateMachine(
     val cluster: Cluster,
     private val mainExecutor: DelayableExecutor,
@@ -55,20 +52,17 @@ class IslandStateMachine(
     private var dwellTimer: Runnable? = null
     private var notifDwellMs = IslandConstants.DWELL_NOTIF
 
-    /**
-     * While held (e.g. the user is typing an inline reply), no dwell timer is armed so the
-     * blob stays on screen. A user-driven dismiss clears the hold.
-     */
+    // held while the user is typing a reply, no dwell timer runs then
     private var dismissalHeld = false
 
-    /** One-shot expiry for transient signals (charging/volume). */
+    // flag so a transient only auto-hides once
     private var transientDismiss = false
 
     fun setNotifDwellMs(ms: Long) {
         notifDwellMs = ms
     }
 
-    /** Prevents dwell timers from firing while [held] (e.g. inline reply in progress). */
+    // no dwell timers while this is held
     fun holdDismissal(held: Boolean) {
         dismissalHeld = held
         if (held) {
@@ -78,21 +72,21 @@ class IslandStateMachine(
         }
     }
 
-    /** Deliver a signal. Returns true if it was accepted (shown, morphed or queued). */
+    // returns true whenever we did something with the signal
     fun accept(signal: IslandSignal): Boolean {
         val cur = current
         if (cur == null) {
             show(signal)
             return true
         }
-        // Same signal updating itself -> MORPH.
+        // same id means it's an update, morph in place
         if (signal.id == cur.id) {
             current = signal
             listener?.onMorph(signal)
             armDwell(signal)
             return true
         }
-        // Let the key speak, then bring the sticky blob back.
+        // let the key chip show, then put the sticky one back on top
         if (signal.kind == SignalKind.EXTRA_KEY && !dismissalHeld) {
             if (cur.isSticky) {
                 queue.removeAll { it.id == cur.id }
@@ -108,13 +102,13 @@ class IslandStateMachine(
             queue.addFirst(signal)
             return true
         }
-        // A sticky signal is showing and a non-sticky one arrives -> queue it.
+        // sticky is showing, so the transient waits in line
         if (cur.isSticky && !signal.isSticky) {
             if (queue.size >= 3) queue.removeFirst()
             queue.addLast(signal)
             return true
         }
-        // Higher-priority wins; otherwise queue the loser.
+        // higher priority interrupts, everything else gets queued
         if (signal.priority >= cur.priority || !cur.isSticky) {
             show(signal)
         } else if (queue.size < 3) {
@@ -142,7 +136,7 @@ class IslandStateMachine(
         armDwell(signal)
     }
 
-    /** User requested expand (tap / swipe down / long press). */
+    // tap, swipe or long press all land here
     fun userExpand() {
         if (state != IslandState.COLLAPSED && state != IslandState.EMERGING &&
             state != IslandState.COLLAPSING
@@ -155,14 +149,14 @@ class IslandStateMachine(
         armDwell(current ?: return)
     }
 
-    /** User requested collapse (tap background / tap outside). */
+    // tap outside or back gesture
     fun userCollapse() {
         if (state != IslandState.EXPANDED && state != IslandState.EXPANDING) return
         state = IslandState.COLLAPSING
         listener?.onCollapse()
     }
 
-    /** User dismissed (swipe up). */
+    // swiped off screen
     fun userDismiss() {
         dismissalHeld = false
         dismiss()
@@ -173,7 +167,7 @@ class IslandStateMachine(
         cancelDwell()
         state = IslandState.DISSOLVING
         listener?.onDismiss()
-        // Pop the next queued signal once this one is gone.
+        // show whatever was waiting behind it
         if (queue.isNotEmpty()) {
             val next = queue.removeFirst()
             current = next
@@ -182,10 +176,7 @@ class IslandStateMachine(
             armDwell(next)
         } else {
             current = null
-            // petalOS bug fix: nothing ever reports the end of the view's dissolve animation
-            // back here, so the machine used to park in DISSOLVING forever (visible as
-            // "state=DISSOLVING signal=null" in the SystemUI dump). The machine is done with
-            // this signal — the view animates out on its own — so go straight to HIDDEN.
+            // the dissolve never calls back, so just mark it hidden
             state = IslandState.HIDDEN
         }
     }
@@ -203,20 +194,19 @@ class IslandStateMachine(
                 val payload = signal.payload as? NotificationPayload
                 if (payload != null && (payload.progressMax > 0 || payload.progressIndeterminate)) {
                     if (payload.progressMax > 0 && payload.progressCurrent >= payload.progressMax) {
-                        // Finished: give a beat for the 100% pill to read, then fade.
+                        // at 100%? hold the pill a moment before it goes
                         dwellTimer = mainExecutor.executeDelayed(
                             { dismiss() },
                             IslandConstants.PROGRESS_DONE_DWELL_MS,
                         )
                     }
-                    // In-flight progress: no dwell. The blob persists (collapsed pill) until the
-                    // notification is removed, completes, or another blob replaces it.
+                    // still downloading, leave it up
                     return
                 }
                 armNotificationDwell(signal)
             }
             SignalKind.CHARGING -> {
-                // expanded 2s -> collapsed 2s -> hidden
+                // expanded for a bit, then collapsed, then gone
                 transientDismiss = false
                 dwellTimer = mainExecutor.executeDelayed({
                     if (state == IslandState.EXPANDED) {
@@ -233,7 +223,7 @@ class IslandStateMachine(
                 dwellTimer = mainExecutor.executeDelayed({ dismiss() }, IslandConstants.DWELL_VOLUME)
             }
             else -> {
-                // transient non-sticky: dismiss after the signal's ttl
+                // everything else uses the signal ttl
                 val ttl = signal.ttlMs.takeIf { it > 0 } ?: notifDwellMs
                 dwellTimer = mainExecutor.executeDelayed({ dismiss() }, ttl)
             }
@@ -241,7 +231,7 @@ class IslandStateMachine(
     }
 
     private fun armNotificationDwell(signal: IslandSignal) {
-        // Emerge as the small capsule, then auto-expand, dwell expanded, collapse, dwell, fade.
+        // the whole notif routine in nested timers
         dwellTimer = mainExecutor.executeDelayed({
             state = IslandState.EXPANDING
             listener?.onExpand()

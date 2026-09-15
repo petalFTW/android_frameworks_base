@@ -21,6 +21,7 @@ import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.os.Bundle;
+import android.os.VibrationEffect;
 import android.util.AttributeSet;
 import android.util.PathParser;
 import android.view.Choreographer;
@@ -32,24 +33,24 @@ import android.view.View;
 
 import com.android.systemui.res.R;
 
-// petalOS volume HUD: a near-black capsule that springs out of the physical volume-key edge
+// volume capsule that springs from the volume key
 public class PetalVolumeOverlayView extends View implements Choreographer.FrameCallback {
 
-    // ---- locked geometry (dp) ----
+    // fixed dp values
     private static final float SIZE_SCALE = 1.35f;
-    static final float CW = 34f * SIZE_SCALE;        // capsule width
-    static final float CH = 160f * SIZE_SCALE;       // capsule length
-    static final float RAD = 14f * SIZE_SCALE;       // front corner radius
-    static final float JOINT = 34f * SIZE_SCALE;     // joint curve depth
-    // Max spring overshoot of the open scale (sx) used when sizing the host window.
+    static final float CW = 34f * SIZE_SCALE;        // width of the capsule
+    static final float CH = 160f * SIZE_SCALE;       // length of the capsule
+    static final float RAD = 14f * SIZE_SCALE;       // rounding on the front corner
+    static final float JOINT = 34f * SIZE_SCALE;     // how far the joint bows
+    // overshoot factor used for window sizing
     private static final float OVERSHOOT = 1.15f;
-    // Shadow blur + offset, shake amplitude and safety padding (dp) for the window frame.
+    // shadow, shake and padding for the frame
     private static final float SHADOW_DP = 34f;
     private static final float SHAKE_DP = 5.5f;
     private static final float PAD_DP = 8f;
-    // Read the rocker anchor from PetalUiConfig.
+    // anchor read at runtime from PetalUiConfig
 
-    // ---- locked springs ----
+    // spring settings
     private static final float SPRING_STIFFNESS = 420f;
     private static final float SPRING_DAMPING = 0.56f;
     private static final float FILL_DAMPING = 0.88f;
@@ -59,37 +60,64 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
 
     private final float mDensity;
 
-    // User-tunable placement (read once per overlay instance).
+    // placement read once at construction
     private final boolean mEdgeLeft;
 
-    /** Current display rotation; the drawing frame is rotated to match (landscape support). */
+    // drawing rotates with this
     private int mRotation = android.view.Surface.ROTATION_0;
 
     private final PetalSpring mOpen = new PetalSpring(0f);
     private final PetalSpring mContour = new PetalSpring(0f);
     private final PetalSpring mFill = new PetalSpring(0f);
 
-    /** Notified when the user taps anywhere on the HUD to dismiss it. */
+    // user tapped to close
     public interface OnDismissListener {
         void onDismissRequested();
     }
 
-    /** Notified as the user drags their finger along the capsule to scrub the volume. */
+    // drag reports from the scrub
     public interface OnScrubListener {
         void onScrub(float fraction);
         void onScrubEnd();
     }
 
+    // hold cycles to the next stream
+    public interface OnStreamHoldListener {
+        void onStreamHoldCycle();
+    }
+
+    public static final int STREAM_MEDIA = 0;
+    public static final int STREAM_RING = 1;
+    public static final int STREAM_NOTIF = 2;
+
+    private static final long STREAM_HOLD_MS = 420L;
+
     private OnDismissListener mDismissListener;
     private OnScrubListener mScrubListener;
+    private OnStreamHoldListener mStreamHoldListener;
+
+    // stream shown by the glyph
+    private int mStream = STREAM_MEDIA;
+
+    // hold fired but the finger is still down
+    private boolean mHoldCycled = false;
+    private float mHoldX = 0f;
+    private float mHoldY = 0f;
 
     private int mVolumeSteps = 1;
-    private float mLevel = 0f;   // target level fraction 0..1
+    private float mLevel = 0f;   // 0..1 target level
     private boolean mMuted = false;
     private boolean mShowing = false;
     private boolean mHasShown = false;
-    /** True between ACTION_DOWN and UP/CANCEL while the user is scrubbing the capsule. */
+    // finger down on the capsule
     private boolean mScrubbing = false;
+
+    private final Runnable mStreamHoldRunnable = () -> {
+        if (!mScrubbing) return;
+        mHoldCycled = true;
+        PetalUtils.vibrate(getContext(), VibrationEffect.EFFECT_TICK);
+        if (mStreamHoldListener != null) mStreamHoldListener.onStreamHoldCycle();
+    };
 
     private boolean mFrameScheduled = false;
     private long mLastFrameNanos = 0L;
@@ -106,6 +134,13 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
             "M15.5 9.2a4 4 0 0 1 0 5.6M17.9 6.8a7.4 7.4 0 0 1 0 10.4");
     private final Path mMuteX = PathParser.createPathFromPathData(
             "M16 9l5 6M21 9l-5 6");
+    private final Path mHandset = PathParser.createPathFromPathData(
+            "M6.6 10.8c1.4 2.8 3.8 5.1 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 "
+            + "1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1C10.6 21 3 13.4 3 4c0-.6.4-1 1-1h3.5"
+            + "c.6 0 1 .4 1 1 0 1.2.2 2.4.6 3.6.1.3 0 .7-.2 1l-2.3 2.2z");
+    private final Path mBell = PathParser.createPathFromPathData(
+            "M12 22a2 2 0 0 0 2-2h-4a2 2 0 0 0 2 2zm6-6v-5c0-3.1-1.6-5.6-4.5-6.3V4"
+            + "a1.5 1.5 0 0 0-3 0v.7C7.6 5.4 6 7.9 6 11v5l-2 2v1h16v-1l-2-2z");
 
     public PetalVolumeOverlayView(Context context) {
         this(context, null);
@@ -123,12 +158,12 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
         setContentDescription(context.getString(R.string.petal_accessibility_volume));
     }
 
-    /** Depth (portrait-space width) of the HUD drawing frame, in px. */
+    // window width, px
     static int hudDepthPx(float density) {
         return Math.round((CW * OVERSHOOT + SHADOW_DP + PAD_DP) * density);
     }
 
-    /** Length (portrait-space height) of the HUD drawing frame, in px. */
+    // window height, px
     static int hudLengthPx(float density) {
         return Math.round((CH + 2f * JOINT * OVERSHOOT + SHAKE_DP + SHADOW_DP + PAD_DP) * density);
     }
@@ -143,13 +178,13 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
-        // The window resizes when the device rotates; re-read the rotation so the HUD hugs
+        // re-read rotation after a resize
         if (getDisplay() != null) {
             mRotation = getDisplay().getRotation();
         }
     }
 
-    /** Update the volume level (fraction 0..1) and mute state. */
+    // set level and mute state
     public void setVolume(float fraction, boolean muted, int steps) {
         mVolumeSteps = Math.max(1, steps);
         boolean changed = mMuted != muted || mLevel != PetalUtils.clamp(fraction, 0f, 1f);
@@ -168,7 +203,23 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
         mScrubListener = listener;
     }
 
-    /** Spring the capsule out of the bezel edge. */
+    public void setOnStreamHoldListener(OnStreamHoldListener listener) {
+        mStreamHoldListener = listener;
+    }
+
+    // switch the stream glyph
+    public void setStream(int stream) {
+        if (mStream == stream) return;
+        mStream = stream;
+        ensureFrame();
+    }
+
+    // whether a scrub is active
+    public boolean isScrubbing() {
+        return mScrubbing;
+    }
+
+    // animate the capsule out
     public void show() {
         mShowing = true;
         requestFocus();
@@ -181,7 +232,7 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
         ensureFrame();
     }
 
-    /** Retract the capsule back into the bezel edge. */
+    // animate it back in
     public void dismiss() {
         mShowing = false;
         mOpen.set(0f);
@@ -189,7 +240,7 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
         ensureFrame();
     }
 
-    /** Trigger the over-limit decaying vertical jiggle. */
+    // bump past max, start the jiggle
     public void shake() {
         mShakeStartNanos = System.nanoTime();
         ensureFrame();
@@ -247,11 +298,11 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
     @Override
     protected void onDraw(Canvas canvas) {
         if (!mShowing && mOpen.resting() && mContour.resting() && mOpen.value < 0.002f) {
-            return; // fully retracted
+            return; // nothing to draw
         }
 
         boolean landscape = PetalUtils.isLandscapeRotation(mRotation);
-        // Keep the drawing in portrait coordinates.
+        // treat everything as portrait internally
         float spaceW = landscape ? getHeight() : getWidth();
         float spaceH = landscape ? getWidth() : getHeight();
         boolean edgeLeft = mEdgeLeft;
@@ -266,7 +317,7 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
         float sy = 1f + 0.18f * (contour - o);
         float opacity = PetalUtils.clamp(o * 2.4f, 0f, 1f);
 
-        // The host window carries the configured anchor.
+        // the window already handles the anchor
         float cy = spaceH * 0.5f;
         float w = CW * mDensity;
         float h = CH * mDensity;
@@ -279,7 +330,7 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
         canvas.save();
         canvas.translate(0f, mShakeDp * mDensity);
 
-        // Dark body + joint as a single filled path, with a soft drop shadow.
+        // body and joint, one path with shadow
         mBodyPaint.setColor(PetalUtils.COLOR_DIALOG);
         mBodyPaint.setStyle(Paint.Style.FILL);
         mBodyPaint.setAlpha((int) (255f * opacity));
@@ -289,7 +340,7 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
         canvas.drawPath(body, mBodyPaint);
         mBodyPaint.clearShadowLayer();
 
-        // Reveal the fill and glyph without squashing them.
+        // slide fill and glyph in, no squashing
         int save = canvas.save();
         canvas.clipPath(body);
         canvas.translate((edgeLeft ? -1f : 1f) * w * (1f - o), 0f);
@@ -307,7 +358,7 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
                 : atMax ? PetalUtils.COLOR_FILL_MAX : PetalUtils.COLOR_FILL_WHITE;
         int glowColor = muted ? 0x338E8E93 : atMax ? 0x55FF453A : 0x2EFFFFFF;
 
-        // Fill toward the physical top, whatever the screen rotation.
+        // fill always grows toward the physical top
         float capsuleBottom = cy + h / 2f;
         float left = capsuleLeft + pad;
         float right = capsuleLeft + w - pad;
@@ -328,7 +379,7 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
         boolean covered = fillHeight > pad + iconW * 1.35f;
         int glyphColor = muted ? PetalUtils.COLOR_FILL_MAX
                 : covered ? PetalUtils.COLOR_GLYPH_DARK : PetalUtils.COLOR_GLYPH_LIGHT;
-        drawSpeaker(canvas, iconCx, iconCy, iconW, glyphColor, muted, opacity,
+        drawStreamGlyph(canvas, iconCx, iconCy, iconW, glyphColor, muted, opacity,
                 PetalUtils.glyphUprightAngle(mRotation));
 
         canvas.restoreToCount(save);
@@ -336,27 +387,34 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
         canvas.restoreToCount(saveOrientation);
     }
 
-    private void drawSpeaker(Canvas canvas, float cx, float cy, float size, int color,
+    private void drawStreamGlyph(Canvas canvas, float cx, float cy, float size, int color,
             boolean muted, float opacity, float uprightAngle) {
         float scale = size / 24f;
         int save = canvas.save();
         canvas.translate(cx - 12f * scale, cy - 12f * scale);
         canvas.scale(scale, scale);
         if (uprightAngle != 0f) {
-            // Counter-rotate the glyph so it stays screen-upright when the HUD is rotated onto
+            // keep the glyph upright
             canvas.rotate(uprightAngle, 12f, 12f);
         }
 
         mGlyphPaint.setColor(color);
         mGlyphPaint.setAlpha((int) (255f * opacity));
         mGlyphPaint.setStyle(Paint.Style.FILL);
-        canvas.drawPath(mSpeakerBody, mGlyphPaint);
 
-        mGlyphPaint.setStyle(Paint.Style.STROKE);
-        mGlyphPaint.setStrokeWidth(1.9f);
-        mGlyphPaint.setStrokeCap(Paint.Cap.ROUND);
-        mGlyphPaint.setStrokeJoin(Paint.Join.ROUND);
-        canvas.drawPath(muted ? mMuteX : mSpeakerWaves, mGlyphPaint);
+        if (mStream == STREAM_RING) {
+            canvas.drawPath(mHandset, mGlyphPaint);
+        } else if (mStream == STREAM_NOTIF) {
+            canvas.drawPath(mBell, mGlyphPaint);
+        } else {
+            canvas.drawPath(mSpeakerBody, mGlyphPaint);
+
+            mGlyphPaint.setStyle(Paint.Style.STROKE);
+            mGlyphPaint.setStrokeWidth(1.9f);
+            mGlyphPaint.setStrokeCap(Paint.Cap.ROUND);
+            mGlyphPaint.setStrokeJoin(Paint.Join.ROUND);
+            canvas.drawPath(muted ? mMuteX : mSpeakerWaves, mGlyphPaint);
+        }
 
         canvas.restoreToCount(save);
     }
@@ -443,10 +501,10 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
-        // The host window only covers the HUD frame, so touches here are on the capsule:
+        // the window hugs the hud, outside means outside
         if (event.getActionMasked() == MotionEvent.ACTION_OUTSIDE) {
             if (mScrubbing) {
-                // petalOS bug fix: the finger left the HUD frame mid-drag. Never dismiss in that
+                // lost the finger mid-drag, just end the scrub
                 mScrubbing = false;
                 if (mScrubListener != null) {
                     mScrubListener.onScrubEnd();
@@ -472,16 +530,35 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
                 mScrubbing = true;
+                mHoldCycled = false;
+                mHoldX = event.getX();
+                mHoldY = event.getY();
+                removeCallbacks(mStreamHoldRunnable);
+                postDelayed(mStreamHoldRunnable, STREAM_HOLD_MS);
                 mScrubListener.onScrub(fraction);
                 return true;
             case MotionEvent.ACTION_MOVE:
+                if (mHoldCycled) {
+                    // after a hold, wait for movement before scrubbing
+                    float dx = event.getX() - mHoldX;
+                    float dy = event.getY() - mHoldY;
+                    if (dx * dx + dy * dy < 36f * 36f) return true;
+                    mHoldCycled = false;
+                    mHoldX = event.getX();
+                    mHoldY = event.getY();
+                }
+                removeCallbacks(mStreamHoldRunnable);
                 mScrubListener.onScrub(fraction);
                 return true;
             case MotionEvent.ACTION_CANCEL:
+                removeCallbacks(mStreamHoldRunnable);
+                mHoldCycled = false;
                 mScrubbing = false;
                 mScrubListener.onScrubEnd();
                 return true;
             case MotionEvent.ACTION_UP:
+                removeCallbacks(mStreamHoldRunnable);
+                mHoldCycled = false;
                 mScrubbing = false;
                 mScrubListener.onScrub(fraction);
                 mScrubListener.onScrubEnd();
@@ -491,7 +568,7 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
         }
     }
 
-    // Map touches back to the portrait volume track.
+    // convert the touch to a portrait track position
     private float fractionForScreenPoint(float x, float y) {
         float[] p = PetalUtils.invertOrientationTransform(mRotation,
                 getWidth(), getHeight(), x, y);
@@ -507,7 +584,7 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
             return 0f;
         }
         float bottomY = cy + h / 2f - pad;
-        // Drag toward the physical top to raise the volume.
+        // up on the screen means louder
         return PetalUtils.clamp((bottomY - drawingY) / trackH, 0f, 1f);
     }
 }

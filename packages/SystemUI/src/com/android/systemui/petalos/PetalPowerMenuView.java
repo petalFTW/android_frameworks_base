@@ -42,23 +42,23 @@ import com.android.systemui.res.R;
 
 import java.util.List;
 
-// petalOS power menu: a near-black capsule that springs out of the power-key edge (right bezel),
+// power capsule that springs from the power-key edge
 public class PetalPowerMenuView extends View implements Choreographer.FrameCallback {
 
-    // ---- locked geometry (dp) ----
+    // locked-in dp sizes
     private static final float SIZE_SCALE = 1.35f;
-    private static final float CW = 40f * SIZE_SCALE;        // reference width
-    private static final float RAD = 20f * SIZE_SCALE;       // corner radius (container = rad + 6)
-    private static final float GLOW = 2f;                    // neon glow radius
-    private static final float JOINT = 34f * SIZE_SCALE;     // joint curve depth
-    // Read the power-key anchor from PetalUiConfig.
+    private static final float CW = 40f * SIZE_SCALE;        // base width
+    private static final float RAD = 20f * SIZE_SCALE;       // corner radius, container adds 6
+    private static final float GLOW = 2f;                    // glow spread
+    private static final float JOINT = 34f * SIZE_SCALE;     // how deep the joint curves
+    // anchor comes from PetalUiConfig at runtime
 
-    // ---- locked springs ----
+    // spring constants
     private static final float SPRING_STIFFNESS = 380f;
     private static final float SPRING_DAMPING = 0.52f;
     private static final long STAGGER_MS = 70L;
 
-    // ---- long-press ----
+    // long press tuning
     private static final long LONG_PRESS_TIMEOUT_MS = 450L;
     private static final float POP_STIFFNESS = 900f;
     private static final float POP_DAMPING = 0.30f;
@@ -85,7 +85,7 @@ public class PetalPowerMenuView extends View implements Choreographer.FrameCallb
         void onDismissRequested();
     }
 
-    /** Notified when a button enters or leaves the armed (gold) state. */
+    // button arms, i.e. turns gold
     public interface OnArmListener {
         void onArmChanged(int index, boolean armed);
     }
@@ -93,11 +93,11 @@ public class PetalPowerMenuView extends View implements Choreographer.FrameCallb
     private final float mDensity;
     private final Handler mHandler = new Handler(Looper.getMainLooper());
 
-    // User-tunable placement (read once per overlay instance).
+    // read once when the overlay is built
     private final boolean mEdgeLeft;
     private final float mAnchorFraction;
 
-    /** Current display rotation; the drawing frame is rotated to match (landscape support). */
+    // rotation drives the canvas transform
     private int mRotation = android.view.Surface.ROTATION_0;
 
     private final PetalSpring[] mSprings = new PetalSpring[3];
@@ -176,7 +176,7 @@ public class PetalPowerMenuView extends View implements Choreographer.FrameCallb
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
-        // The window resizes when the device rotates; re-read the rotation so the menu hugs
+        // size change means rotation, grab it again
         if (getDisplay() != null) {
             mRotation = getDisplay().getRotation();
         }
@@ -196,7 +196,7 @@ public class PetalPowerMenuView extends View implements Choreographer.FrameCallb
         mArmListener = listener;
     }
 
-    /** Pop the menu out of the bezel, buttons staggering top to bottom. */
+    // open, stagger the buttons downward
     public void show() {
         mHandler.removeCallbacksAndMessages(null);
         mShowing = true;
@@ -220,7 +220,7 @@ public class PetalPowerMenuView extends View implements Choreographer.FrameCallb
         ensureFrame();
     }
 
-    /** Retract the menu back into the bezel, buttons staggering bottom to top. */
+    // close, stagger the buttons back up
     public void dismiss() {
         mHandler.removeCallbacksAndMessages(null);
         mShowing = false;
@@ -311,11 +311,11 @@ public class PetalPowerMenuView extends View implements Choreographer.FrameCallb
             }
         }
         if (!mShowing && settled && maxo < 0.002f) {
-            return; // fully retracted
+            return; // all the way in, nothing to draw
         }
 
         boolean landscape = PetalUtils.isLandscapeRotation(mRotation);
-        // Keep the drawing in portrait coordinates.
+        // draw everything as if portrait
         float spaceW = landscape ? getHeight() : getWidth();
         float spaceH = landscape ? getWidth() : getHeight();
         boolean edgeLeft = mEdgeLeft;
@@ -342,7 +342,7 @@ public class PetalPowerMenuView extends View implements Choreographer.FrameCallb
         float jointDepth = JOINT * mDensity * scX;
         float xTail = (JOINT * 0.5f + 10f) * mDensity * scX;
 
-        // Dark body + joint as one filled path (bezel-anchored, mirrored for the left edge),
+        // body and joint share one path, flipped on the left
         mBodyPaint.setColor(PetalUtils.COLOR_DIALOG);
         mBodyPaint.setStyle(Paint.Style.FILL);
         mBodyPaint.setAlpha((int) (255f * opacity));
@@ -353,7 +353,7 @@ public class PetalPowerMenuView extends View implements Choreographer.FrameCallb
                 mBodyPaint);
         mBodyPaint.clearShadowLayer();
 
-        // Buttons live in the container coordinate space, scaled to match the body.
+        // buttons are in container space, scaled with the body
         int save = canvas.save();
         canvas.scale(scX, scY, edgeX, cy);
 
@@ -421,7 +421,7 @@ public class PetalPowerMenuView extends View implements Choreographer.FrameCallb
         canvas.translate(-12f * scale, -12f * scale);
         canvas.scale(scale, scale);
         if (uprightAngle != 0f) {
-            // Counter-rotate the glyph so it stays screen-upright in landscape.
+            // undo the rotation to keep glyphs upright
             canvas.rotate(uprightAngle, 12f, 12f);
         }
 
@@ -449,7 +449,7 @@ public class PetalPowerMenuView extends View implements Choreographer.FrameCallb
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
-        // Touch coordinates are in screen space; hit rects live in (possibly rotated) drawing
+        // invert the touch point to match rotated hit rects
         float[] p = PetalUtils.invertOrientationTransform(mRotation,
                 getWidth(), getHeight(), event.getX(), event.getY());
         float x = p[0];
@@ -525,14 +525,14 @@ public class PetalPowerMenuView extends View implements Choreographer.FrameCallb
         mPop[idx].snap(POP_SNAP);
         mPop[idx].set(1f);
         if (mArmedIndex == idx) {
-            // Already armed: holding again returns the button to normal.
+            // already armed so a second hold cancels
             mArmedIndex = -1;
             mGoldTarget[idx] = 0f;
             if (mArmListener != null) {
                 mArmListener.onArmChanged(idx, false);
             }
         } else {
-            // Arm the button (turn gold, wait for a confirming tap).
+            // turn it gold and wait for the confirm tap
             if (mArmedIndex >= 0) {
                 mGoldTarget[mArmedIndex] = 0f;
             }

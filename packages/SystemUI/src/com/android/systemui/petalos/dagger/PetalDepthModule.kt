@@ -23,7 +23,7 @@ import dagger.Module
 import dagger.multibindings.ClassKey
 import dagger.multibindings.IntoMap
 
-/** Dagger bindings for the petalOS 3D depth lock screen. */
+// dagger plumbing for the depth controller
 @Module
 abstract class PetalDepthModule {
     @Binds

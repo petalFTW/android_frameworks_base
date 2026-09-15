@@ -18,16 +18,13 @@ package com.android.systemui.island
 
 import com.android.systemui.island.presenter.IslandPresenter
 
-/**
- * The two logical anchors of the island. LEFT owns notifications and calls, RIGHT owns media and
- * system events. Physical placement follows START/END so RTL locales mirror correctly.
- */
+// left slot: notifs and calls. right slot: media
 enum class Cluster { LEFT, RIGHT }
 
-/** The size class an island renders in. */
+// how big the island is drawn
 enum class Form { CHIP, CAPSULE, EXPANDED }
 
-/** Categorises a signal so the router and presenters know how to bind it. */
+// tells the router and presenters which binding to use
 enum class SignalKind {
     NOTIFICATION,
     CALL_INCOMING,
@@ -46,28 +43,22 @@ enum class SignalKind {
     EXTRA_KEY,
 }
 
-/**
- * An immutable input event from the system. Updates to an existing signal are delivered as a new
- * [IslandSignal] with the same [id]; the state machine treats that as a MORPH, not a replace.
- */
+// same id morphs instead of replacing
 data class IslandSignal(
     val id: String,
     val kind: SignalKind,
     val cluster: Cluster,
     val priority: Int,
     val initialForm: Form,
-    /** 0 means sticky (stays until the underlying condition ends). */
+    // ttl 0 means stay until the source ends it
     val ttlMs: Long,
-    /** Type-specific payload, e.g. a [android.service.notification.StatusBarNotification]. */
+    // kind-specific data, usually a status bar notif
     val payload: Any? = null,
 ) {
     val isSticky: Boolean get() = ttlMs == 0L
 }
 
-/**
- * Creates a presenter for a signal. Kept as a factory so presenters (which hold media controllers,
- * pending intents, etc.) are created lazily and released deterministically.
- */
+// builds presenters lazily so they can be dropped
 fun interface PresenterFactory {
     fun create(context: android.content.Context, signal: IslandSignal): IslandPresenter
 }

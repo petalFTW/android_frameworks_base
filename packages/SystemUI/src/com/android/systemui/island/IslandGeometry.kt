@@ -22,10 +22,7 @@ import android.view.WindowInsets
 import android.view.WindowManager
 import com.android.systemui.res.R
 
-/**
- * Density-independent geometry for the island. All values come from `dimens.xml` (§4), converted
- * to pixels once here.
- */
+// dp helpers for the island; dimens read once
 class IslandGeometry(context: Context, windowManager: WindowManager) {
 
     private val res = context.resources
@@ -65,7 +62,7 @@ class IslandGeometry(context: Context, windowManager: WindowManager) {
 
     val screenWidth: Int = context.resources.displayMetrics.widthPixels
 
-    /** Vertical placement: top inset from the cutout or system bars. */
+    // top inset, cutout or status bar, whichever is taller
     val statusBarTopInset: Int = run {
         val insets = windowManager.maximumWindowMetrics.windowInsets
         val cutout = insets.getInsetsIgnoringVisibility(WindowInsets.Type.displayCutout())
@@ -77,10 +74,7 @@ class IslandGeometry(context: Context, windowManager: WindowManager) {
         com.android.internal.R.dimen.status_bar_height
     )
 
-    /**
-     * The island's top Y edge in collapsed form: vertically centred on the status bar when it is
-     * tall enough, otherwise `topInset + topOffset`.
-     */
+    // collapsed y, centred in the bar when it's tall enough
     val collapsedTopY: Int =
         if (statusBarHeight >= dp(32f)) {
             (statusBarTopInset / 2 + dp(2f)) - capsuleHeight / 2

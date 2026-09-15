@@ -26,11 +26,7 @@ import android.view.View
 import androidx.annotation.ColorInt
 import com.android.systemui.island.IslandConstants
 
-/**
- * Animated equalizer bars. 3 bars in the collapsed capsule, 6 in the expanded card. Height is
- * driven by independent sine waves from a single [Choreographer.FrameCallback] shared by all bars.
- * The callback is unregistered whenever the view is not visible.
- */
+// animated bars, 3 collapsed or 6 expanded
 class EqualizerView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
@@ -53,7 +49,7 @@ class EqualizerView @JvmOverloads constructor(
             requestLayout()
         }
 
-    /** When false, bars freeze at 30% height. */
+    /** false freezes the bars at 30%. */
     var active: Boolean = true
 
     fun setBarColor(@ColorInt color: Int) {

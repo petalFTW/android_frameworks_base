@@ -28,7 +28,7 @@ import dagger.multibindings.ClassKey
 import dagger.multibindings.ElementsIntoSet
 import dagger.multibindings.IntoMap
 
-/** Dagger bindings for the liquid-drop dynamic island. */
+// island wiring
 @Module(includes = [IslandStatusBarModule::class])
 abstract class IslandModule {
     @Binds
@@ -40,7 +40,7 @@ abstract class IslandModule {
 @Module
 object IslandStatusBarModule {
 
-    /** Registers [StatusBarIconHider] so it learns the status bar view when it's created. */
+    // make the hider listen for the status bar view, ugly but it works
     @Provides
     @ElementsIntoSet
     fun statusBarIconHiderAsLifecycleListener(

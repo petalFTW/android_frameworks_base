@@ -16,13 +16,7 @@
 
 package com.android.systemui.petalos;
 
-/**
- * Mass-1 underdamped spring integrator matching the petalOS web prototype exactly.
- *
- * <p>The integrator is equivalent to Android's {@code SpringForce} (stiffness + damping ratio),
- * but is stepped manually so the spring value can be baked into custom geometry every frame.
- * Sub-steps at ~4 ms for numeric parity with the prototype.
- */
+// hand rolled spring, values feed into geometry
 public final class PetalSpring {
 
     public float value;
@@ -35,19 +29,19 @@ public final class PetalSpring {
         velocity = 0f;
     }
 
-    /** Set the target the spring settles toward. */
+    // where it should end up
     public void set(float targetValue) {
         target = targetValue;
     }
 
-    /** Jump instantly to {@code v} (no animation). */
+    // teleport, no animation
     public void snap(float v) {
         value = v;
         target = v;
         velocity = 0f;
     }
 
-    /** Advance the spring by {@code dt} seconds. */
+    // advance by dt seconds
     public void step(float dt, float stiffness, float dampingRatio) {
         int steps = Math.max(1, (int) Math.ceil(dt / 0.004f));
         float h = dt / steps;
@@ -59,7 +53,7 @@ public final class PetalSpring {
         }
     }
 
-    /** True when the spring is effectively settled. */
+    // settled enough to stop drawing
     public boolean resting() {
         return Math.abs(velocity) < 0.0015f && Math.abs(value - target) < 0.0015f;
     }

@@ -22,11 +22,7 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.RuntimeShader
 
-/**
- * Preferred metaball renderer (§8.2): an AGSL smooth-union SDF of a rounded box and a droplet,
- * producing the liquid "drop fused to the capsule" look. Gated on API 33+; use
- * [MetaballPathRenderer] below that.
- */
+// runtime shader union, api 33 and up
 class MetaballShaderRenderer {
     private val shader = RuntimeShader(SHADER_SOURCE)
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { shader = this@MetaballShaderRenderer.shader }

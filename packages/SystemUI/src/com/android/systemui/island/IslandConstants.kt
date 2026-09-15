@@ -16,15 +16,9 @@
 
 package com.android.systemui.island
 
-/**
- * Non-overridable constants for the liquid-drop dynamic island.
- *
- * Everything here is a density-independent pixel value (converted at use sites with
- * [TypedValue.applyDimension]) or a millisecond duration. Geometric values that may need to be
- * overridden per-device live in `dimens.xml`; see [IslandGeometry].
- */
+// island tunables, dp and ms
 object IslandConstants {
-    // Metaball / liquid-drop
+    // metaball / droplet
     const val METABALL_K_MAX_DP = 22f
     const val METABALL_BREAK_DISTANCE_DP = 64f
     const val DROPLET_BASE_RADIUS_DP = 14f
@@ -54,10 +48,10 @@ object IslandConstants {
     const val DWELL_VOLUME = 1500L
     const val MEDIA_PAUSED_AUTOHIDE = 30_000L
 
-    /** How long a finished (100%) progress blob lingers before fading out. */
+    // how long a finished progress blob hangs around
     const val PROGRESS_DONE_DWELL_MS = 2500L
 
-    // Spring parameters (stiffness, damping ratio)
+    // springs: stiffness, damping ratio
     const val SPRING_EXPAND_STIFFNESS = 380f
     const val SPRING_EXPAND_DAMPING = 0.78f
     const val SPRING_COLLAPSE_STIFFNESS = 520f

@@ -28,19 +28,13 @@ import kotlin.math.hypot
 import kotlin.math.min
 import kotlin.math.sin
 
-/**
- * Fallback metaball renderer (§8.4): builds the smooth union of the island's edge circle and the
- * droplet via the classic tangent/bezier construction. Runs everywhere; visually ~85% of the shader.
- */
+// path-based metaball for devices without the shader
 class MetaballPathRenderer {
     private val path = Path()
     private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val rimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
 
-    /**
-     * Draws the metaball union of a rounded box and a droplet. When the droplet is close enough to
-     * the box's leading edge it bulges and fuses; otherwise the two are drawn separately.
-     */
+    // merge the droplet with the box when they're close
     fun draw(
         canvas: Canvas,
         box: RectF,
@@ -54,7 +48,7 @@ class MetaballPathRenderer {
         rimWidth: Float,
     ) {
         if (dropR <= 0f) {
-            // no droplet: just the box
+            // no droplet, plain box
             fillPaint.color = tintColor
             path.reset()
             path.addRoundRect(box, cornerRadius, cornerRadius, Path.Direction.CW)
@@ -63,7 +57,7 @@ class MetaballPathRenderer {
             return
         }
 
-        // The island's edge circle sits at the box's leading edge (approximated by the corner).
+        // leading edge circle, approximated by the corner
         val edgeX = box.left + cornerRadius
         val edgeY = box.centerY()
         val edgeR = cornerRadius
@@ -75,8 +69,7 @@ class MetaballPathRenderer {
         if (dropR > 0f) path.addCircle(dropCx, dropCy, dropR, Path.Direction.CW)
         canvas.drawPath(path, fillPaint)
 
-        // A soft union isn't achievable with a plain path; when the droplet overlaps the edge
-        // circle we additionally draw a connecting neck so they read as one blob.
+        // plain paths can't do a soft union, so bridge the two circles with a neck
         val d = hypot(dropCx - edgeX, dropCy - edgeY)
         if (d < edgeR + dropR + k && d > 0.001f) {
             drawNeck(canvas, edgeX, edgeY, edgeR, dropCx, dropCy, dropR, d, tintColor)
@@ -110,7 +103,7 @@ class MetaballPathRenderer {
         val neck = Path().apply {
             moveTo(p1x, p1y)
             cubicTo(p1x + nx * handle, p1y + ny * handle, p3x + nx * handle, p3y + ny * handle, p3x, p3y)
-            // outer arc around B from p3 to p4
+            // outer arc around B
             val startAngleB = Math.toDegrees(atan2(p3y - by, p3x - bx).toDouble()).toFloat()
             val endAngleB = Math.toDegrees(atan2(p4y - by, p4x - bx).toDouble()).toFloat()
             var sweepB = endAngleB - startAngleB
@@ -133,7 +126,7 @@ class MetaballPathRenderer {
     }
 
     private fun drawRim(canvas: Canvas, rimColor: Int, rimWidth: Float) {
-        // A simple rim stroke of the fill path. The shader path does this more precisely.
+        // rim over the whole path; the shader version does this better
         rimPaint.color = rimColor
         rimPaint.strokeWidth = rimWidth
         canvas.drawPath(path, rimPaint)

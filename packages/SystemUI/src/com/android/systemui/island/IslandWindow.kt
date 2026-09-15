@@ -20,16 +20,16 @@ import android.content.Context
 import android.graphics.PixelFormat
 import android.view.Gravity
 import android.view.WindowManager
+import com.android.systemui.island.render.IslandMiniNotifSource
 
-/**
- * Owns the WindowManager window that hosts both island clusters (§12.1).
- */
+// the window that holds both islands
 class IslandWindow(
     private val context: Context,
     private val windowManager: WindowManager,
     private val geometry: IslandGeometry,
+    miniNotifSource: IslandMiniNotifSource? = null,
 ) {
-    val rootView = IslandRootView(context, geometry)
+    val rootView = IslandRootView(context, geometry, miniNotifSource)
 
     private var layoutParams = buildLayoutParams()
     private var added = false
@@ -40,7 +40,7 @@ class IslandWindow(
             windowManager.addView(rootView, layoutParams)
             added = true
         } catch (e: RuntimeException) {
-            // Window type conflict or permission issue; island is non-fatal.
+            // bad type or missing permission. log it and move on
             android.util.Log.w(TAG, "Failed to add island window", e)
         }
     }
@@ -56,10 +56,7 @@ class IslandWindow(
         layoutParams = buildLayoutParams()
     }
 
-    /**
-     * Toggles window focus so an inline reply field can receive text input (the IME only
-     * attaches to focusable windows). No-op when the state doesn't change.
-     */
+    // flip focus so the reply field can pull up the ime
     fun setFocusable(focusable: Boolean) {
         val isFocusable = layoutParams.flags and
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE == 0
@@ -81,9 +78,7 @@ class IslandWindow(
     }
 
     private fun buildLayoutParams(): WindowManager.LayoutParams {
-        // Full-height so a tap anywhere outside the island clusters is delivered to the window as
-        // ACTION_OUTSIDE (see IslandRootView), which collapses an expanded blob. The touchable
-        // region stays island-only, so all other touches still pass through to the app below.
+        // full height, so outside taps reach ACTION_OUTSIDE
         return WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
@@ -103,9 +98,7 @@ class IslandWindow(
             setTrustedOverlay()
             title = "IslandWindow"
             packageName = context.packageName
-            // NOTE: backdrop blur (FLAG_BLUR_BEHIND) is intentionally NOT set here. Cross-window
-            // blur is window-shaped, so on this full-width window it would frost the entire width
-            // of the screen, not just the island blobs.
+            // no blur: the window is full width, it would frost everything
         }
     }
 

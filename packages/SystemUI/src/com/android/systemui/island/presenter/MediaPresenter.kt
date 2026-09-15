@@ -17,6 +17,7 @@
 package com.android.systemui.island.presenter
 
 import android.content.Context
+import android.content.Intent
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -29,6 +30,7 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -40,7 +42,7 @@ import com.android.systemui.island.render.RecordView
 import com.android.systemui.island.render.GlassSeekBar
 import com.android.systemui.island.render.PaletteTinter
 
-// Spin the record while the music plays.
+// spins while the track is playing
 class MediaPresenter(
     private val context: Context,
     private val geometry: IslandGeometry,
@@ -57,12 +59,15 @@ class MediaPresenter(
     private var artistView: TextView? = null
     private var artView: ImageView? = null
     private var accentButtonBg: GradientDrawable? = null
+    private var automixPill: TextView? = null
+    private var automixDecision: Boolean? = null
     private var destroyed = false
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private val callback =
         object : MediaController.Callback() {
             override fun onMetadataChanged(metadata: MediaMetadata?) {
+                transitionDip()
                 updateContent()
                 refreshTint()
             }
@@ -131,7 +136,7 @@ class MediaPresenter(
                 geometry.expandedPadding, geometry.expandedPadding)
         }
 
-        // Top row: album art + title/artist + record
+        // album art, text, then the record
         val topRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -182,9 +187,31 @@ class MediaPresenter(
             geometry.dp(28f), geometry.dp(28f),
         ).apply { marginStart = geometry.dp(10f) })
 
+        // automix button, only when the bridge says so
+        if (automixAvailable()) {
+            automixDecision = automixOn()
+            val pill = TextView(context).apply {
+                setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 11f)
+                typeface = android.graphics.Typeface.create(
+                    "sans-serif", android.graphics.Typeface.BOLD)
+                setPadding(geometry.dp(10f), geometry.dp(5f), geometry.dp(10f), geometry.dp(5f))
+                isClickable = true
+                setOnClickListener { toggleAutomix(accent, onAccent, chipFill, chipStroke, primary) }
+            }
+            automixPill = pill
+            paintAutomixPill(accent, onAccent, chipFill, chipStroke, primary)
+            topRow.addView(pill, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { marginStart = geometry.dp(8f) })
+        } else {
+            automixPill = null
+            automixDecision = null
+        }
+
         root.addView(topRow)
 
-        // Glass seek bar
+        // seek bar
         seekBar = GlassSeekBar(context).apply {
             setMetrics(geometry.dp(4f).toFloat(), geometry.dp(5f).toFloat())
             trackColor = if (dark) 0x40FFFFFF.toInt() else 0x33101012.toInt()
@@ -206,7 +233,7 @@ class MediaPresenter(
             ).apply { topMargin = geometry.dp(6f) },
         )
 
-        // Transport controls: prominent accent play/pause between two glass skip buttons.
+        // skip, play/pause, skip
         val transport = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
@@ -274,8 +301,67 @@ class MediaPresenter(
         tintListener = listener
     }
 
+    // automix helpers
+
+    private fun automixAvailable(): Boolean {
+        val cr = context.contentResolver
+        val enabled = Settings.System.getInt(cr, "petal_bridge_enabled", 0) == 1
+        val ask = Settings.System.getInt(cr, "petal_bridge_ask", 0) == 1
+        return enabled && ask
+    }
+
+    private fun automixOn(): Boolean = automixDecisions[controller.packageName] == true
+
+    private fun paintAutomixPill(
+        accent: Int,
+        onAccent: Int,
+        chipFill: Int,
+        chipStroke: Int,
+        primary: Int,
+    ) {
+        val pill = automixPill ?: return
+        val on = automixDecision == true
+        pill.text = if (on) "Transition on" else "Transition off"
+        pill.background = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = geometry.dp(14f).toFloat()
+            if (on) {
+                setColor(accent)
+                setStroke(geometry.dp(1f), accent)
+            } else {
+                setColor(chipFill)
+                setStroke(geometry.dp(1f), chipStroke)
+            }
+        }
+        pill.setTextColor(if (on) onAccent else primary)
+    }
+
+    private fun toggleAutomix(
+        accent: Int,
+        onAccent: Int,
+        chipFill: Int,
+        chipStroke: Int,
+        primary: Int,
+    ) {
+        val on = !(automixDecision == true)
+        automixDecision = on
+        // Remembered in memory only, so a collapse keeps the choice but a
+        // SystemUI restart defaults the app back to Automix off.
+        automixDecisions[controller.packageName] = on
+        sendAutomix(on)
+        paintAutomixPill(accent, onAccent, chipFill, chipStroke, primary)
+    }
+
+    private fun sendAutomix(approved: Boolean) {
+        val intent = Intent("org.rab1d.bridge.action.SET_AUTOMIX")
+            .setPackage("org.rab1d.bridge")
+            .putExtra("package", controller.packageName)
+            .putExtra("approved", approved)
+        context.sendBroadcast(intent)
+    }
+
     override fun onPrimaryAction(): Boolean {
-        // Tapping the card background just collapses; it must not toggle playback.
+        // card tap only collapses, never toggles playback
         return true
     }
 
@@ -292,16 +378,28 @@ class MediaPresenter(
         seekBar = null
         playPause = null
         accentButtonBg = null
+        automixPill = null
+        automixDecision = null
         record?.stop()
         record = null
     }
 
-    /**
-     * Re-derives the accent from the (new) artwork on a track change and pushes it to the glass
-     * via [tintListener], keeping the island tint in sync with the current song.
-     */
-    private fun refreshTint() {
-        val metadata = controller.metadata
+    // quick dip + fade back in when the track flips
+    private fun transitionDip() {
+        val art = artView ?: return
+        art.animate().cancel()
+        art.animate()
+            .alpha(0.15f)
+            .setDuration(180L)
+            .withEndAction {
+                if (destroyed) return@withEndAction
+                art.animate().alpha(1f).setDuration(700L).start()
+            }
+            .start()
+    }
+
+    // new art means new accent, push it through
+    private fun refreshTint() {        val metadata = controller.metadata
         val embedded = metadata?.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
             ?: metadata?.getBitmap(MediaMetadata.METADATA_KEY_ART)
         if (embedded != null) {
@@ -327,13 +425,13 @@ class MediaPresenter(
         applyAccentToContent()
     }
 
-    /** Current accent color (derived tint, falling back to the theme primary). */
+    // accent, or the theme foreground if there's no tint
     private fun currentAccent(): Int {
         val primary = if (isDarkTheme()) Color.WHITE else 0xFF101012.toInt()
         return cachedTint?.accent ?: primary
     }
 
-    /** Re-colors the already-bound expanded content after the accent changes. */
+    // repaint the already-built card after a tint change
     private fun applyAccentToContent() {
         val accent = currentAccent()
         val onAccent = if (Color.luminance(accent) > 0.5f) 0xFF101012.toInt() else Color.WHITE
@@ -358,7 +456,7 @@ class MediaPresenter(
         record?.active = playing
     }
 
-    /** Loads the album art, preferring embedded bitmaps and falling back to the art URI. */
+    // embedded art first, then try the uri
     private fun loadArtwork(metadata: MediaMetadata?) {
         val embedded = metadata?.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
             ?: metadata?.getBitmap(MediaMetadata.METADATA_KEY_ART)
@@ -434,12 +532,8 @@ class MediaPresenter(
         if (duration <= 0) return
         val state = controller.playbackState ?: return
         val position = if (state.state == PlaybackState.STATE_PLAYING) {
-            // Some players report a zero/negative speed even while playing; treat that as 1x so
-            // the extrapolated position keeps advancing in step with the song.
+            // speed 0 breaks the math, clamp it to 1x
             val speed = if (state.playbackSpeed > 0f) state.playbackSpeed else 1f
-            // PlaybackState timestamps use the elapsed-realtime clock. Comparing them with wall
-            // clock time makes the computed position jump to the end while playback is active;
-            // paused playback appeared correct only because that path uses state.position as-is.
             val elapsed =
                 if (state.lastPositionUpdateTime > 0L) {
                     (SystemClock.elapsedRealtime() - state.lastPositionUpdateTime).coerceAtLeast(0L)
@@ -475,7 +569,13 @@ class MediaPresenter(
     }
 
     private companion object {
-        /** How often the seek bar polls playback position while expanded and playing. */
+        // seek bar poll interval while playing
         const val TICK_MS = 500L
+
+        // AutoMix is opt-in per app and defaults to off. The choice is kept in
+        // memory only, so it survives an island collapse but a SystemUI restart
+        // starts every app back at "Automix off" instead of reviving a stale
+        // approval the user made in an earlier session.
+        val automixDecisions = HashMap<String, Boolean>()
     }
 }

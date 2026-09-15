@@ -27,31 +27,21 @@ import com.android.systemui.res.R;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/**
- * petalOS one-time-password detection + copy. Notifications whose text carries an OTP-looking
- * code get a system-injected "Copy code" action (shade rows via NotificationTemplateViewWrapper
- * and island cards via NotificationPresenter).
- */
+// pulls otp codes out of notification text
 public final class PetalOtpHelper {
 
-    /**
-     * 5-8 digit groups. A single space / NBSP / hyphen / dot between digits is consumed so the
-     * candidate boundaries are well-defined, but any candidate containing punctuation is then
-     * disavowed in {@link #extract}: separators glued onto a digit run usually indicate logcat
-     * timestamps or ids, not a code. Four-digit groups are ignored: too many false positives
-     * (years, quantities).
-     */
+    // 5-8 digits, excludes timestamps and words
     private static final Pattern OTP_PATTERN = Pattern.compile(
             "(?<![0-9\\p{L}])(\\d[ \\u00A0\\-.]?){4,7}\\d(?![0-9\\p{L}])");
 
-    /** Words that typically accompany a one-time password. Matched case-insensitively. */
+    // context words that usually mean a code
     private static final Pattern OTP_HINT = Pattern.compile(
             "code|otp|pin|passcode|password|verif|confirm|auth|login|token",
             Pattern.CASE_INSENSITIVE);
 
     private PetalOtpHelper() {}
 
-    /** Returns the first OTP-looking code found in {@code texts}, or null when none. */
+    // first match wins, null if nothing looks right
     public static String extract(CharSequence... texts) {
         if (texts == null) return null;
         for (int i = 0; i < texts.length; i++) {
@@ -61,13 +51,9 @@ public final class PetalOtpHelper {
             Matcher m = OTP_PATTERN.matcher(text);
             while (m.find()) {
                 String code = m.group();
-                // Disavow any candidate that carries punctuation: a separator inside the
-                // match almost always means it spans unrelated tokens (logcat timestamps,
-                // version strings, ids) rather than a human-readable "123 456" code. Only
-                // a contiguous digit run is trusted.
+                // separators mean it's a timestamp, skip
                 if (!TextUtils.isDigitsOnly(code)) continue;
-                // A digit group without any supporting wording is only trusted when it is a
-                // standalone 6-digit code (the overwhelmingly common OTP length).
+                // without a hint only a lone 6-digit passes
                 if (!hasHint && code.length() != 6) continue;
                 android.util.Log.d("PetalOtp", "matched '" + code + "' in field " + i);
                 return code;
@@ -76,7 +62,7 @@ public final class PetalOtpHelper {
         return null;
     }
 
-    /** Copies {@code code} to the clipboard and confirms with a toast. */
+    // copy it and show the toast
     public static void copyToClipboard(Context context, String code) {
         ClipboardManager cm = context.getSystemService(ClipboardManager.class);
         if (cm != null) {

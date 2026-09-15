@@ -25,12 +25,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-/** Animation mode mirrors the three-option "Animation selection" setting. */
+// island animation mode
 enum class AnimationMode { DYNAMIC, CLASSIC, NONE }
 
-/**
- * Thin, reactive wrapper over the `island_*` Settings.Secure keys.
- */
+// reads the island_* secure settings
 @SysUISingleton
 class IslandSettings @Inject constructor(
     @Application private val context: Context,

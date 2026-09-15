@@ -25,11 +25,7 @@ import android.view.MotionEvent
 import android.view.View
 import androidx.annotation.ColorInt
 
-/**
- * A minimal liquid-glass seek bar: a rounded translucent track, an accent-tinted progress fill and
- * a round thumb that swells while dragging. Replaces the stock [android.widget.SeekBar] so the
- * media card's transport row matches the island's visual language.
- */
+// seek bar sized to sit in the transport row
 class GlassSeekBar @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
@@ -54,18 +50,18 @@ class GlassSeekBar @JvmOverloads constructor(
     private var thumbRadius = 6f
     private var dragging = false
 
-    /** True while the user is actively scrubbing. */
+    /** true while scrubbing. */
     var isDragging: Boolean = false
         private set
 
-    /** Progress in [0, 1]. */
+    /** 0 to 1. */
     var progress: Float = 0f
         set(value) {
             field = value.coerceIn(0f, 1f)
             invalidate()
         }
 
-    /** Invoked with the final fraction (0..1) when a drag or tap commits. */
+    /** Called with the final fraction when the drag ends. */
     var onSeek: ((Float) -> Unit)? = null
 
     fun setMetrics(trackHeightPx: Float, thumbRadiusPx: Float) {

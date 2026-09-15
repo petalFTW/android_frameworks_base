@@ -30,21 +30,31 @@ import android.view.accessibility.AccessibilityManager;
 
 import com.android.systemui.plugins.GlobalActions.GlobalActionsManager;
 
-// Hosts the petalOS volume overlay and power menu as full-screen, bezel-anchored
+// owns the volume hud and power menu windows
 public class PetalOverlayHost {
 
     private static final long VOLUME_DISMISS_DELAY_MS = 1600L;
     private static final long DISMISS_TEARDOWN_MS = 900L;
 
-    /** Notified on every power-menu show/hide transition, whatever caused it. */
+    // called on power menu open and close
     public interface OnPowerMenuVisibilityListener {
         void onPowerMenuVisibilityChanged(boolean showing);
     }
 
-    /** Notified as the user scrubs the volume HUD (fraction 0..1). */
+    // scrub callbacks during a drag
     public interface OnVolumeScrubListener {
         void onVolumeScrub(float fraction);
         void onVolumeScrubEnd();
+    }
+
+    // long-press on the glyph asks for next stream
+    public interface OnVolumeStreamCycleListener {
+        void onStreamCycleRequested();
+    }
+
+    // fired after the hud is gone
+    public interface OnVolumeDismissedListener {
+        void onVolumeDismissed();
     }
 
     private final WindowManager mWindowManager;
@@ -56,10 +66,22 @@ public class PetalOverlayHost {
     private boolean mPowerMenuShowing = false;
     private OnPowerMenuVisibilityListener mPowerVisibilityListener;
     private OnVolumeScrubListener mVolumeScrubListener;
+    private OnVolumeStreamCycleListener mVolumeStreamCycleListener;
+    private OnVolumeDismissedListener mVolumeDismissedListener;
     private GlobalActionsManager mGlobalActionsManager;
     private int mLastVolumeLevel = Integer.MIN_VALUE;
 
-    private final Runnable mVolumeDismissRunnable = this::dismissVolume;
+    private final Runnable mVolumeDismissRunnable = new Runnable() {
+        @Override
+        public void run() {
+            // still dragging, try again later
+            if (mVolumeView != null && mVolumeView.isScrubbing()) {
+                mHandler.postDelayed(this, 400L);
+                return;
+            }
+            dismissVolume();
+        }
+    };
 
     private boolean mWatchingDisplay;
     private final DisplayManager.DisplayListener mDisplayListener =
@@ -110,36 +132,54 @@ public class PetalOverlayHost {
         return mPowerMenuShowing;
     }
 
-    /** True while the volume overlay window is up (not during teardown). */
+    // volume window exists
     public boolean isVolumeShowing() {
         return mVolumeView != null;
     }
 
-    /** Registers the listener that observes power-menu show/hide transitions. */
+    // set the power visibility callback
     public void setOnPowerMenuVisibilityListener(OnPowerMenuVisibilityListener listener) {
         mPowerVisibilityListener = listener;
     }
 
-    /** Registers the listener that receives volume-scrub updates. */
+    // set the scrub callback
     public void setOnVolumeScrubListener(OnVolumeScrubListener listener) {
         mVolumeScrubListener = listener;
     }
 
-    /** Supplies the framework-side manager that performs shutdown/reboot. */
+    public void setOnVolumeStreamCycleListener(OnVolumeStreamCycleListener listener) {
+        mVolumeStreamCycleListener = listener;
+    }
+
+    public void setOnVolumeDismissedListener(OnVolumeDismissedListener listener) {
+        mVolumeDismissedListener = listener;
+    }
+
+    // swap the glyph to the given stream
+    public void setVolumeStreamGlyph(int stream) {
+        if (mVolumeView != null) {
+            mVolumeView.setStream(stream);
+        }
+    }
+
+    // global actions handles shutdown and reboot
     public void setGlobalActionsManager(GlobalActionsManager manager) {
         mGlobalActionsManager = manager;
     }
 
-    /** Show (or refresh) the volume overlay with the given level and mute state. */
+    // bring up the hud or update it
     public void showVolume(int level, int levelMin, int levelMax, boolean muted, boolean shake) {
         watchDisplay();
         if (mVolumeView == null) {
             mVolumeView = new PetalVolumeOverlayView(mContext);
             mVolumeView.setOnDismissListener(() -> dismissVolume());
+            mVolumeView.setOnStreamHoldListener(() -> {
+                if (mVolumeStreamCycleListener != null) mVolumeStreamCycleListener.onStreamCycleRequested();
+            });
             mVolumeView.setOnScrubListener(new PetalVolumeOverlayView.OnScrubListener() {
                 @Override
                 public void onScrub(float fraction) {
-                    // Keep the HUD up while the user is dragging.
+                    // hold the hud open during a drag
                     mHandler.removeCallbacks(mVolumeDismissRunnable);
                     if (mVolumeScrubListener != null) {
                         mVolumeScrubListener.onVolumeScrub(fraction);
@@ -157,7 +197,7 @@ public class PetalOverlayHost {
             });
             mWindowManager.addView(mVolumeView, volumeLayoutParams(false));
         } else {
-            // Re-position the HUD if the display rotated between volume adjustments.
+            // rotation may have moved it, fix the layout
             WindowManager.LayoutParams desired = volumeLayoutParams(false);
             WindowManager.LayoutParams current =
                     (WindowManager.LayoutParams) mVolumeView.getLayoutParams();
@@ -170,7 +210,7 @@ public class PetalOverlayHost {
                 try {
                     mWindowManager.updateViewLayout(mVolumeView, current);
                 } catch (IllegalArgumentException ignored) {
-                    // view not attached yet
+                    // not attached yet, ignore
                 }
             }
         }
@@ -186,7 +226,7 @@ public class PetalOverlayHost {
             mVolumeView.shake();
         }
 
-        // Re-arm the auto-dismiss on every adjustment so the overlay stays up while the
+        // restart the dismiss timer each change
         mHandler.removeCallbacks(mVolumeDismissRunnable);
         mHandler.postDelayed(mVolumeDismissRunnable, volumeDismissDelay());
     }
@@ -199,10 +239,15 @@ public class PetalOverlayHost {
 
     public void dismissVolume() {
         mHandler.removeCallbacks(mVolumeDismissRunnable);
+        // don't dismiss mid-scrub, it eats the touch
+        if (mVolumeView != null && mVolumeView.isScrubbing()) {
+            mHandler.postDelayed(mVolumeDismissRunnable, 400L);
+            return;
+        }
         if (mVolumeView != null) {
             PetalUtils.vibrate(mContext, VibrationEffect.EFFECT_CLICK);
             mVolumeView.dismiss();
-            // Restore touch pass-through immediately while the out animation plays.
+            // let touches through while it animates out
             mWindowManager.updateViewLayout(mVolumeView, volumeLayoutParams(true));
             PetalVolumeOverlayView v = mVolumeView;
             mVolumeView = null;
@@ -210,14 +255,17 @@ public class PetalOverlayHost {
                 try {
                     mWindowManager.removeView(v);
                 } catch (IllegalArgumentException ignored) {
-                    // already removed
+                    // gone already
                 }
             }, DISMISS_TEARDOWN_MS);
         }
         stopWatchingDisplayIfHidden();
+        if (mVolumeDismissedListener != null) {
+            mVolumeDismissedListener.onVolumeDismissed();
+        }
     }
 
-    /** Show the power menu. */
+    // open the power menu
     public void showPowerMenu() {
         watchDisplay();
         if (mPowerView != null) {
@@ -277,7 +325,7 @@ public class PetalOverlayHost {
         if (mPowerView != null) {
             PetalUtils.vibrate(mContext, VibrationEffect.EFFECT_CLICK);
             mPowerView.dismiss();
-            // Restore touch pass-through immediately while the out animation plays.
+            // same trick, touches pass while it closes
             mWindowManager.updateViewLayout(mPowerView, powerLayoutParams(true));
             PetalPowerMenuView v = mPowerView;
             mPowerView = null;
@@ -285,7 +333,7 @@ public class PetalOverlayHost {
                 try {
                     mWindowManager.removeView(v);
                 } catch (IllegalArgumentException ignored) {
-                    // already removed
+                    // already gone
                 }
             }, DISMISS_TEARDOWN_MS);
         }
@@ -293,7 +341,7 @@ public class PetalOverlayHost {
     }
 
     private WindowManager.LayoutParams volumeLayoutParams(boolean notTouchable) {
-        // petalOS bug fix: the volume HUD window used to be MATCH_PARENT touchable, which
+        // window used to be full screen and ate every touch
         final float density = mContext.getResources().getDisplayMetrics().density;
         final int depth = PetalVolumeOverlayView.hudDepthPx(density);
         final int length = PetalVolumeOverlayView.hudLengthPx(density);
@@ -321,7 +369,7 @@ public class PetalOverlayHost {
         lp.gravity = Gravity.LEFT | Gravity.TOP;
         lp.setTitle("PetalOSVolumeHud");
         lp.setFitInsetsTypes(0);
-        // petalOS bug fix: without the trusted-overlay input privilege the HUD's drag stream can
+        // needs trusted overlay or input dies
         lp.setTrustedOverlay();
 
         final float anchorFraction = PetalUiConfig.getVolumeAnchorFraction(mContext);
@@ -346,7 +394,7 @@ public class PetalOverlayHost {
     }
 
     private WindowManager.LayoutParams powerLayoutParams(boolean notTouchable) {
-        // TYPE_STATUS_BAR_SUB_PANEL layers above the keyguard, matching the stock
+        // sub panel type sits above the keyguard
         return baseLayoutParams(WindowManager.LayoutParams.TYPE_STATUS_BAR_SUB_PANEL, notTouchable);
     }
 

@@ -30,14 +30,7 @@ import java.io.PrintWriter
 import javax.inject.Inject
 import org.petalos.config.PetalConfig
 
-/**
- * Applies the petalOS lock screen clock style.
- *
- * Styles are a catalog of font-axis presets (weight / width / roundness / slant) plus an optional
- * accent seed colour, delivered through the stock clock-customisation pipeline
- * ([Settings.Secure.LOCK_SCREEN_CUSTOM_CLOCK_FACE]) so the existing [com.android.systemui.shared.clocks.ClockRegistry]
- * renders them without any direct coupling to the keyguard views.
- */
+// drives the stock clock pipeline for petal styles
 @SysUISingleton
 class PetalClockStyleController @Inject constructor(
     @Application private val context: Context,
@@ -65,16 +58,14 @@ class PetalClockStyleController @Inject constructor(
 
         val resolver = context.contentResolver
         if (style <= 0) {
-            // Empty string clears the custom clock face, restoring the stock clock.
+            // blank clears the custom face
             Settings.Secure.putString(resolver, Settings.Secure.LOCK_SCREEN_CUSTOM_CLOCK_FACE, "")
             return
         }
 
         val axes = ClockAxisStyle()
         var seedColor: Int? = null
-        // The style index is carried through the stock clock-customisation pipeline
-        // (LOCK_SCREEN_CUSTOM_CLOCK_FACE) and consumed by DefaultClockController, which maps it to a
-        // distinct typeface / layout. The accent style additionally tints the clock.
+        // stash the style index in the face setting
         axes.put(STYLE_AXIS, style.toFloat())
         if (style == STYLE_NEON) {
             seedColor = context.getColor(android.R.color.system_accent1_500)

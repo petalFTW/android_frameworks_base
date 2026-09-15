@@ -32,10 +32,7 @@ import com.android.systemui.statusbar.notification.collection.NotificationEntry
 import com.android.systemui.statusbar.notification.collection.notifcollection.NotifCollectionListener
 import javax.inject.Inject
 
-/**
- * Merges cellular call state (via [TelephonyManager]) with the dialer's CallStyle notification for
- * caller identity and accept/decline intents (§11.3).
- */
+// watches call state and the dialer notif, feeds caller info and the answer buttons
 class CallSignalSource @Inject constructor(
     @Application private val context: Context,
     private val notifPipeline: NotifPipeline,
@@ -45,6 +42,9 @@ class CallSignalSource @Inject constructor(
     private var callState = TelephonyManager.CALL_STATE_IDLE
     private var callStyle: Notification? = null
     private var callStyleKey: String? = null
+    // the dialer posts a plain call notif with no CallStyle, so watch that too
+    private var dialerNotif: Notification? = null
+    private var dialerKey: String? = null
 
     private val telephonyCallback =
         object : TelephonyCallback(), TelephonyCallback.CallStateListener {
@@ -56,12 +56,23 @@ class CallSignalSource @Inject constructor(
 
     private val collectionListener =
         object : NotifCollectionListener {
-            override fun onEntryAdded(entry: NotificationEntry) = onCallStyle(entry)
-            override fun onEntryUpdated(entry: NotificationEntry) = onCallStyle(entry)
+            override fun onEntryAdded(entry: NotificationEntry) {
+                onCallStyle(entry)
+                onDialerNotif(entry)
+            }
+            override fun onEntryUpdated(entry: NotificationEntry) {
+                onCallStyle(entry)
+                onDialerNotif(entry)
+            }
             override fun onEntryRemoved(entry: NotificationEntry, reason: Int) {
                 if (entry.key == callStyleKey) {
                     callStyle = null
                     callStyleKey = null
+                    update()
+                }
+                if (entry.key == dialerKey) {
+                    dialerNotif = null
+                    dialerKey = null
                     update()
                 }
             }
@@ -79,6 +90,15 @@ class CallSignalSource @Inject constructor(
         if (!n.isStyle(Notification.CallStyle::class.java)) return
         callStyle = n
         callStyleKey = entry.key
+        update()
+    }
+
+    private fun onDialerNotif(entry: NotificationEntry) {
+        val sbn = entry.sbn
+        if (sbn.packageName != DIALER_PKG) return
+        if (sbn.notification.category != Notification.CATEGORY_CALL) return
+        dialerNotif = sbn.notification
+        dialerKey = entry.key
         update()
     }
 
@@ -118,10 +138,10 @@ class CallSignalSource @Inject constructor(
     }
 
     private fun buildPayload(incoming: Boolean): CallPayload {
-        val n = callStyle
+        val n = callStyle ?: dialerNotif
         val extras = n?.extras
-        val person = extras?.getParcelable(Notification.EXTRA_CALL_PERSON, Person::class.java)
-        val name = person?.name?.toString() ?: "Call"
+        val person = callStyle?.extras?.getParcelable(Notification.EXTRA_CALL_PERSON, Person::class.java)
+        val name = resolveCallerName(extras, person)
         val subtitle = if (incoming) "Incoming call" else "Ongoing call"
         return CallPayload(
             name = name,
@@ -137,5 +157,35 @@ class CallSignalSource @Inject constructor(
                 Notification.EXTRA_HANG_UP_INTENT, android.app.PendingIntent::class.java
             ),
         )
+    }
+
+    // try the person first, then the title, then the contacts db
+    private fun resolveCallerName(extras: android.os.Bundle?, person: Person?): String {
+        person?.name?.toString()?.takeIf { it.isNotBlank() }?.let { return it }
+        val title = extras?.getString(Notification.EXTRA_TITLE)?.trim().orEmpty()
+        if (title.isNotEmpty() && !looksLikeNumber(title)) return title
+        val number = title.ifEmpty { person?.uri?.removePrefix("tel:") ?: "" }
+        lookupContactName(number)?.let { return it }
+        return number.ifEmpty { "Call" }
+    }
+
+    private fun looksLikeNumber(s: String): Boolean =
+        s.isNotEmpty() && s.all { it.isDigit() || " +()-#*.N".contains(it) }
+
+    private fun lookupContactName(number: String): String? {
+        if (number.isEmpty() || number.none { it.isDigit() }) return null
+        return runCatching {
+            val uri = android.provider.ContactsContract.PhoneLookup.CONTENT_FILTER_URI
+                .buildUpon().appendPath(number).build()
+            context.contentResolver.query(
+                uri,
+                arrayOf(android.provider.ContactsContract.PhoneLookup.DISPLAY_NAME),
+                null, null, null,
+            )?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+        }.getOrNull()
+    }
+
+    private companion object {
+        const val DIALER_PKG = "com.android.dialer"
     }
 }

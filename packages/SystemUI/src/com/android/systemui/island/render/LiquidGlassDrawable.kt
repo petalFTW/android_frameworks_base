@@ -35,7 +35,7 @@ import android.graphics.drawable.Drawable
 import androidx.annotation.ColorInt
 import kotlin.random.Random
 
-/** Smoked glass, grain and an animated rim. */
+/** glass fill, grain and a moving rim. */
 class LiquidGlassDrawable : Drawable() {
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val grainPaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -64,18 +64,29 @@ class LiquidGlassDrawable : Drawable() {
     private var rimWidthPx = 1f
     private var grainAlpha = DEFAULT_GRAIN_ALPHA
 
-    /** -1f disables the sheen; [0..1] sweeps it across the surface. */
+    /** sheen position, -1 is off. */
     private var specularProgress = -1f
     private var sheenShader: LinearGradient? = null
 
-    /** Film-grain speckle; the bitmap is generated once per process. */
+    /** grain bitmap, built once. */
     private var grainShader: BitmapShader? = null
 
-    /** Neon rim sweep: -1f disables it; [0..1] sweeps a glowing comet once around the rim. */
+    /** neon sweep position, -1 is off. */
     private var neonProgress = -1f
 
     @ColorInt
     private var neonColor = Color.TRANSPARENT
+
+    /** chroma shimmer sweep position, -1 is off. bridge transitions only. */
+    private var chromaProgress = -1f
+    private val chromaMatrix = Matrix()
+    private val chromaPaints = arrayOf(
+        Paint(Paint.ANTI_ALIAS_FLAG),
+        Paint(Paint.ANTI_ALIAS_FLAG),
+        Paint(Paint.ANTI_ALIAS_FLAG),
+    )
+    private val chromaShaders = arrayOfNulls<LinearGradient>(3)
+
 
     private val neonMeasurePath = Path()
     private val neonSegment = Path()
@@ -147,18 +158,25 @@ class LiquidGlassDrawable : Drawable() {
         }
     }
 
+    fun setChromaProgress(progress: Float) {
+        if (chromaProgress != progress) {
+            chromaProgress = progress
+            invalidateSelf()
+        }
+    }
+
     override fun draw(canvas: Canvas) {
         val bounds = bounds
         if (bounds.isEmpty) return
         updateGeometry()
 
-        // Tint fill
+        // fill
         paint.color = tint
         paint.style = Paint.Style.FILL
         paint.shader = null
         canvas.drawPath(path, paint)
 
-        // Film grain
+        // grain
         canvas.drawPath(path, grainPaint)
 
         if (rimShaderDirty) {
@@ -169,14 +187,17 @@ class LiquidGlassDrawable : Drawable() {
         }
         canvas.drawPath(rimPath, rimPaint)
 
-        // Neon rim sweep
+        // neon sweep
         if (neonProgress >= 0f) drawNeon(canvas)
 
-        // Specular sheen
+        // chroma shimmer, the prism fart
+        if (chromaProgress in 0f..1f) drawChroma(canvas)
+
+        // sheen
         if (specularProgress in 0f..1f) drawSheen(canvas)
     }
 
-    // Sweep the rim.
+    // draw the comet
     private fun drawNeon(canvas: Canvas) {
         val perimeter = neonMeasure.length
         if (perimeter <= 0f) return
@@ -191,7 +212,7 @@ class LiquidGlassDrawable : Drawable() {
         if (wrapped <= 0f) {
             neonMeasure.getSegment(tail, head, neonSegment, true)
         } else {
-            // The head has wrapped past the start; stitch the two ends of the loop.
+            // head wrapped past the start, stitch both ends together
             neonMeasure.getSegment(tail, perimeter, neonSegment, true)
             wrappedNeon.reset()
             neonMeasure.getSegment(0f, wrapped, wrappedNeon, true)
@@ -213,7 +234,7 @@ class LiquidGlassDrawable : Drawable() {
         canvas.drawPath(neonSegment, neonCorePaint)
     }
 
-    /** Fades the comet in as it leaves the start and out as it returns to it. */
+    /** fade the comet in and out at the ends. */
     private fun neonAlpha(p: Float): Float {
         val fadeIn = (p / NEON_FADE_FRACTION).coerceIn(0f, 1f)
         val fadeOut = ((1f - p) / NEON_FADE_FRACTION).coerceIn(0f, 1f)
@@ -223,10 +244,42 @@ class LiquidGlassDrawable : Drawable() {
     private fun neonWithAlpha(alpha: Int): Int =
         Color.argb(alpha, Color.red(neonColor), Color.green(neonColor), Color.blue(neonColor))
 
+    // three offset rgb bands sliding across like a busted prism
+    private fun drawChroma(canvas: Canvas) {
+        val w = rect.width()
+        val bandW = w * 0.30f
+        val travel = w + bandW * 2.5f
+        val x = rect.left - bandW * 2f + chromaProgress * travel
+        val a = chromaAlpha(chromaProgress)
+
+        val save = canvas.save()
+        canvas.clipPath(path)
+        canvas.rotate(-18f, rect.centerX(), rect.centerY())
+        for (i in chromaPaints.indices) {
+            val off = (i - 1) * bandW * 0.24f
+            chromaMatrix.setTranslate(x + off, 0f)
+            chromaShaders[i]?.setLocalMatrix(chromaMatrix)
+            chromaPaints[i].alpha = (a * CHROMA_BAND_ALPHA).toInt()
+            canvas.drawRect(
+                x + off, rect.top - rect.height(), x + off + bandW, rect.bottom + rect.height(),
+                chromaPaints[i],
+            )
+        }
+        canvas.restoreToCount(save)
+    }
+
+    /** ramp in, ramp out, same trick as the neon comet. */
+    private fun chromaAlpha(p: Float): Float {
+        val fadeIn = (p / CHROMA_FADE_FRACTION).coerceIn(0f, 1f)
+        val fadeOut = ((1f - p) / CHROMA_FADE_FRACTION).coerceIn(0f, 1f)
+        return fadeIn * fadeOut
+    }
+
+
     private fun drawSheen(canvas: Canvas) {
         val w = rect.width()
         val h = rect.height()
-        // Band is 40% of the island width, travelling start -> end with a 22deg tilt.
+        // 40% wide band, sliding across at a tilt
         val bandW = w * 0.4f
         val travel = w + bandW
         val x = rect.left - bandW + specularProgress * travel
@@ -235,7 +288,7 @@ class LiquidGlassDrawable : Drawable() {
         sheenShader?.setLocalMatrix(sheenMatrix)
 
         val save = canvas.save()
-        // clip to the rounded rect and rotate ~22deg around the centre
+        // clip to the shape, then rotate
         canvas.clipPath(path)
         canvas.rotate(-22f, rect.centerX(), rect.centerY())
         canvas.drawRect(
@@ -273,15 +326,27 @@ class LiquidGlassDrawable : Drawable() {
         sheenPaint.xfermode = android.graphics.PorterDuffXfermode(
             android.graphics.PorterDuff.Mode.SRC_ATOP
         )
+        // rgb band shaders for the chroma sweep, additive so they glow
+        for (i in chromaShaders.indices) {
+            chromaShaders[i] = LinearGradient(
+                0f, 0f, rect.width() * 0.3f, 0f,
+                intArrayOf(Color.TRANSPARENT, CHROMA_COLORS[i], Color.TRANSPARENT),
+                null, Shader.TileMode.CLAMP,
+            )
+            chromaPaints[i].shader = chromaShaders[i]
+            chromaPaints[i].xfermode = android.graphics.PorterDuffXfermode(
+                android.graphics.PorterDuff.Mode.SCREEN
+            )
+        }
         geometryDirty = false
     }
 
     override fun setAlpha(alpha: Int) {
-        // Alpha is applied via the tint color itself.
+        // alpha comes through the tint colour
     }
 
     override fun setColorFilter(colorFilter: ColorFilter?) {
-        // Not used.
+        // unused
     }
 
     @Deprecated("Deprecated in Java")
@@ -291,16 +356,21 @@ class LiquidGlassDrawable : Drawable() {
         private const val DEFAULT_GRAIN_ALPHA = 0x12
         private const val NOISE_SIZE = 96
 
-        /** Fraction of the rim perimeter occupied by the neon chain. */
+        /** how much of the rim the comet covers. */
         private const val NEON_CHAIN_FRACTION = 0.24f
 
-        /** Fraction of the sweep used to fade the neon in/out at its ends. */
+        /** fade length at each end of the sweep. */
         private const val NEON_FADE_FRACTION = 0.12f
+
+        /** chroma band tuning */
+        private const val CHROMA_FADE_FRACTION = 0.22f
+        private const val CHROMA_BAND_ALPHA = 0x5A
+        private val CHROMA_COLORS = intArrayOf(0xFFFF5050.toInt(), 0xFF50FF9B.toInt(), 0xFF5AA0FF.toInt())
 
         @Volatile
         private var cachedNoise: Bitmap? = null
 
-        /** Static monochrome speckle: mixed light/dark grains with random alpha. */
+        /** one-time noise bitmap. */
         private fun noiseBitmap(): Bitmap {
             cachedNoise?.let { return it }
             val bmp = Bitmap.createBitmap(NOISE_SIZE, NOISE_SIZE, Bitmap.Config.ARGB_8888)

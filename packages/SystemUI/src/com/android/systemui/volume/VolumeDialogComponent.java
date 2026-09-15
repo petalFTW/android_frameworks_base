@@ -20,9 +20,11 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
+import android.media.AudioManager;
 import android.media.VolumePolicy;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.VibrationEffect;
 import android.provider.Settings;
 import android.view.WindowManager.LayoutParams;
 
@@ -33,6 +35,8 @@ import com.android.systemui.demomode.DemoMode;
 import com.android.systemui.demomode.DemoModeController;
 import com.android.systemui.keyguard.KeyguardViewMediator;
 import com.android.systemui.petalos.PetalOverlayHost;
+import com.android.systemui.petalos.PetalUtils;
+import com.android.systemui.petalos.PetalVolumeOverlayView;
 import com.android.systemui.plugins.ActivityStarter;
 import com.android.systemui.plugins.PluginDependencyProvider;
 import com.android.systemui.plugins.VolumeDialog;
@@ -74,11 +78,14 @@ public class VolumeDialogComponent implements VolumeComponent, TunerService.Tuna
     private final KeyguardViewMediator mKeyguardViewMediator;
     private final ActivityStarter mActivityStarter;
     private final PetalOverlayHost mPetalHost;
+    private final AudioManager mAudioManager;
     private VolumeDialog mDialog;
     private VolumePolicy mVolumePolicy;
     private VolumeDialogController.State mLastState;
     private float mLastShownFraction = -1f;
     private boolean mHasShownVolume = false;
+    // stream the HUD rides on; -1 = whatever the volume keys say (media, mostly)
+    private int mPetalStream = -1;
 
     @Inject
     public VolumeDialogComponent(
@@ -100,10 +107,20 @@ public class VolumeDialogComponent implements VolumeComponent, TunerService.Tuna
         // show/state/dismiss callbacks instead of the stock volume panel (whose
         // show path is suppressed in VolumeDialogImpl#showH).
         mPetalHost = new PetalOverlayHost(context);
+        mAudioManager = context.getSystemService(AudioManager.class);
         // petalOS: scrubbing the volume HUD sets the stream level directly.
         mPetalHost.setOnVolumeScrubListener(new PetalOverlayHost.OnVolumeScrubListener() {
             @Override
             public void onVolumeScrub(float fraction) {
+                if (mPetalStream >= 0) {
+                    // user picked a stream by holding the glyph; ride that one
+                    int min = mAudioManager.getStreamMinVolume(mPetalStream);
+                    int max = mAudioManager.getStreamMaxVolume(mPetalStream);
+                    int level = min + Math.round(fraction * (max - min));
+                    level = Math.max(min, Math.min(max, level));
+                    mAudioManager.setStreamVolume(mPetalStream, level, 0);
+                    return;
+                }
                 if (mLastState == null) return;
                 VolumeDialogController.StreamState ss =
                         mLastState.states.get(mLastState.activeStream);
@@ -118,6 +135,19 @@ public class VolumeDialogComponent implements VolumeComponent, TunerService.Tuna
                 // no-op; the host re-arms the auto-dismiss timer.
             }
         });
+        // hold the glyph: media -> ring -> notif -> media
+        mPetalHost.setOnVolumeStreamCycleListener(() -> {
+            mPetalStream = (mPetalStream == -1 || mPetalStream == AudioManager.STREAM_MUSIC)
+                    ? AudioManager.STREAM_RING
+                    : mPetalStream == AudioManager.STREAM_RING
+                    ? AudioManager.STREAM_NOTIFICATION
+                    : AudioManager.STREAM_MUSIC;
+            mPetalHost.setVolumeStreamGlyph(toHudStream(mPetalStream));
+            PetalUtils.vibrate(mContext, VibrationEffect.EFFECT_TICK);
+            updateVolumeOverlay(false);
+        });
+        // HUD gone -> back to plain old media volume, as the prophecy foretold
+        mPetalHost.setOnVolumeDismissedListener(this::resetPetalStream);
         mController.addCallback(mPetalVolumeCallbacks, new Handler(context.getMainLooper()));
         // Allow plugins to reference the VolumeDialogController.
         pluginDependencyProvider.allowPluginDependency(VolumeDialogController.class);
@@ -251,6 +281,7 @@ public class VolumeDialogComponent implements VolumeComponent, TunerService.Tuna
 
         @Override
         public void onDismissRequested(int reason) {
+            resetPetalStream();
             mPetalHost.dismissVolume();
         }
 
@@ -284,6 +315,7 @@ public class VolumeDialogComponent implements VolumeComponent, TunerService.Tuna
 
         @Override
         public void onScreenOff() {
+            resetPetalStream();
             mPetalHost.dismissVolume();
         }
 
@@ -313,30 +345,55 @@ public class VolumeDialogComponent implements VolumeComponent, TunerService.Tuna
         }
     };
 
+    private void resetPetalStream() {
+        if (mPetalStream == -1) return;
+        mPetalStream = -1;
+        mPetalHost.setVolumeStreamGlyph(PetalVolumeOverlayView.STREAM_MEDIA);
+    }
+
+    private static int toHudStream(int stream) {
+        if (stream == AudioManager.STREAM_RING) return PetalVolumeOverlayView.STREAM_RING;
+        if (stream == AudioManager.STREAM_NOTIFICATION) return PetalVolumeOverlayView.STREAM_NOTIF;
+        return PetalVolumeOverlayView.STREAM_MEDIA;
+    }
+
     /**
      * Shows (or refreshes) the petal volume overlay from the latest controller state.
      * Re-arms the auto-dismiss, and fires the over-limit shake when a press did not
      * move the level while already parked at an end of the range.
      */
     private void updateVolumeOverlay(boolean allowShake) {
-        if (mLastState == null) {
-            return;
+        int level;
+        int levelMin;
+        int levelMax;
+        boolean muted;
+        if (mPetalStream >= 0) {
+            // user-picked stream: read levels straight from AudioManager
+            levelMin = mAudioManager.getStreamMinVolume(mPetalStream);
+            levelMax = mAudioManager.getStreamMaxVolume(mPetalStream);
+            level = mAudioManager.getStreamVolume(mPetalStream);
+            muted = level <= levelMin;
+        } else {
+            if (mLastState == null) {
+                return;
+            }
+            VolumeDialogController.StreamState streamState =
+                    mLastState.states.get(mLastState.activeStream);
+            if (streamState == null) {
+                return;
+            }
+            level = streamState.level;
+            levelMin = streamState.levelMin;
+            levelMax = streamState.levelMax;
+            muted = streamState.muted;
         }
-        VolumeDialogController.StreamState streamState =
-                mLastState.states.get(mLastState.activeStream);
-        if (streamState == null) {
-            return;
-        }
-        int range = streamState.levelMax - streamState.levelMin;
-        float fraction = range > 0
-                ? (float) (streamState.level - streamState.levelMin) / (float) range
-                : 0f;
+        int range = levelMax - levelMin;
+        float fraction = range > 0 ? (float) (level - levelMin) / (float) range : 0f;
         fraction = Math.max(0f, Math.min(1f, fraction));
         boolean atLimit = fraction <= 0f || fraction >= 1f;
         boolean shake = allowShake && mHasShownVolume && atLimit
                 && Math.abs(fraction - mLastShownFraction) < 1e-6f;
-        mPetalHost.showVolume(streamState.level, streamState.levelMin,
-                streamState.levelMax, streamState.muted, shake);
+        mPetalHost.showVolume(level, levelMin, levelMax, muted, shake);
         mLastShownFraction = fraction;
         mHasShownVolume = true;
     }

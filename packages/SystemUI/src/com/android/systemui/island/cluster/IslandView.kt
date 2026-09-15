@@ -40,20 +40,20 @@ import com.android.systemui.island.IslandSignal
 import com.android.systemui.island.SignalKind
 import com.android.systemui.island.presenter.IslandPresenter
 import com.android.systemui.island.presenter.IslandTint
+import com.android.systemui.island.render.IslandMiniNotifSource
+import com.android.systemui.island.render.IslandMiniStatusView
 import com.android.systemui.island.render.LiquidGlassDrawable
 import com.android.systemui.island.render.MetaballPathRenderer
 import com.android.systemui.island.render.MetaballShaderRenderer
 import com.android.systemui.island.settings.AnimationMode
 import java.util.function.Consumer
 
-/**
- * One island: a floating, animated capsule that owns shape, motion and touch. Content is owned by
- * an [IslandPresenter].
- */
+// one island. draws the shape, runs motion, handles touch. content is a presenter's job
 class IslandView(
     context: Context,
     val cluster: Cluster,
     private val geometry: IslandGeometry,
+    miniNotifSource: IslandMiniNotifSource? = null,
 ) : FrameLayout(context) {
 
     interface Callbacks {
@@ -68,6 +68,7 @@ class IslandView(
 
     private val glass = LiquidGlassDrawable()
     private val content = FrameLayout(context)
+    private val miniStatus = IslandMiniStatusView(context, cluster, geometry, miniNotifSource)
     private val animator = IslandAnimator(this)
     private val touchHandler = IslandTouchHandler(this, geometry)
     private val metaball = MetaballPathRenderer()
@@ -83,10 +84,10 @@ class IslandView(
     private var emergeP = 0f
     private var emergeAnimator: android.animation.ValueAnimator? = null
 
-    /** Signals that start EXPANDED emerge directly at the card size from the bezel. */
+    // signals that open as a card emerge bigger
     private var pendingRebloom = false
 
-    /** Corner radius used during emergence rendering — capsule or expanded depending on form. */
+    // radius used during the emerge animation
     private var emergeCornerRadius = 0f
 
     private val windowManager =
@@ -100,8 +101,9 @@ class IslandView(
     private var rimTopColor = 0x59FFFFFF.toInt()
     private var accentColor = 0xFFFFFFFF.toInt()
     private var neonAnimator: android.animation.ValueAnimator? = null
+    private var chromaAnimator: android.animation.ValueAnimator? = null
 
-    /** True once the island has grown to its expanded size. */
+    // true while the big card is showing
     var isExpanded: Boolean = false
         private set
 
@@ -140,7 +142,7 @@ class IslandView(
     override fun onTouchEvent(ev: android.view.MotionEvent): Boolean =
         touchHandler.onTouchEvent(ev) || super.onTouchEvent(ev)
 
-    /** Applies (or removes) the backdrop blur; falls back to a heavier tint when blur is off. */
+    // blur on or off, tint goes darker when there's no blur
     private fun updateBackdropBlur() {
         blurEnabled = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
             windowManager.isCrossWindowBlurEnabled
@@ -174,6 +176,7 @@ class IslandView(
         animator.cancelAll()
         cancelEmergence()
         destroyPresenter()
+        detachMini()
         this.presenter = presenter
         presenter.setTintListener { onTintChanged(it) }
         applyTint()
@@ -181,7 +184,7 @@ class IslandView(
         isExpanded = false
         content.alpha = 1f
 
-        // Measure the collapsed content up front so every path knows its target width.
+        // bind collapsed content first so the path has a width to use
         val contentWidth = presenter.bindCollapsed(content)
         val capsuleW = contentWidth.coerceIn(geometry.capsuleMinWidth, geometry.capsuleMaxWidth)
         glass.setCornerRadius(geometry.cornerCapsule)
@@ -204,14 +207,13 @@ class IslandView(
                 valueAnimatorSpecular().start()
             }
             AnimationMode.DYNAMIC -> {
-                // Bezel morph: the blob squeezes out of the screen edge as a fused liquid mass.
-                // When the signal starts expanded, the blob emerges directly at card dimensions
-                // with the expanded corner radius — no capsule → card rebloom step.
+                // the blob squeeze-out on open. fragile, leave it alone
                 alpha = 1f
                 pendingRebloom = this.form == Form.EXPANDED
                 if (pendingRebloom) {
                     content.removeAllViews()
                     presenter.bindExpanded(content)
+                    attachMini()
                     val screenW = geometry.screenWidth
                     val targetW = (screenW - geometry.expandedSideMargin * 2)
                         .coerceAtMost(geometry.expandedMaxWidth)
@@ -258,14 +260,12 @@ class IslandView(
         callbacks?.onExpandedStateChanged(this, false)
     }
 
-    /**
-     * Dismiss the island by sliding it off-screen.
-     * @param directionHint 0 = default (slide toward bezel), positive = slide right, negative = slide left.
-     */
+    // slide it off. the hint decides which way
     fun dismiss(directionHint: Float = 0f) {
         animator.cancelAll()
         cancelEmergence()
-        // Show the glass for the slide-off instead of the raw emergence shape.
+        detachMini()
+        // use the glass layer for the exit, not the bare shape
         background = glass
         clipToOutline = true
         val direction = when {
@@ -285,16 +285,11 @@ class IslandView(
 
     fun presenterForSignal(): IslandPresenter? = presenter
 
-    /** True if the given point is on an interactive child (a button), so the tap isn't treated as
-     *  a background tap. */
+    // true if that point hit a button instead of empty space
     fun hasClickableChildAt(x: Float, y: Float): Boolean =
         findClickableChild(content, x, y) != null
 
-    /**
-     * Dispatches a tap on an interactive child (action pill, transport button) to that child. The
-     * island's own touch handler consumes all touches, so child OnClickListeners would otherwise
-     * never fire; this forwards the click explicitly. Returns true if a child handled it.
-     */
+    // we swallow every touch, so forward taps to the child ourselves
     fun performClickableChildAt(x: Float, y: Float): Boolean {
         val child = findClickableChild(content, x, y) ?: return false
         return child.isEnabled && child.performClick()
@@ -316,13 +311,13 @@ class IslandView(
         return null
     }
 
-    /** Called while the user drags the island vertically (positive = down). */
+    // vertical drag, positive means downward
     fun onDragUpdate(dy: Float) {
         dragOffset = dy
         translationY = dy
     }
 
-    /** Called when the user releases a drag. */
+    // finger lifted, work out what the drag meant
     fun onDragEnd(dy: Float) {
         translationY = 0f
         val threshold = geometry.dp(24f)
@@ -330,7 +325,7 @@ class IslandView(
             dy < -threshold -> callbacks?.onUserDismiss(this)
             dy > threshold && !isExpanded -> callbacks?.onUserExpand(this)
             dy > threshold && isExpanded -> {
-                // Drag-to-resize: commit to the taller layout past the threshold.
+                // dragged past the threshold, so grow the card
                 if (dy > geometry.dp(IslandConstants.DRAG_COMMIT_THRESHOLD_DP)) {
                     resizeToMediaMax()
                 }
@@ -339,20 +334,16 @@ class IslandView(
         dragOffset = 0f
     }
 
-    /** Called while the user drags the island horizontally. Applies rubber-banded translation. */
+    // horizontal drag, with a rubber band on it
     fun onHorizontalDragUpdate(dx: Float) {
         val rubberBanded = dx * IslandConstants.RUBBER_BAND_FACTOR
         translationX = rubberBanded
-        // Proportional alpha fade: 1.0 at center → 0.6 at dismiss threshold.
+        // fades from fully opaque to 0.6 by the dismiss distance
         val dismissPx = geometry.dp(DISMISS_THRESHOLD_DP).toFloat()
         alpha = (1f - (kotlin.math.abs(rubberBanded) / dismissPx) * 0.4f).coerceIn(0.6f, 1f)
     }
 
-    /**
-     * Called when the user releases a horizontal drag.
-     * If the rubber-banded distance exceeds [DISMISS_THRESHOLD_DP] or the fling velocity exceeds
-     * [FLING_VELOCITY_THRESHOLD], the island is swiped off-screen. Otherwise it springs back.
-     */
+    // far or fast enough means dismiss, otherwise snap back
     fun onHorizontalDragEnd(dx: Float, velocityX: Float) {
         val rubberBanded = dx * IslandConstants.RUBBER_BAND_FACTOR
         val dismissPx = geometry.dp(DISMISS_THRESHOLD_DP).toFloat()
@@ -360,7 +351,7 @@ class IslandView(
             kotlin.math.abs(velocityX) > FLING_VELOCITY_THRESHOLD
 
         if (shouldDismiss && (dx != 0f || velocityX != 0f)) {
-            // Determine fling direction from whichever signal is stronger.
+            // fling velocity wins over distance when picking a direction
             val direction = if (kotlin.math.abs(velocityX) > FLING_VELOCITY_THRESHOLD) {
                 if (velocityX > 0f) 1f else -1f
             } else {
@@ -370,12 +361,12 @@ class IslandView(
             presenterForSignal()?.onDismiss()
             callbacks?.onUserDismiss(this)
         } else {
-            // Spring back to resting position.
+            // didn't commit, ease it back
             animator.settleTranslationX()
         }
     }
 
-    /** Grows the expanded media island to its maximum height (drag-resize commit). */
+    // drag resize for media, go to the tall size
     private fun resizeToMediaMax() {
         animator.animateSize(
             (geometry.screenWidth - geometry.expandedSideMargin * 2)
@@ -385,17 +376,7 @@ class IslandView(
         )
     }
 
-    /**
-     * Corner emergence (§8.3 / mockup `renderEmergence`): the blob starts flush with the screen
-     * edge as a fused liquid mass — a droplet bulging past the leading edge — slides to its
-     * resting margin, then the droplet neck thins and melts into the capsule. The glass background
-     * is suppressed for the duration; the metaball IS the surface, and the content fades in
-     * clipped to the growing shape.
-     */
-    /**
-     * Cancels a running emergence without its end-of-emergence side effects (sweep, rebloom) —
-     * used when a new show/dismiss supersedes one in flight.
-     */
+    // stop the emerge animation, callbacks included
     private fun cancelEmergence() {
         emergeAnimator?.let { a ->
             a.removeAllUpdateListeners()
@@ -414,7 +395,7 @@ class IslandView(
         clipToOutline = false
         content.alpha = 0f
         applyEmergeProgress(0f)
-        // Expanded cards use a longer emergence so the larger blob reads as liquid.
+        // cards take longer to emerge, makes it look wet
         val dur = if (pendingRebloom) 520L else IslandConstants.DUR_EMERGE
         emergeAnimator = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
             duration = dur
@@ -433,13 +414,12 @@ class IslandView(
 
     private fun applyEmergeProgress(p: Float) {
         emergeP = p
-        // Slide from flush-with-the-bezel to the resting margin.
+        // slide out from the edge to the resting position
         val margin = geometry.expandedSideMargin.toFloat()
         val settle = easeOutCubic(p)
         translationX =
             if (cluster == Cluster.LEFT) -(1f - settle) * margin else (1f - settle) * margin
-        // Content fades in during the last part of the morph.
-        // Expanded cards delay the reveal so the blob shape is visible longer.
+        // content shows up near the end, later for cards
         content.alpha = if (pendingRebloom) {
             smoothstep(0.45f, 0.90f, p)
         } else {
@@ -459,15 +439,13 @@ class IslandView(
         valueAnimatorSpecular().start()
         if (pendingRebloom) {
             pendingRebloom = false
-            // Content was already bound at expanded dimensions during show() — just set the
-            // glass corner radius and mark expanded. No spring rebloom needed.
+            // content is already bound, only the radius is left
             glass.setCornerRadius(geometry.cornerExpanded)
             isExpanded = true
             callbacks?.onExpandedStateChanged(this, true)
         }
         invalidateOutline()
-        // Emergence has no size spring, so the size-animation settle callback never fires. Notify
-        // it here so the state machine leaves EMERGING and status-bar coverage is recomputed.
+        // no spring here, so fire the settle callback by hand
         callbacks?.onFormSettled(this, isExpanded)
     }
 
@@ -504,7 +482,7 @@ class IslandView(
             dropR = rBase * (1f - st)
             k = kMax * (1f - st)
         }
-        // Bulge past the leading edge so the mass reads as squeezed out of the bezel.
+        // push it past the edge a little so it looks squeezed
         val dropCx = leading + dir * dropR * 0.55f
         val box = RectF(0f, 0f, w, h)
         val shader = shaderMetaball
@@ -536,11 +514,31 @@ class IslandView(
         return t * t * (3f - 2f * t)
     }
 
-    /** Rebinds the collapsed content and springs to its capsule size. */
+    // rebind the small content and shrink to the capsule
     private fun applyCollapsedContent() {
+        detachMini()
         content.removeAllViews()
         val width = presenter?.bindCollapsed(content) ?: geometry.chipSize
         applyCollapsedSize(width)
+    }
+
+    // mini status goes in the top outer corner
+    private fun attachMini() {
+        if (miniStatus.parent != null) return
+        val lp = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT,
+            Gravity.TOP or if (cluster == Cluster.LEFT) Gravity.START else Gravity.END,
+        ).apply {
+            marginStart = geometry.dp(14f)
+            marginEnd = geometry.dp(14f)
+            topMargin = geometry.dp(6f)
+        }
+        addView(miniStatus, lp)
+    }
+
+    private fun detachMini() {
+        if (miniStatus.parent === this) removeView(miniStatus)
     }
 
     private fun applyCollapsedSize(contentWidth: Int) {
@@ -550,10 +548,11 @@ class IslandView(
         form = Form.CAPSULE
     }
 
-    /** Rebinds the expanded card and springs to its expanded size ("rebloom"). */
+    // rebind the card content and grow to full size
     private fun applyExpandedContent() {
         content.removeAllViews()
         presenter?.bindExpanded(content)
+        attachMini()
         val screenW = geometry.screenWidth
         val targetW = (screenW - geometry.expandedSideMargin * 2)
             .coerceAtMost(geometry.expandedMaxWidth)
@@ -564,7 +563,7 @@ class IslandView(
         form = Form.EXPANDED
     }
 
-    /** Applies a size immediately (no animation) — used while emerging. */
+    // jump to a size with no animation, used mid emerge
     private fun setSizeDirect(w: Int, h: Int) {
         val lp = layoutParams ?: return
         if (lp.width != w || lp.height != h) {
@@ -604,14 +603,14 @@ class IslandView(
             rimTopColor = 0x59FFFFFF.toInt()
             glass.setRim(rimTopColor, 0x14FFFFFF.toInt())
         } else {
-            // Light glass: brighter top highlight + a subtle dark lower edge for definition.
+            // light theme wants a brighter top and a soft dark bottom
             rimTopColor = 0x99FFFFFF.toInt()
             glass.setRim(rimTopColor, 0x26000000.toInt())
         }
         glass.setNeonColor(accentColor)
     }
 
-    /** Translucent when backdrop blur is live; near-opaque fallback when it isn't. */
+    // see-through when blur works, almost solid when it doesn't
     private fun themeBackground(): Int =
         when {
             !blurEnabled -> if (dark) 0xF2101012.toInt() else 0xF7F3F3F6.toInt()
@@ -632,7 +631,7 @@ class IslandView(
             )
         }
 
-    /** Plays the app-coloured neon rim sweep once the notification card has expanded. */
+    // run the neon rim only for notification cards
     private fun maybeStartNeonSweep() {
         if (signal?.kind != SignalKind.NOTIFICATION) return
         startNeonSweep()
@@ -657,6 +656,28 @@ class IslandView(
         neonAnimator?.start()
     }
 
+    // prism sweep across the glass while the bridge crossfades
+    fun startChromaShimmer(durationMs: Long) {
+        chromaAnimator?.cancel()
+        glass.setChromaProgress(0f)
+        // full 10s of sweeping is boring as hell, cap it
+        val dur = durationMs.coerceIn(1200L, 2600L)
+        chromaAnimator = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = dur
+            interpolator = android.view.animation.DecelerateInterpolator(1.2f)
+            addUpdateListener { a -> glass.setChromaProgress(a.animatedValue as Float) }
+            addListener(
+                object : android.animation.AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: android.animation.Animator) {
+                        glass.setChromaProgress(-1f)
+                        chromaAnimator = null
+                    }
+                },
+            )
+        }
+        chromaAnimator?.start()
+    }
+
     private fun destroyPresenter() {
         presenter?.setTintListener(null)
         presenter?.onDestroy()
@@ -664,7 +685,7 @@ class IslandView(
         presenter = null
     }
 
-    /** Applies a tint pushed from the presenter mid-session (e.g. a track change). */
+    // presenter changed the tint, usually a new track
     private fun onTintChanged(tint: IslandTint?) {
         if (tint != null) applyTint(tint) else applyTheme()
         invalidate()
@@ -673,7 +694,7 @@ class IslandView(
     private fun currentCornerRadius(): Float =
         if (isExpanded) geometry.cornerExpanded else geometry.cornerCapsule
 
-    /** Returns the island's current bounds in the parent's coordinate space. */
+    // our rect in the parent's coordinates
     fun boundsOnParent(): Rect {
         val r = Rect()
         r.set(left, top, right, bottom)
@@ -690,6 +711,8 @@ class IslandView(
         animator.cancelAll()
         neonAnimator?.cancel()
         neonAnimator = null
+        chromaAnimator?.cancel()
+        chromaAnimator = null
         destroyPresenter()
     }
 
@@ -697,9 +720,9 @@ class IslandView(
         Color.argb(alpha, Color.red(color), Color.green(color), Color.blue(color))
 
     companion object {
-        /** Horizontal distance (dp, after rubber-banding) past which a swipe commits to dismiss. */
+        // how far you drag before it counts as a dismiss
         private const val DISMISS_THRESHOLD_DP = 80f
-        /** Horizontal fling velocity (px/sec) past which a swipe commits to dismiss. */
+        // or how fast, in px per second
         private const val FLING_VELOCITY_THRESHOLD = 1200f
 
         fun layoutParams(gravity: Int): FrameLayout.LayoutParams =

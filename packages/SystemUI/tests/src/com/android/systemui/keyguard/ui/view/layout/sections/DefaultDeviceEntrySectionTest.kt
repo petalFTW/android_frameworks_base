@@ -33,6 +33,7 @@ import com.android.systemui.keyguard.ui.viewmodel.DeviceEntryForegroundViewModel
 import com.android.systemui.keyguard.ui.viewmodel.DeviceEntryIconViewModel
 import com.android.systemui.kosmos.testDispatcher
 import com.android.systemui.log.logcatLogBuffer
+import com.android.systemui.petalos.PetalCdLockScreenController
 import com.android.systemui.plugins.FalsingManager
 import com.android.systemui.res.R
 import com.android.systemui.shade.NotificationPanelView
@@ -84,6 +85,7 @@ class DefaultDeviceEntrySectionTest : SysuiTestCase() {
                 { falsingManager },
                 { mock(VibratorHelper::class.java) },
                 { msdlPlayer },
+                { mock(PetalCdLockScreenController::class.java) },
                 logcatLogBuffer(),
                 logcatLogBuffer("blueprints"),
             )

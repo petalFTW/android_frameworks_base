@@ -21,15 +21,7 @@ import android.provider.Settings;
 
 import org.petalos.config.PetalConfig;
 
-/**
- * User-tunable petalOS overlay geometry.
- *
- * <p>Values are persisted into Settings.System by the PetalHub app
- * (vendor/petal/apps/PetalHub, {@code org.petalos.config.PetalConfig}).
- * SystemUI reads them here when it builds the volume / power overlays, so a
- * change applies the next time the overlay is shown. Keep key names and value
- * semantics in sync with {@code org.petalos.config.PetalConfig}.
- */
+// overlay placement read from settings
 public final class PetalUiConfig {
 
     public static final String KEY_POWER_EDGE = "petal_ui_power_edge";            // 0=left, 1=right
@@ -37,33 +29,30 @@ public final class PetalUiConfig {
     public static final String KEY_VOLUME_EDGE = "petal_ui_volume_edge";           // 0=left, 1=right
     public static final String KEY_VOLUME_ANCHOR_PCT = "petal_ui_volume_anchor_pct"; // 0..100
 
-    // Locked defaults (handover spec): power key on the right, volume rocker on
-    // the left, both anchored to their physical button centres.
+    // default sides: power right, volume left
     private static final float DEFAULT_POWER_ANCHOR_FRACTION = 205f / 620f;
     private static final float DEFAULT_VOLUME_ANCHOR_FRACTION = 178f / 620f;
 
     private PetalUiConfig() {}
 
-    // ------------------------------------------------------------------
-    // Power / volume overlay placement
-    // ------------------------------------------------------------------
+    // volume and power placement
 
-    /** True when the power menu springs from the left bezel. */
+    // power menu on the left
     public static boolean isPowerEdgeLeft(Context context) {
         return Settings.System.getInt(context.getContentResolver(), KEY_POWER_EDGE, 1) == 0;
     }
 
-    /** Vertical anchor of the power-menu centre, as a fraction of screen height. */
+    // power menu vertical position
     public static float getPowerAnchorFraction(Context context) {
         return anchorFraction(context, KEY_POWER_ANCHOR_PCT, DEFAULT_POWER_ANCHOR_FRACTION);
     }
 
-    /** True when the volume HUD springs from the left bezel. */
+    // volume hud on the left
     public static boolean isVolumeEdgeLeft(Context context) {
         return Settings.System.getInt(context.getContentResolver(), KEY_VOLUME_EDGE, 0) == 0;
     }
 
-    /** Vertical anchor of the volume-HUD centre, as a fraction of screen height. */
+    // volume hud vertical position
     public static float getVolumeAnchorFraction(Context context) {
         return anchorFraction(context, KEY_VOLUME_ANCHOR_PCT, DEFAULT_VOLUME_ANCHOR_FRACTION);
     }

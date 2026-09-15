@@ -46,29 +46,29 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import com.android.systemui.island.IslandGeometry
 
-/** One notification action rendered as a glass pill in the expanded card. */
+// an action rendered as a pill
 data class IslandNotifAction(
     val title: CharSequence,
     val icon: Icon?,
     val actionIntent: PendingIntent,
-    /** RemoteInput[] when the action is an inline reply; null for ordinary actions. */
+    // remote inputs when it's a reply action
     val remoteInputs: Array<RemoteInput>? = null,
 ) {
     val isReply: Boolean get() = !remoteInputs.isNullOrEmpty()
 }
 
-/** Display data extracted from a notification by [com.android.systemui.island.signal.NotificationSignalSource]. */
+// everything the card needs from the notification
 data class NotificationPayload(
     val key: String,
     val packageName: String,
     val appLabel: String,
-    /** Messaging sender (from EXTRA_MESSAGING_PERSON); null for non-conversation notifications. */
+    // conversation sender, null otherwise
     val sender: CharSequence?,
     val title: CharSequence?,
     val text: CharSequence?,
     val subText: CharSequence?,
     val smallIcon: Icon?,
-    /** Person icon or notification largeIcon; drives the expanded-card avatar. */
+    // avatar image, person or large icon
     val largeIcon: Icon?,
     val iconColor: Int,
     val contentIntent: PendingIntent?,
@@ -77,15 +77,11 @@ data class NotificationPayload(
     val progressMax: Int,
     val progressIndeterminate: Boolean,
     val whenMillis: Long,
-    /** OTP-looking code detected in the notification text; gets a system copy chip. */
+    // otp pulled from the text, gets a copy button
     val otpCode: String? = null,
 )
 
-/**
- * Renders a notification. Collapsed is a circular app icon + bold app label. Expanded is a full
- * detail card: header (app icon + label + time), avatar + sender/title + message body + subtext,
- * an optional progress bar and up to three action pills.
- */
+// notif card: icon when collapsed, full card when open
 class NotificationPresenter(
     private val context: Context,
     private val geometry: IslandGeometry,
@@ -96,7 +92,7 @@ class NotificationPresenter(
     private var expandedRoot: LinearLayout? = null
     private var host: IslandPresenter.Host? = null
 
-    /** Action pill currently in inline-reply mode, and its views. */
+    // reply field and its action
     private var replyAction: IslandNotifAction? = null
     private var replyInput: EditText? = null
     private var actionsRow: View? = null
@@ -123,8 +119,7 @@ class NotificationPresenter(
         lp.gravity = Gravity.CENTER_VERTICAL
         row.addView(icon, lp)
 
-        // Progress notifications collapse to just the app icon + a slim progress bar, so the
-        // download/upload stays glanceable without the app label (§11.1).
+        // progress notifs show icon and bar, no label
         if (payload.progressMax > 0) {
             val accent = payload.iconColor.takeIf { it != 0 && it != Color.WHITE } ?: Color.WHITE
             val track = 0x40FFFFFF.toInt()
@@ -190,7 +185,7 @@ class NotificationPresenter(
             setPadding(pad, pad - geometry.dp(2f), pad, pad)
         }
 
-        // --- Swipe indicator: subtle pill at top center ------------------------------------
+        // grab handle at the top
         val indicator = View(context).apply {
             background = GradientDrawable().apply {
                 cornerRadius = geometry.dp(1.5f).toFloat()
@@ -202,7 +197,7 @@ class NotificationPresenter(
         ).apply { gravity = Gravity.CENTER_HORIZONTAL }
         root.addView(indicator, indicatorLp)
 
-        // --- Header: app icon · app label · timestamp --------------------------------------
+        // app icon, name, time
         val header = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -252,7 +247,7 @@ class NotificationPresenter(
                 ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = geometry.dp(8f) },
         )
 
-        // --- Body: avatar + headline/body/subtext -------------------------------------------
+        // avatar, then the text column
         val body = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.TOP
@@ -266,7 +261,7 @@ class NotificationPresenter(
         val column = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
         }
-        // Headline: sender or title, semibold
+        // sender or title
         val headline = TextView(context).apply {
             text = payload.sender ?: payload.title ?: payload.appLabel
             setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15f)
@@ -278,7 +273,7 @@ class NotificationPresenter(
         }
         column.addView(headline, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT))
-        // Body text: up to 4 lines
+        // body, capped at four lines
         val bodyText = payload.text?.takeIf { it.isNotBlank() }
         if (bodyText != null) {
             val tv = TextView(context).apply {
@@ -297,7 +292,7 @@ class NotificationPresenter(
                     ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = geometry.dp(2f) },
             )
         }
-        // Subtext
+        // optional subtext
         payload.subText?.takeIf { it.isNotBlank() }?.let { st ->
             column.addView(
                 TextView(context).apply {
@@ -324,7 +319,7 @@ class NotificationPresenter(
                 ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = geometry.dp(10f) },
         )
 
-        // --- Progress (downloads, uploads, …) ------------------------------------------------
+        // progress bar for downloads/uploads
         if (payload.progressMax > 0) {
             val bar = ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal).apply {
                 max = payload.progressMax
@@ -332,7 +327,7 @@ class NotificationPresenter(
                 isIndeterminate = payload.progressIndeterminate
                 progressTintList = ColorStateList.valueOf(accent)
                 progressBackgroundTintList = ColorStateList.valueOf(chipStroke)
-                // Rounded progress bar track
+                // square off the default progress drawable
                 val track = progressDrawable
                 if (track is android.graphics.drawable.LayerDrawable) {
                     for (i in 0 until track.numberOfLayers) {
@@ -350,12 +345,12 @@ class NotificationPresenter(
             )
         }
 
-        // --- Action pills with ripple ---------------------------------------------------------
+        // action pills
         if (payload.actions.isNotEmpty() || payload.otpCode != null) {
             val row = LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
             }
-            // System-injected copy chip for OTP notifications (mirrors the shade's action).
+            // otp copy button, added by us
             payload.otpCode?.let { code ->
                 val copyChip = buildTextPill(
                     context.getString(com.android.systemui.res.R.string.petal_otp_copy_action),
@@ -401,7 +396,7 @@ class NotificationPresenter(
                     setOnClickListener { onActionClicked(action) }
                 }
 
-                // Optional action icon
+                // icon is optional
                 val actionIcon = action.icon?.loadDrawable(context)
                 if (actionIcon != null) {
                     val iv = ImageView(context).apply {
@@ -455,10 +450,7 @@ class NotificationPresenter(
         )
     }
 
-    /**
-     * Height of the expanded card. Uses a measure pass on the already-bound view hierarchy so that
-     * text wrapping, variable font sizes and action pill widths are accounted for exactly.
-     */
+    // measure the card for the exact expanded height
     override fun expandedHeightPx(): Int {
         val root = expandedRoot ?: return -1
         val targetW = (geometry.screenWidth - geometry.expandedSideMargin * 2)
@@ -471,7 +463,7 @@ class NotificationPresenter(
 
     private fun avatarSize(): Int = geometry.dp(48f)
 
-    /** Simple glass pill with a text label (used for the injected copy-OTP chip). */
+    // small glass pill for text buttons
     private fun buildTextPill(
         label: String,
         accent: Int,
@@ -501,7 +493,7 @@ class NotificationPresenter(
         }
     }
 
-    /** The app's launcher icon; falls back to null when unavailable (rare). */
+    /** launcher icon, or null if it's gone. */
     private fun loadAppIcon(): android.graphics.drawable.Drawable? =
         runCatching { context.packageManager.getApplicationIcon(payload.packageName) }.getOrNull()
 
@@ -521,7 +513,7 @@ class NotificationPresenter(
                 }
             }
         } else {
-            // Fallback: tinted circle holding the notification's small icon.
+            // no large icon, so fall back to a tinted circle and the small icon
             FrameLayout(context).apply {
                 val c = payload.iconColor.takeIf { it != 0 } ?: 0xFF3C3C40.toInt()
                 background = GradientDrawable().apply {
@@ -548,7 +540,7 @@ class NotificationPresenter(
         }
     }
 
-    /** Accent the rim with the notification colour when the app set one. */
+    /** Use the notification colour for the rim accent when it has one. */
     override fun tint(): IslandTint? =
         payload.iconColor
             .takeIf { it != 0 && it != Color.WHITE }
@@ -560,15 +552,13 @@ class NotificationPresenter(
             android.util.Log.d(TAG, "onPrimaryAction: no contentIntent for ${payload.packageName}")
             return false
         }
-        // Route through the host so the keyguard is dismissed first when locked — a bare
-        // PendingIntent.send() is a no-op on the lock screen, which is exactly when the island
-        // is most prominent (bug: "clicking an expanded notification doesn't open the app").
+        // a plain send dies on the lockscreen, so route through the host
         host?.launchPendingIntent(pi) ?: sendPendingIntent(pi)
         exitReplyMode()
         return true
     }
 
-    /** Dispatches a tapped action pill: reply actions enter inline-reply mode, others send. */
+    /** Handles an action tap: replies open the field, the rest send. */
     private fun onActionClicked(action: IslandNotifAction) {
         android.util.Log.d(TAG, "action clicked: '${action.title}' reply=${action.isReply}")
         if (action.isReply) {
@@ -578,11 +568,7 @@ class NotificationPresenter(
         }
     }
 
-    /**
-     * Sends an activity-type PendingIntent through the host (keyguard-aware); broadcast /
-     * service PendingIntents are sent directly. Failures are logged instead of being silently
-     * swallowed, which is how "actions do nothing" went unnoticed.
-     */
+    // send activities through the host, or keyguard eats them
     private fun sendPendingIntent(pi: PendingIntent) {
         if (host != null && pi.isActivity) {
             host?.launchPendingIntent(pi)
@@ -599,11 +585,11 @@ class NotificationPresenter(
 
     // --- Inline reply -------------------------------------------------------------------------
 
-    /** Swaps the action pill row for a glass text field wired to the action's RemoteInput. */
+    /** Swap the action row for a reply text field. */
     private fun enterReplyMode(action: IslandNotifAction) {
         val root = expandedRoot ?: return
         if (replyAction != null) {
-            // Already replying to something else — commit-free switch.
+            // switching from another reply, just drop it
             exitReplyMode()
         }
         replyAction = action
@@ -647,7 +633,7 @@ class NotificationPresenter(
                     false
                 }
             }
-            // Escape hatch: back while the field is empty leaves reply mode.
+            // back on an empty field exits reply mode
             setOnKeyListener { _, keyCode, event ->
                 if (keyCode == KeyEvent.KEYCODE_BACK &&
                     event.action == KeyEvent.ACTION_UP && text.isNullOrBlank()
@@ -699,7 +685,7 @@ class NotificationPresenter(
             ).apply { marginStart = geometry.dp(8f) },
         )
 
-        // Replace the pills row in place so the card keeps its height (no re-layout spring).
+        // swap in place so the card keeps its height
         val oldRow = actionsRow
         val lp = (oldRow?.layoutParams as? LinearLayout.LayoutParams)
             ?: LinearLayout.LayoutParams(
@@ -715,7 +701,7 @@ class NotificationPresenter(
         imm?.showSoftInput(input, InputMethodManager.SHOW_IMPLICIT)
     }
 
-    /** Sends the typed reply through the action's RemoteInput and leaves reply mode. */
+    /** Send the typed reply through the action's RemoteInput. */
     private fun sendReply() {
         val action = replyAction ?: return
         val input = replyInput ?: return
@@ -742,7 +728,7 @@ class NotificationPresenter(
         exitReplyMode()
     }
 
-    /** Tears down the reply field, hides the IME and releases the window/dwell holds. */
+    /** Tear down the reply field and release the window holds. */
     private fun exitReplyMode() {
         if (replyAction == null) return
         replyAction = null
@@ -753,12 +739,12 @@ class NotificationPresenter(
         replyInput = null
         host?.setWindowFocusable(false)
         host?.setDismissalHeld(false)
-        // Rebinding (collapse/expand/morph) rebuilds the content anyway; nothing else to do.
+        // rebinding rebuilds the row anyway
     }
 
     override fun onDismiss() {
         exitReplyMode()
-        // The notification is cancelled by the signal source / router.
+        // the signal source cancels the notification, not us
     }
 
     override fun onDestroy() {

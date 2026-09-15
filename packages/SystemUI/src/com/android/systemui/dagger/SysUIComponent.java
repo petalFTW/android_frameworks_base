@@ -28,6 +28,7 @@ import com.android.systemui.dump.DumpManager;
 import com.android.systemui.island.dagger.IslandModule;
 import com.android.systemui.keyguard.KeyguardSliceProvider;
 import com.android.systemui.people.PeopleProvider;
+import com.android.systemui.petalos.dagger.PetalCdPlayerModule;
 import com.android.systemui.petalos.dagger.PetalClockStyleModule;
 import com.android.systemui.petalos.dagger.PetalScreenDitheringModule;
 import com.android.systemui.petalos.dagger.PetalMediaCoverModule;
@@ -79,6 +80,7 @@ import javax.inject.Provider;
         IslandModule.class,
         MultiUserUtilsModule.class,
         NotificationInsetsModule.class,
+        PetalCdPlayerModule.class,
         PetalClockStyleModule.class,
         PetalScreenDitheringModule.class,
         PetalMediaCoverModule.class,

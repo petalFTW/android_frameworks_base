@@ -20,65 +20,49 @@ import android.app.PendingIntent
 import android.view.ViewGroup
 import androidx.annotation.ColorInt
 
-/**
- * A presenter owns the content of one island for one event type. It inflates and binds views, and
- * owns its own listeners. [com.android.systemui.island.cluster.IslandView] owns only shape, motion
- * and touch.
- *
- * A presenter MUST NOT start an animation itself; it asks the state machine for a form change
- * instead.
- */
+// content for one island; animating is the machine's job
 interface IslandPresenter {
-    /**
-     * Services a presenter needs from the island host: window focus control (inline reply needs
-     * the IME), dismissal holds, and keyguard-safe PendingIntent launches.
-     */
+    // services the presenter asks the host for
     interface Host {
-        /** Makes the island window focusable so a text editor can take input. */
+        // window focus, needed for inline reply
         fun setWindowFocusable(focusable: Boolean)
 
-        /** Prevents the state machine from auto-dismissing the blob while [held]. */
+        // block auto-dismiss while something is held
         fun setDismissalHeld(held: Boolean)
 
-        /**
-         * Launches a PendingIntent through the system UI activity starter, dismissing the
-         * keyguard if needed (matches what tapping a notification in the shade does).
-         */
+        // launch an intent, dismissing keyguard first
         fun launchPendingIntent(pendingIntent: PendingIntent)
     }
 
-    /** Inflate/bind the collapsed capsule content. Return the measured content width in px. */
+    // bind the collapsed view; returns the width it wants
     fun bindCollapsed(container: ViewGroup): Int
 
-    /** Inflate/bind the expanded card content. */
+    // bind the expanded card
     fun bindExpanded(container: ViewGroup)
 
-    /** Preferred expanded height in px, or -1 for the default for this signal type. */
+    // wanted height, -1 means use the type default
     fun expandedHeightPx(): Int = -1
 
-    /** Optional tint override; null = use the theme default. */
+    // accent tint, null for the theme default
     fun tint(): IslandTint? = null
 
-    /** Invoked on tap of the card background. Return true if handled. */
+    // tap on the card; true if handled
     fun onPrimaryAction(): Boolean = false
 
-    /** Invoked on swipe-up dismissal. */
+    // swipe-up dismissal
     fun onDismiss() {}
 
-    /** Called on every state change and when the signal is retired. Release everything here. */
+    // free anything held when the signal goes away
     fun onDestroy() {}
 
-    /**
-     * Registers a listener invoked whenever the presenter's [tint] changes (e.g. a media track
-     * change derives a new accent from the fresh artwork). Pass null to unregister.
-     */
+    // callback for tint updates, e.g. new artwork
     fun setTintListener(listener: ((IslandTint?) -> Unit)?) {}
 
-    /** Injected host services; pass null to detach. */
+    // attach or detach the host
     fun setHost(host: Host?) {}
 }
 
-/** Dynamic tint derived from album artwork. A null [background] means "use the theme default". */
+// tint pulled out of album art
 data class IslandTint(
     @ColorInt val accent: Int,
     @ColorInt val onBackground: Int = 0xFFFFFFFF.toInt(),

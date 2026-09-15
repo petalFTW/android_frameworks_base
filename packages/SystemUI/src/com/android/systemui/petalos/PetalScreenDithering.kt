@@ -106,7 +106,7 @@ class PetalScreenDithering @Inject constructor(
         val end = clampMinute(Settings.System.getIntForUser(context.contentResolver,
             PetalConfig.KEY_DITHERING_END_MIN, PetalConfig.DEFAULT_DITHERING_END_MIN,
             userTracker.userId))
-        // Window wraps midnight when start >= end.
+        // start >= end means the window crosses midnight
         return if (start == end) false
             else if (start < end) minute in start until end
             else minute >= start || minute < end
@@ -194,7 +194,7 @@ class PetalScreenDithering @Inject constructor(
             bitmap.density = Bitmap.DENSITY_NONE
             for (y in 0..3) {
                 for (x in 0..3) {
-                    // Rotate ranks so every pixel gets its turn off.
+                    // rotate the ranks so pixels turn off evenly
                     val rank = (RANKS[y * 4 + x] + phase) % 16
                     bitmap.setPixel(x, y, if (rank < percent * 16 / 100)
                         Color.BLACK else Color.TRANSPARENT)

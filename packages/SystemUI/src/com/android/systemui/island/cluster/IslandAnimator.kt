@@ -27,11 +27,7 @@ import androidx.dynamicanimation.animation.SpringForce
 import com.android.systemui.island.IslandConstants
 import com.android.systemui.island.settings.AnimationMode
 
-/**
- * Owns the spring / tween animations that change the island's size and alpha. In [AnimationMode.CLASSIC]
- * the springs are replaced with [PathInterpolator] [ValueAnimator]s at the same durations; in
- * [AnimationMode.NONE] values are applied instantly.
- */
+// all the size and alpha animation stuff
 class IslandAnimator(private val view: View) {
 
     var mode: AnimationMode = AnimationMode.DYNAMIC
@@ -64,7 +60,7 @@ class IslandAnimator(private val view: View) {
     private var springH: SpringAnimation? = null
     private var alphaAnimator: ValueAnimator? = null
 
-    /** Invoked when a size animation settles at its final value. */
+    // called when the size spring stops moving
     var onSettled: (() -> Unit)? = null
 
     private val onEnd = DynamicAnimation.OnAnimationEndListener { _, _, _, _ ->
@@ -203,7 +199,7 @@ class IslandAnimator(private val view: View) {
         alphaAnimator?.start()
     }
 
-    /** Spring-settle translationX back to 0 with paired alpha restore. */
+    // slide back to center and fade back in
     fun settleTranslationX(onEnd: (() -> Unit)? = null) {
         if (mode == AnimationMode.NONE) {
             view.translationX = 0f

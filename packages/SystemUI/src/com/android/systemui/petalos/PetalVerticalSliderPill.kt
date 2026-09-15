@@ -54,7 +54,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 
-/** Glass slider with live changes and a release callback. */
+// slider that reports live and on release
 @Composable
 fun PetalVerticalSliderPill(
     value: Float,
@@ -70,7 +70,7 @@ fun PetalVerticalSliderPill(
     iconActionDescription: String = contentDescriptionText,
     iconTint: androidx.compose.ui.graphics.Color = PetalQsSkin.GlyphDark,
 ) {
-    // NaN means the slider is idle.
+    // NaN while not dragging
     var dragFraction by remember { mutableFloatStateOf(Float.NaN) }
     val shown = (if (dragFraction.isNaN()) value else dragFraction).coerceIn(0f, 1f)
     val currentOnCommit by rememberUpdatedState(onCommit)
@@ -104,7 +104,7 @@ fun PetalVerticalSliderPill(
                 }
                 .clip(pillShape)
                 .background(PetalQsSkin.TileGlassDark)
-                // petalOS: glass sheen edge on the pill rim.
+                // glass edge highlight on the rim
                 .border(1.dp, PetalQsSkin.TileGlassBorderBrush, pillShape)
                 .draggable(
                     orientation = orientation,
@@ -136,7 +136,7 @@ fun PetalVerticalSliderPill(
                     }
                 }
     ) {
-        // Light content zone anchored to the bottom, sized by the fill fraction.
+        // fill grows from the bottom
         Box(
             modifier =
                 Modifier.align(if (horizontal) Alignment.CenterStart else Alignment.BottomCenter)
@@ -152,12 +152,12 @@ fun PetalVerticalSliderPill(
                 Modifier.align(if (horizontal) Alignment.CenterStart else Alignment.BottomCenter)
                     .size(if (horizontal) height else width),
         ) {
-            // Use plain vector icons; level lists crash painterResource.
+            // keep to vector icons, level lists crash painter
             Icon(
                 painter = painterResource(id = iconRes),
                 contentDescription = iconActionDescription,
                 tint = iconTint,
-                // A small pearl backing keeps the glyph legible even at zero fill.
+                // backing circle so the icon shows at zero
                 modifier =
                     Modifier.size(32.dp)
                         .background(

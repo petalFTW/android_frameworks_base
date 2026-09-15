@@ -30,7 +30,7 @@ import android.widget.TextView
 import com.android.systemui.island.IslandGeometry
 import com.android.systemui.island.render.EqualizerView
 
-/** Identity and call intents extracted from the dialer's CallStyle notification (§11.3). */
+// name and call intents, scraped from the dialer notif
 data class CallPayload(
     val name: String,
     val subtitle: String,
@@ -44,10 +44,7 @@ data class CallPayload(
 private const val ACCENT_CALL = 0xFF32D74B.toInt()
 private const val ACCENT_DECLINE = 0xFFFF3B30.toInt()
 
-/**
- * Renders a call. Collapsed is a 96dp capsule with a green rim and green level bars; expanded is an
- * avatar, name, subtitle and decline/accept buttons (§4.5).
- */
+// call card: bars when collapsed, avatar and buttons when open
 class CallPresenter(
     private val context: Context,
     private val geometry: IslandGeometry,
@@ -55,6 +52,25 @@ class CallPresenter(
 ) : IslandPresenter {
 
     private var equalizer: EqualizerView? = null
+    private val telecomManager = context.getSystemService(android.telecom.TelecomManager::class.java)
+
+    private fun answerCall() {
+        if (payload.answerIntent?.sendSafe() == true) return
+        // no intent from the dialer, fall back to telecom
+        runCatching { telecomManager?.acceptRingingCall() }
+    }
+
+    private fun declineCall() {
+        if (payload.declineIntent?.sendSafe() == true) return
+        if (payload.hangUpIntent?.sendSafe() == true) return
+        runCatching { telecomManager?.endCall() }
+    }
+
+    private fun hangUpCall() {
+        if (payload.hangUpIntent?.sendSafe() == true) return
+        if (payload.declineIntent?.sendSafe() == true) return
+        runCatching { telecomManager?.endCall() }
+    }
 
     override fun bindCollapsed(container: ViewGroup): Int {
         equalizer = EqualizerView(context).apply {
@@ -83,7 +99,7 @@ class CallPresenter(
                 geometry.expandedPadding, geometry.expandedPadding)
         }
 
-        // Avatar: a circle with the first initial.
+        // just the first letter in a circle
         val avatar = TextView(context).apply {
             text = payload.name.firstOrNull()?.uppercase() ?: "?"
             setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 24f)
@@ -122,14 +138,13 @@ class CallPresenter(
             },
         )
 
-        // Decline / accept buttons. Incoming calls get a decline + accept pair; an ongoing call
-        // only gets a hang-up button (there is nothing left to accept).
+        // incoming offers decline/accept, ongoing only hangs up
         if (payload.isIncoming) {
             val decline = callButton(ACCENT_DECLINE, android.R.drawable.sym_call_missed) {
-                (payload.declineIntent ?: payload.hangUpIntent)?.sendSafe()
+                declineCall()
             }
             val accept = callButton(ACCENT_CALL, android.R.drawable.sym_call_incoming) {
-                payload.answerIntent?.sendSafe()
+                answerCall()
             }
             row.addView(decline)
             row.addView(
@@ -140,7 +155,7 @@ class CallPresenter(
             )
         } else {
             val hangUp = callButton(ACCENT_DECLINE, android.R.drawable.sym_call_missed) {
-                (payload.hangUpIntent ?: payload.declineIntent)?.sendSafe()
+                hangUpCall()
             }
             row.addView(hangUp)
         }
@@ -153,7 +168,7 @@ class CallPresenter(
     override fun tint(): IslandTint = IslandTint(accent = ACCENT_CALL)
 
     override fun onPrimaryAction(): Boolean {
-        // Tapping the card background has no dedicated action for a call; it just collapses.
+        // tapping a call card just collapses it
         return false
     }
 
@@ -174,7 +189,5 @@ class CallPresenter(
             layoutParams = LinearLayout.LayoutParams(geometry.dp(44f), geometry.dp(44f))
         }
 
-    private fun PendingIntent.sendSafe() {
-        runCatching { send() }
-    }
+    private fun PendingIntent.sendSafe(): Boolean = runCatching { send() }.isSuccess
 }

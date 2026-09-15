@@ -25,7 +25,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import com.android.systemui.island.IslandGeometry
 
-/** Payload for a simple icon + label system chip (torch, charging, volume, etc.). */
+// label and accent for a simple chip
 data class SystemChipPayload(
     val label: String,
     val accent: Int,
@@ -33,7 +33,7 @@ data class SystemChipPayload(
     val iconRes: Int = 0,
 )
 
-// Give system actions a damn icon and label.
+// chip with an icon and label
 class SystemChipPresenter(
     private val context: Context,
     private val geometry: IslandGeometry,

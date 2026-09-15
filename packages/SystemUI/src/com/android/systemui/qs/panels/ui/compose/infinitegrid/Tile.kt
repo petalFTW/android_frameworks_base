@@ -355,7 +355,8 @@ fun ContentScope.Tile(
                 iconOnly = iconOnly,
                 isDualTarget = isDualTarget,
                 modifier = contentRevealModifier.activeTileGlow(
-                    skinEnabled && !petalIconTile && uiState.state == STATE_ACTIVE
+                    skinEnabled && !petalIconTile && uiState.state == STATE_ACTIVE,
+                    PetalQsSkin.emission(),
                 ),
                 petalExpanded = petalExpandToPill,
             ) {
@@ -518,7 +519,7 @@ private fun PetalIconTileContent(
                     .fillMaxWidth()
                     .clip(shape)
                     .background(colors.background)
-                    .activeTileGlow(active)
+                    .activeTileGlow(active, PetalQsSkin.emission())
                     .border(1.dp, PetalQsSkin.TileGlassBorderBrush, shape)
         ) {
             // QQS keeps its existing whole-card toggle action. The visual icon target,
@@ -544,7 +545,7 @@ private fun PetalIconTileContent(
                 Modifier.size(PetalQsSkin.IconTileSize)
                     .clip(shape)
                     .background(colors.background)
-                    .activeTileGlow(active)
+                    .activeTileGlow(active, PetalQsSkin.emission())
                     .border(1.dp, PetalQsSkin.TileGlassBorderBrush, shape),
             contentAlignment = Alignment.Center,
         ) {
@@ -814,6 +815,7 @@ private object TileDefaults {
                     state = uiState.state,
                     handlesSecondaryClick = uiState.handlesSecondaryClick,
                     iconOnly = iconOnly,
+                    emission = PetalQsSkin.emission(),
                 )
             return TileColors(
                 background = skin.background,
