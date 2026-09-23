@@ -16,8 +16,10 @@
 
 package com.android.systemui.island.signal
 
+import android.app.Notification
 import android.content.Context
 import android.media.session.MediaController
+import android.media.session.MediaSession
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.os.Handler
@@ -30,6 +32,9 @@ import com.android.systemui.island.IslandSignal
 import com.android.systemui.island.SignalKind
 import com.android.systemui.island.settings.IslandSettings
 import com.android.systemui.statusbar.data.repository.StatusBarModeRepositoryStore
+import com.android.systemui.statusbar.notification.collection.NotifPipeline
+import com.android.systemui.statusbar.notification.collection.NotificationEntry
+import com.android.systemui.statusbar.notification.collection.notifcollection.NotifCollectionListener
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.collect
@@ -41,12 +46,14 @@ class MediaSignalSource @Inject constructor(
     @Application private val scope: CoroutineScope,
     private val settings: IslandSettings,
     private val router: SignalRouter,
+    private val notifPipeline: NotifPipeline,
     private val statusBarModeRepository: StatusBarModeRepositoryStore,
 ) {
     private val msm = context.getSystemService(MediaSessionManager::class.java)
     private val handler = Handler(Looper.getMainLooper())
     private var currentId: String? = null
     private var controllers: List<MediaController> = emptyList()
+    private var activeControllers: List<MediaController> = emptyList()
     private var fullscreen = false
     private var started = false
 
@@ -57,9 +64,31 @@ class MediaSignalSource @Inject constructor(
     }
 
     private val listener = MediaSessionManager.OnActiveSessionsChangedListener { list ->
-        controllers = list.orEmpty()
-        for (controller in controllers) {
-            controller.registerCallback(controllerCallback, handler)
+        activeControllers = list.orEmpty()
+        refreshControllers()
+    }
+
+    private val notificationListener = object : NotifCollectionListener {
+        override fun onEntryAdded(entry: NotificationEntry) = refreshControllers()
+        override fun onEntryUpdated(entry: NotificationEntry) = refreshControllers()
+        override fun onEntryRemoved(entry: NotificationEntry, reason: Int) = refreshControllers()
+    }
+
+    private fun refreshControllers() {
+        // A player can publish a media session without taking audio focus. Its
+        // notification token is an authoritative fallback to the active list.
+        val notificationControllers = notifPipeline.allNotifs.mapNotNull { entry ->
+            val token = entry.sbn.notification.extras.getParcelable(
+                Notification.EXTRA_MEDIA_SESSION,
+                MediaSession.Token::class.java) ?: return@mapNotNull null
+            runCatching { MediaController(context, token) }.getOrNull()
+        }
+        val candidates = (activeControllers + notificationControllers).distinctBy { it.sessionToken }
+        val old = controllers.associateBy { it.sessionToken }
+        val tokens = candidates.map { it.sessionToken }.toSet()
+        controllers.filter { it.sessionToken !in tokens }.forEach { it.unregisterCallback(controllerCallback) }
+        controllers = candidates.map { candidate ->
+            old[candidate.sessionToken] ?: candidate.also { it.registerCallback(controllerCallback, handler) }
         }
         reevaluate()
     }
@@ -67,7 +96,9 @@ class MediaSignalSource @Inject constructor(
     fun start() {
         if (started) return
         started = true
+        notifPipeline.addCollectionListener(notificationListener)
         msm.addOnActiveSessionsChangedListener(listener, null, handler)
+        listener.onActiveSessionsChanged(msm.getActiveSessions(null))
         // hide the blob in fullscreen, no media chip over a video
         scope.launch {
             val repo = statusBarModeRepository.forDisplay(Display.DEFAULT_DISPLAY)
@@ -85,8 +116,7 @@ class MediaSignalSource @Inject constructor(
     }
 
     private fun reevaluate() {
-        if (!settings.mediaEnabled()) return
-        if (fullscreen) {
+        if (!settings.mediaEnabled() || fullscreen) {
             currentId?.let { router.removeSignal(it) }
             currentId = null
             return
@@ -94,10 +124,11 @@ class MediaSignalSource @Inject constructor(
         val playing = controllers.firstOrNull {
             it.playbackState?.state == PlaybackState.STATE_PLAYING
         }
-        // only playing or buffering counts, a stale paused session would pin the blob forever
+        // Prefer playback, then a loading session, then paused transport controls.
         val chosen = playing
             ?: controllers.firstOrNull {
-                it.playbackState?.state == PlaybackState.STATE_BUFFERING
+                it.playbackState?.state == PlaybackState.STATE_BUFFERING ||
+                    it.playbackState?.state == PlaybackState.STATE_CONNECTING
             }
             ?: controllers.firstOrNull {
                 it.playbackState?.state == PlaybackState.STATE_PAUSED
@@ -112,6 +143,7 @@ class MediaSignalSource @Inject constructor(
         val isPlaying = chosen.playbackState?.state == PlaybackState.STATE_PLAYING
         val id = "media:${chosen.packageName}"
         val isNew = id != currentId
+        if (isNew) currentId?.let { router.removeSignal(it) }
         currentId = id
 
         // if automix wants to ask, open expanded so the prompt is visible

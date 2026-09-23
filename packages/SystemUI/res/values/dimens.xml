@@ -807,10 +807,10 @@
     <dimen name="dessert_case_cell_size">192dp</dimen>
 
     <!-- Z distance between notifications if they are in the stack -->
-    <dimen name="z_distance_between_notifications">0.5dp</dimen>
+    <dimen name="z_distance_between_notifications">1.5dp</dimen>
 
     <!-- The height of the divider between the individual notifications. -->
-    <dimen name="notification_divider_height">2dp</dimen>
+    <dimen name="notification_divider_height">6dp</dimen>
 
     <!-- The *additional* height of the divider between bundles. -->
     <dimen name="bundle_divider_height">2dp</dimen>
@@ -822,7 +822,7 @@
     <dimen name="min_lock_icon_padding">48dp</dimen>
 
     <!-- The corner radius of the shadow behind the notification. -->
-    <dimen name="notification_shadow_radius">0dp</dimen>
+    <dimen name="notification_shadow_radius">@dimen/notification_corner_radius</dimen>
 
     <!-- The alpha of the dividing line between child notifications of a notification group. -->
     <item name="notification_divider_alpha" format="float" type="dimen">1</item>

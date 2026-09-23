@@ -414,9 +414,14 @@ constructor(
             android.graphics.Color.WHITE
         }
 
-    /** petalOS skin header tint. */
-    private val petalFgColor: Int =
-        com.android.systemui.petalos.PetalQsSkin.GlyphLight.toArgb()
+    /** petalOS skin header tint, flips to dark ink on the light frosted panel. */
+    private val petalFgColor: Int
+        get() =
+            if (com.android.systemui.petalos.PetalQsSkin.isDark(header.context)) {
+                com.android.systemui.petalos.PetalQsSkin.GlyphLight.toArgb()
+            } else {
+                com.android.systemui.petalos.PetalQsSkin.GlyphDark.toArgb()
+            }
 
     private fun createBatteryComposeView(): ComposeView {
         return if (RudimentaryBattery.isEnabled) {

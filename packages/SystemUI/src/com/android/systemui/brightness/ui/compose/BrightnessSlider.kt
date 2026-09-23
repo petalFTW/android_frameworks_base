@@ -621,14 +621,24 @@ object BrightnessSliderMotionTestKeys {
 @Composable
 private fun colors(): SliderColors {
     // petalOS: when the quick settings skin is enabled, style the slider with the petal
-    // card palette (white fill on a dark translucent track).
+    // card palette (light fill on a dark translucent track, flipped in light mode).
     if (com.android.systemui.petalos.PetalQsSkin.isEnabled(LocalContext.current)) {
+        val dark = com.android.systemui.petalos.PetalQsSkin.dark()
+        val fill =
+            if (dark) com.android.systemui.petalos.PetalQsSkin.CardLight
+            else com.android.systemui.petalos.PetalQsSkin.CardFillLight
         return SliderDefaults.colors(
-            thumbColor = com.android.systemui.petalos.PetalQsSkin.CardLight,
-            activeTrackColor = com.android.systemui.petalos.PetalQsSkin.CardLight,
-            inactiveTrackColor = com.android.systemui.petalos.PetalQsSkin.CardColor,
-            activeTickColor = com.android.systemui.petalos.PetalQsSkin.GlyphDark,
-            inactiveTickColor = com.android.systemui.petalos.PetalQsSkin.GlyphLight,
+            thumbColor = fill,
+            activeTrackColor = fill,
+            inactiveTrackColor =
+                if (dark) com.android.systemui.petalos.PetalQsSkin.CardColor
+                else com.android.systemui.petalos.PetalQsSkin.CardColorLight,
+            activeTickColor =
+                if (dark) com.android.systemui.petalos.PetalQsSkin.GlyphDark
+                else com.android.systemui.petalos.PetalQsSkin.GlyphLight,
+            inactiveTickColor =
+                if (dark) com.android.systemui.petalos.PetalQsSkin.GlyphLight
+                else com.android.systemui.petalos.PetalQsSkin.GlyphDark,
         )
     }
     return SliderDefaults.colors()

@@ -120,15 +120,35 @@ class IslandController @Inject constructor(
             override fun onReceive(c: Context?, intent: android.content.Intent?) {
                 val duration = intent?.getIntExtra(EXTRA_TRANSITION_DURATION, 10000)
                     ?.toLong() ?: 10000L
+                val owner = intent?.getStringExtra(EXTRA_TRANSITION_OWNER)
+                val style = intent?.getIntExtra(EXTRA_TRANSITION_STYLE, -1) ?: -1
                 val root = window?.rootView ?: return
-                if (leftMachine.current?.kind == SignalKind.MEDIA) {
-                    root.leftIsland.startChromaShimmer(duration)
+                // The app's AutoMix owns the transition → chromatic edge aura.
+                // The legacy BridgeFX prism shimmer is only kept for style 1
+                // (Reverb) and only while the app isn't the one mixing.
+                val appMix = !owner.isNullOrEmpty() ||
+                    automixPackage() != null
+                val shimmer = !appMix && style == BRIDGE_STYLE_REVERB
+                if (!appMix && !shimmer) return
+                val spray: (com.android.systemui.island.cluster.IslandView) -> Unit = { island ->
+                    if (appMix) island.startChromaAura(duration)
+                    else island.startChromaShimmer(duration)
                 }
-                if (rightMachine.current?.kind == SignalKind.MEDIA) {
-                    root.rightIsland.startChromaShimmer(duration)
-                }
+                fun matches(signal: IslandSignal?): Boolean = signal?.kind == SignalKind.MEDIA &&
+                    (owner.isNullOrBlank() ||
+                        (signal.payload as? android.media.session.MediaController)?.packageName == owner)
+                if (matches(leftMachine.current)) spray(root.leftIsland)
+                if (matches(rightMachine.current)) spray(root.rightIsland)
             }
         }
+
+    /** Package that currently owns AutoMix, or null when the ROM bridge does. */
+    private fun automixPackage(): String? = runCatching {
+        android.provider.Settings.System.getString(
+            context.contentResolver,
+            "petal_bridge_automix_pkg",
+        )
+    }.getOrNull()?.takeIf { it.isNotBlank() }
 
     override fun start() {
         settings.start()
@@ -230,6 +250,9 @@ class IslandController @Inject constructor(
                     val presenter = createPresenter(signal) ?: return
                     presenter.setHost(host)
                     view.morph(signal, presenter)
+                    if (signal.kind == SignalKind.CALL_ONGOING && view.isExpanded) {
+                        machine.userCollapse()
+                    }
                 }
 
                 override fun onExpand() {
@@ -378,5 +401,8 @@ class IslandController @Inject constructor(
         private const val NOTIF_ID_PREFIX = "notif:"
         private const val ACTION_BRIDGE_TRANSITION = "org.rab1d.bridge.action.TRANSITION"
         private const val EXTRA_TRANSITION_DURATION = "duration"
+        private const val EXTRA_TRANSITION_STYLE = "style"
+        private const val EXTRA_TRANSITION_OWNER = "owner"
+        private const val BRIDGE_STYLE_REVERB = 1
     }
 }

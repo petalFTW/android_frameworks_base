@@ -102,6 +102,7 @@ class IslandView(
     private var accentColor = 0xFFFFFFFF.toInt()
     private var neonAnimator: android.animation.ValueAnimator? = null
     private var chromaAnimator: android.animation.ValueAnimator? = null
+    private var auraAnimator: android.animation.ValueAnimator? = null
 
     // true while the big card is showing
     var isExpanded: Boolean = false
@@ -678,6 +679,31 @@ class IslandView(
         chromaAnimator?.start()
     }
 
+    /**
+     * Chromatic edge aura for the app's own automix transitions. Unlike the
+     * one-off bridge shimmer this holds for the whole blend and breathes, so
+     * the blob reads as "mixing" until the handover.
+     */
+    fun startChromaAura(durationMs: Long) {
+        auraAnimator?.cancel()
+        glass.setAuraProgress(0f)
+        val dur = durationMs.coerceIn(900L, 32_000L)
+        auraAnimator = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = dur
+            interpolator = android.view.animation.LinearInterpolator()
+            addUpdateListener { a -> glass.setAuraProgress(a.animatedValue as Float) }
+            addListener(
+                object : android.animation.AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: android.animation.Animator) {
+                        glass.setAuraProgress(-1f)
+                        auraAnimator = null
+                    }
+                },
+            )
+        }
+        auraAnimator?.start()
+    }
+
     private fun destroyPresenter() {
         presenter?.setTintListener(null)
         presenter?.onDestroy()
@@ -713,6 +739,8 @@ class IslandView(
         neonAnimator = null
         chromaAnimator?.cancel()
         chromaAnimator = null
+        auraAnimator?.cancel()
+        auraAnimator = null
         destroyPresenter()
     }
 

@@ -97,7 +97,8 @@ constructor(
         if (ratio == 0f) {
             return 0f
         }
-        return MathUtils.lerp(minBlurRadius, maxBlurRadius, ratio)
+        val scale = PetalConfig.getQsBlurScale(context)
+        return MathUtils.lerp(minBlurRadius, stockMaxBlurRadius, ratio) * scale
     }
 
     /**
@@ -108,17 +109,19 @@ constructor(
         if (ratio == 0f) {
             return 0f
         }
-        return MathUtils.lerp(minBlurRadius, maxBlurRadius / 2, ratio)
+        val scale = PetalConfig.getQsBlurScale(context)
+        return MathUtils.lerp(minBlurRadius, stockMaxBlurRadius / 2, ratio) * scale
     }
 
     /** Translates a blur radius in pixels to a ratio between 0 to 1. */
     fun ratioOfBlurRadius(blur: Float): Float {
-        if (blur == 0f) {
+        val scale = PetalConfig.getQsBlurScale(context)
+        if (blur == 0f || scale == 0f) {
             return 0f
         }
         return MathUtils.map(
-            minBlurRadius,
-            maxBlurRadius,
+            minBlurRadius * scale,
+            stockMaxBlurRadius * scale,
             0f /* maxStart */,
             1f /* maxStop */,
             blur,

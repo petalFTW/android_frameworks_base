@@ -98,6 +98,7 @@ import com.android.systemui.keyguard.ScreenLifecycle;
 import com.android.systemui.keyguard.WakefulnessLifecycle;
 import com.android.systemui.keyguard.domain.interactor.KeyguardTransitionInteractor;
 import com.android.systemui.log.SessionTracker;
+import com.android.systemui.petalos.PetalUdfpsRippleController;
 import com.android.systemui.plugins.FalsingManager;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
 import com.android.systemui.power.domain.interactor.PowerInteractor;
@@ -196,6 +197,7 @@ public class UdfpsController implements DozeReceiver, Dumpable {
     @NonNull private final InputManager mInputManager;
     @NonNull private final SelectedUserInteractor mSelectedUserInteractor;
     @NonNull private final MSDLPlayer mMsdlPlayer;
+    @NonNull private final PetalUdfpsRippleController mPetalRipple;
     private final boolean mIgnoreRefreshRate;
     private final KeyguardTransitionInteractor mKeyguardTransitionInteractor;
 
@@ -611,6 +613,9 @@ public class UdfpsController implements DozeReceiver, Dumpable {
         mActivePointerId = processedTouch.getPointerOnSensorId();
         switch (processedTouch.getEvent()) {
             case DOWN:
+                // optical udfps pilfers the down before the keyguard icon ever sees it,
+                // so kick the lockscreen ripple straight off the sensor touch
+                mPetalRipple.splashAt(event.getRawX(), event.getRawY());
                 if (shouldTryToDismissKeyguard()) {
                     tryDismissingKeyguard();
                 }
@@ -731,7 +736,8 @@ public class UdfpsController implements DozeReceiver, Dumpable {
             @Application CoroutineScope scope,
             UserActivityNotifier userActivityNotifier,
             Lazy<WakefulnessLifecycle> wakefulnessLifecycle,
-            MSDLPlayer msdlPlayer) {
+            MSDLPlayer msdlPlayer,
+            @NonNull PetalUdfpsRippleController petalRipple) {
         mContext = context;
         mExecution = execution;
         mVibrator = vibrator;
@@ -786,6 +792,7 @@ public class UdfpsController implements DozeReceiver, Dumpable {
         mDefaultUdfpsTouchOverlayViewModel = defaultUdfpsTouchOverlayViewModel;
         mPromptUdfpsTouchOverlayViewModel = promptUdfpsTouchOverlayViewModel;
         mMsdlPlayer = msdlPlayer;
+        mPetalRipple = petalRipple;
 
         mDumpManager.registerDumpable(TAG, this);
 

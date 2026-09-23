@@ -112,14 +112,15 @@ fun PetalMediaRow(
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = modifier.fillMaxWidth()) {
+        val dark = PetalQsSkin.dark()
         val mediaShape =
             androidx.compose.foundation.shape.RoundedCornerShape(PetalQsSkin.TileCardCornerRadius)
         if (mediaVisible) {
             Box(
                 modifier = Modifier.fillMaxWidth()
                     .clip(mediaShape)
-                    .background(PetalQsSkin.TileGlassDark)
-                    .border(1.dp, PetalQsSkin.TileGlassBorderBrush, mediaShape)
+                    .background(PetalQsSkin.tileGlass(dark))
+                    .border(1.dp, PetalQsSkin.tileGlassBorderBrush(dark), mediaShape)
             ) {
                 media()
             }

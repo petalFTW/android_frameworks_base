@@ -82,7 +82,11 @@ class IslandStateMachine(
         // same id means it's an update, morph in place
         if (signal.id == cur.id) {
             current = signal
-            listener?.onMorph(signal)
+            val sameMediaSession = signal.kind == SignalKind.MEDIA &&
+                signal.payload is android.media.session.MediaController &&
+                (signal.payload as? android.media.session.MediaController)?.sessionToken ==
+                    (cur.payload as? android.media.session.MediaController)?.sessionToken
+            if (!sameMediaSession) listener?.onMorph(signal)
             armDwell(signal)
             return true
         }

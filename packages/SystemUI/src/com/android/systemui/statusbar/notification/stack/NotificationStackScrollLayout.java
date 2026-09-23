@@ -956,6 +956,7 @@ public class NotificationStackScrollLayout
 
         setDescendantFocusability(FOCUS_AFTER_DESCENDANTS);
         setClipChildren(false);
+        setClipToPadding(false);
         final ViewConfiguration configuration = ViewConfiguration.get(context);
         mTouchSlop = configuration.getScaledTouchSlop();
         mSlopMultiplier = configuration.getScaledAmbiguousGestureMultiplier();

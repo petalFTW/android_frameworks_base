@@ -1073,7 +1073,8 @@ public class ScrimController implements ViewTreeObserver.OnPreDrawListener, Dump
                     mBehindAlpha = 1;
                     mNotificationsAlpha = behindFraction * getDefaultScrimAlpha();
                 } else {
-                    if (Flags.notificationShadeBlur() && isBlurCurrentlySupported()) {
+                    if (Flags.notificationShadeBlur()) {
+                        // Keep the fallback on the same shared backdrop when blur is unavailable.
                         // TODO (b/390730594): match any spec for controlling alpha based on shade
                         //  expansion fraction.
                         mBehindAlpha = mState.getBehindAlpha() * mPanelExpansionFraction;

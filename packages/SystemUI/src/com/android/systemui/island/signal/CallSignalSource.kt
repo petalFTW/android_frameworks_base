@@ -39,6 +39,7 @@ class CallSignalSource @Inject constructor(
     private val router: SignalRouter,
 ) {
     private val telephonyManager = context.getSystemService(TelephonyManager::class.java)
+    private var started = false
     private var callState = TelephonyManager.CALL_STATE_IDLE
     private var callStyle: Notification? = null
     private var callStyleKey: String? = null
@@ -79,7 +80,13 @@ class CallSignalSource @Inject constructor(
         }
 
     fun start() {
+        if (started) return
+        started = true
         notifPipeline.addCollectionListener(collectionListener)
+        notifPipeline.allNotifs.forEach {
+            onCallStyle(it)
+            onDialerNotif(it)
+        }
         runCatching {
             telephonyManager.registerTelephonyCallback(context.mainExecutor, telephonyCallback)
         }
@@ -87,7 +94,14 @@ class CallSignalSource @Inject constructor(
 
     private fun onCallStyle(entry: NotificationEntry) {
         val n = entry.sbn.notification
-        if (!n.isStyle(Notification.CallStyle::class.java)) return
+        if (!n.isStyle(Notification.CallStyle::class.java)) {
+            if (entry.key == callStyleKey) {
+                callStyle = null
+                callStyleKey = null
+                update()
+            }
+            return
+        }
         callStyle = n
         callStyleKey = entry.key
         update()
@@ -95,7 +109,9 @@ class CallSignalSource @Inject constructor(
 
     private fun onDialerNotif(entry: NotificationEntry) {
         val sbn = entry.sbn
-        if (sbn.packageName != DIALER_PKG) return
+        val defaultDialer = context.getSystemService(android.telecom.TelecomManager::class.java)
+            ?.defaultDialerPackage
+        if (sbn.packageName != defaultDialer && sbn.packageName != DIALER_PKG) return
         if (sbn.notification.category != Notification.CATEGORY_CALL) return
         dialerNotif = sbn.notification
         dialerKey = entry.key
@@ -104,7 +120,13 @@ class CallSignalSource @Inject constructor(
 
     private fun update() {
         val id = "call:telecom"
-        when (callState) {
+        val styleState = when (callStyle?.extras?.getInt(Notification.EXTRA_CALL_TYPE)) {
+            Notification.CallStyle.CALL_TYPE_INCOMING -> TelephonyManager.CALL_STATE_RINGING
+            Notification.CallStyle.CALL_TYPE_ONGOING -> TelephonyManager.CALL_STATE_OFFHOOK
+            else -> TelephonyManager.CALL_STATE_IDLE
+        }
+        val effectiveState = if (callState != TelephonyManager.CALL_STATE_IDLE) callState else styleState
+        when (effectiveState) {
             TelephonyManager.CALL_STATE_RINGING -> {
                 val payload = buildPayload(incoming = true)
                 router.emit(
@@ -113,7 +135,7 @@ class CallSignalSource @Inject constructor(
                         kind = SignalKind.CALL_INCOMING,
                         cluster = Cluster.LEFT,
                         priority = 100,
-                        initialForm = Form.EXPANDED,
+                        initialForm = Form.CAPSULE,
                         ttlMs = 0L,
                         payload = payload,
                     ),
@@ -144,6 +166,7 @@ class CallSignalSource @Inject constructor(
         val name = resolveCallerName(extras, person)
         val subtitle = if (incoming) "Incoming call" else "Ongoing call"
         return CallPayload(
+            contentIntent = n?.contentIntent,
             name = name,
             subtitle = subtitle,
             isIncoming = incoming,
@@ -162,7 +185,7 @@ class CallSignalSource @Inject constructor(
     // try the person first, then the title, then the contacts db
     private fun resolveCallerName(extras: android.os.Bundle?, person: Person?): String {
         person?.name?.toString()?.takeIf { it.isNotBlank() }?.let { return it }
-        val title = extras?.getString(Notification.EXTRA_TITLE)?.trim().orEmpty()
+        val title = extras?.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim().orEmpty()
         if (title.isNotEmpty() && !looksLikeNumber(title)) return title
         val number = title.ifEmpty { person?.uri?.removePrefix("tel:") ?: "" }
         lookupContactName(number)?.let { return it }

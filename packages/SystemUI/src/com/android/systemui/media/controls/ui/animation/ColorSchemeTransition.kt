@@ -141,12 +141,15 @@ internal constructor(
     private val primaryColor: AnimatingColorTransition by lazy {
         animatingColorTransitionFactory(primaryDefault, ::primaryFromScheme) { primaryColor ->
             val petalSkin = com.android.systemui.petalos.PetalQsSkin.isEnabled(context)
+            val dark = com.android.systemui.petalos.PetalQsSkin.isDark(context)
+            val petalPrimary = if (dark) 0xffe1e5ed.toInt() else 0xff2c2e36.toInt()
+            val petalChip = if (dark) 0xcc292b32.toInt() else 0xccE7E9F0.toInt()
             val primaryColorList = ColorStateList.valueOf(
-                if (petalSkin) 0xffe1e5ed.toInt() else primaryColor
+                if (petalSkin) petalPrimary else primaryColor
             )
             mediaViewHolder.actionPlayPause.backgroundTintList = primaryColorList
             mediaViewHolder.seamlessButton.backgroundTintList =
-                if (petalSkin) ColorStateList.valueOf(0xcc292b32.toInt()) else primaryColorList
+                if (petalSkin) ColorStateList.valueOf(petalChip) else primaryColorList
             (mediaViewHolder.seamlessButton.background as? RippleDrawable)?.let {
                 it.setColor(primaryColorList)
                 it.effectColor = primaryColorList
@@ -158,10 +161,13 @@ internal constructor(
     private val onPrimaryColor: AnimatingColorTransition by lazy {
         animatingColorTransitionFactory(onPrimaryDefault, ::onPrimaryFromScheme) { onPrimaryColor ->
             val petalSkin = com.android.systemui.petalos.PetalQsSkin.isEnabled(context)
+            val dark = com.android.systemui.petalos.PetalQsSkin.isDark(context)
+            val petalOnPrimary = if (dark) 0xff202127.toInt() else 0xfff5f5f8.toInt()
+            val petalChipContent = if (dark) 0xfff5f5f8.toInt() else 0xff202127.toInt()
             val onPrimaryColorList = ColorStateList.valueOf(
-                if (petalSkin) 0xff202127.toInt() else onPrimaryColor
+                if (petalSkin) petalOnPrimary else onPrimaryColor
             )
-            val chipColor = if (petalSkin) 0xfff5f5f8.toInt() else onPrimaryColor
+            val chipColor = if (petalSkin) petalChipContent else onPrimaryColor
             mediaViewHolder.actionPlayPause.imageTintList = onPrimaryColorList
             mediaViewHolder.seamlessText.setTextColor(chipColor)
             mediaViewHolder.seamlessIcon.imageTintList = ColorStateList.valueOf(chipColor)

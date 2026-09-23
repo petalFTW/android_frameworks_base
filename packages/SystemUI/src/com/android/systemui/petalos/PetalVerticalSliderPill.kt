@@ -41,6 +41,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -68,8 +69,16 @@ fun PetalVerticalSliderPill(
     height: Dp = PetalQsSkin.MediaRowHeight,
     onIconClick: () -> Unit = {},
     iconActionDescription: String = contentDescriptionText,
-    iconTint: androidx.compose.ui.graphics.Color = PetalQsSkin.GlyphDark,
+    iconTint: Color = Color.Unspecified,
 ) {
+    val dark = PetalQsSkin.dark()
+    // dark mode fills with the near-white card, light mode with the dark contrast fill
+    val fillColor = if (dark) PetalQsSkin.CardLight else PetalQsSkin.CardFillLight
+    val resolvedIconTint = if (iconTint == Color.Unspecified) {
+        if (dark) PetalQsSkin.GlyphDark else PetalQsSkin.GlyphLight
+    } else {
+        iconTint
+    }
     // NaN while not dragging
     var dragFraction by remember { mutableFloatStateOf(Float.NaN) }
     val shown = (if (dragFraction.isNaN()) value else dragFraction).coerceIn(0f, 1f)
@@ -103,9 +112,9 @@ fun PetalVerticalSliderPill(
                         (if (horizontal) size.width else size.height).toFloat().coerceAtLeast(1f)
                 }
                 .clip(pillShape)
-                .background(PetalQsSkin.TileGlassDark)
+                .background(PetalQsSkin.tileGlass(dark))
                 // glass edge highlight on the rim
-                .border(1.dp, PetalQsSkin.TileGlassBorderBrush, pillShape)
+                .border(1.dp, PetalQsSkin.tileGlassBorderBrush(dark), pillShape)
                 .draggable(
                     orientation = orientation,
                     state = dragState,
@@ -144,7 +153,7 @@ fun PetalVerticalSliderPill(
                         if (horizontal) Modifier.fillMaxHeight().fillMaxWidth(shown)
                         else Modifier.fillMaxWidth().fillMaxHeight(shown)
                     )
-                    .background(PetalQsSkin.CardLight)
+                    .background(fillColor)
         )
         IconButton(
             onClick = onIconClick,
@@ -156,12 +165,12 @@ fun PetalVerticalSliderPill(
             Icon(
                 painter = painterResource(id = iconRes),
                 contentDescription = iconActionDescription,
-                tint = iconTint,
+                tint = resolvedIconTint,
                 // backing circle so the icon shows at zero
                 modifier =
                     Modifier.size(32.dp)
                         .background(
-                            PetalQsSkin.CardLight,
+                            fillColor,
                             androidx.compose.foundation.shape.CircleShape,
                         )
                         .padding(6.dp),

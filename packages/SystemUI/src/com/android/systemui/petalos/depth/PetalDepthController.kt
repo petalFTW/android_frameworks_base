@@ -144,15 +144,22 @@ class PetalDepthController @Inject constructor(
     private var tiltTargetY = 0f
     private var tiltFrameScheduled = false
     private var sensorRegistered = false
-    private var baselineRoll: Float? = null
-    private var baselinePitch: Float? = null
+    private var lastTiltFrame = 0L
+    private var tiltRotation = -1
+    private val tiltMatrix = FloatArray(9)
+    private val displayTiltMatrix = FloatArray(9)
+    private var baselineTiltMatrix: FloatArray? = null
 
     private val tiltRunnable = object : Runnable {
         override fun run() {
             tiltFrameScheduled = false
             // ease toward the target each frame
-            tiltX += (tiltTargetX - tiltX) * 0.15f
-            tiltY += (tiltTargetY - tiltY) * 0.15f
+            val now = android.os.SystemClock.uptimeMillis()
+            val dt = if (lastTiltFrame == 0L) 16L else (now - lastTiltFrame).coerceIn(1L, 64L)
+            lastTiltFrame = now
+            val blend = 1f - kotlin.math.exp(-dt / 100f)
+            tiltX += (tiltTargetX - tiltX) * blend
+            tiltY += (tiltTargetY - tiltY) * blend
             subjectView.setTilt(tiltX, tiltY)
             // feed the same filtered value to both
             clockView.setSubjectTilt(tiltX, tiltY)
@@ -172,27 +179,51 @@ class PetalDepthController @Inject constructor(
             if (event.sensor.type != Sensor.TYPE_ROTATION_VECTOR &&
                 event.sensor.type != Sensor.TYPE_GAME_ROTATION_VECTOR) return
             // turn rotation vector into small px offsets
-            val rotationMatrix = FloatArray(9)
-            SensorManager.getRotationMatrixFromVector(rotationMatrix, event.values)
-            val values = FloatArray(3)
-            SensorManager.getOrientation(rotationMatrix, values)
-            val roll = values[2]
-            val pitch = values[1]
-            if (baselineRoll == null || baselinePitch == null) {
-                baselineRoll = roll
-                baselinePitch = pitch
+            if (!sensorRegistered || event.values.any { !it.isFinite() }) return
+            SensorManager.getRotationMatrixFromVector(tiltMatrix, event.values)
+            val rotation = subjectView.display?.rotation ?: android.view.Surface.ROTATION_0
+            val axes = when (rotation) {
+                android.view.Surface.ROTATION_90 -> SensorManager.AXIS_Y to SensorManager.AXIS_MINUS_X
+                android.view.Surface.ROTATION_180 -> SensorManager.AXIS_MINUS_X to SensorManager.AXIS_MINUS_Y
+                android.view.Surface.ROTATION_270 -> SensorManager.AXIS_MINUS_Y to SensorManager.AXIS_X
+                else -> SensorManager.AXIS_X to SensorManager.AXIS_Y
+            }
+            SensorManager.remapCoordinateSystem(tiltMatrix, axes.first, axes.second, displayTiltMatrix)
+            if (displayTiltMatrix.any { !it.isFinite() }) return
+            if (tiltRotation != rotation) {
+                tiltRotation = rotation
+                baselineTiltMatrix = null
+                tiltTargetX = 0f
+                tiltTargetY = 0f
+                scheduleTiltFrame()
+            }
+            val baseline = baselineTiltMatrix
+            if (baseline == null) {
+                baselineTiltMatrix = displayTiltMatrix.copyOf()
                 return
             }
+            // Relative rotation avoids Euler pitch singularities when the phone
+            // is upright. Both axes use the same angular range in display space.
+            val r02 = baseline[0] * displayTiltMatrix[2] +
+                baseline[3] * displayTiltMatrix[5] + baseline[6] * displayTiltMatrix[8]
+            val r12 = baseline[1] * displayTiltMatrix[2] +
+                baseline[4] * displayTiltMatrix[5] + baseline[7] * displayTiltMatrix[8]
+            val r22 = baseline[2] * displayTiltMatrix[2] +
+                baseline[5] * displayTiltMatrix[5] + baseline[8] * displayTiltMatrix[8]
+            val roll = kotlin.math.atan2(r02, r22)
+            val pitch = -kotlin.math.atan2(r12, r22)
             val density = context.resources.displayMetrics.density
             val maxPx = tiltMaxDp * density
             // measure from the pose at registration
             fun normalized(delta: Float): Float {
                 val deadZone = 0.018f
-                val d = if (kotlin.math.abs(delta) < deadZone) 0f else delta
-                return (d.coerceIn(-0.28f, 0.28f) / 0.28f)
+                val wrapped = kotlin.math.atan2(kotlin.math.sin(delta), kotlin.math.cos(delta))
+                val magnitude = ((kotlin.math.abs(wrapped) - deadZone) / (0.28f - deadZone))
+                    .coerceIn(0f, 1f)
+                return kotlin.math.sign(wrapped) * magnitude
             }
-            tiltTargetX = normalized(roll - baselineRoll!!) * maxPx
-            tiltTargetY = normalized(pitch - baselinePitch!!) * maxPx
+            tiltTargetX = normalized(roll) * maxPx
+            tiltTargetY = normalized(pitch) * maxPx
             scheduleTiltFrame()
         }
 
@@ -202,7 +233,7 @@ class PetalDepthController @Inject constructor(
     private fun scheduleTiltFrame() {
         if (!tiltFrameScheduled) {
             tiltFrameScheduled = true
-            mainHandler.post(tiltRunnable)
+            subjectView.postOnAnimation(tiltRunnable)
         }
     }
 
@@ -356,24 +387,19 @@ class PetalDepthController @Inject constructor(
     // only show on the lockscreen with shade closed
     private fun updateVisibility() {
         if (!attached) return
+        // listener callbacks get dropped across unlock/doze churn, so re-read the
+        // real state every time instead of trusting whatever we last heard
+        keyguardGoingAway = keyguardStateController.isKeyguardGoingAway
+        mediaCoverActive = mediaCover.isCoverApplied()
+        cdPlayerActive = cdPlayer.isCdShowing
         if (keyguardGoingAway && PetalConfig.isSeamlessUnlockEnabled(context)
                 && !statusBarStateController.isDozing) {
             stopParallax(resetTilt = false)
             clockView.stopTicking()
             reassertStockClockHide()
-            // subject keeps scaling during the unlock
-            if (subjectView.visibility == android.view.View.VISIBLE &&
-                    subjectView.tag != TAG_LEADING) {
-                subjectView.tag = TAG_LEADING
-                subjectView.pivotX = subjectView.width / 2f
-                subjectView.pivotY = subjectView.height / 2f
-                subjectView.animate()
-                    .scaleX(SUBJECT_LEAD_SCALE)
-                    .scaleY(SUBJECT_LEAD_SCALE)
-                    .setDuration(SUBJECT_LEAD_MS)
-                    .setInterpolator(Interpolators.STANDARD_DECELERATE)
-                    .start()
-            }
+            // home gets no cutout, so melt the depth shit out on the way up
+            morphOutForUnlock(subjectView, lead = true)
+            morphOutForUnlock(clockView, lead = false)
             return
         }
         val onKeyguard =
@@ -448,12 +474,38 @@ class PetalDepthController @Inject constructor(
             .start()
     }
 
+    // subject floats up a touch then evaporates with the lock ui
+    private fun morphOutForUnlock(layer: android.view.View, lead: Boolean) {
+        if (layer.tag == TAG_LEADING) return
+        if (layer.visibility != android.view.View.VISIBLE) return
+        layer.tag = TAG_LEADING
+        layer.animate().cancel()
+        if (lead) {
+            layer.pivotX = layer.width / 2f
+            layer.pivotY = layer.height / 2f
+        }
+        layer.animate()
+            .scaleX(if (lead) SUBJECT_LEAD_SCALE else 1f)
+            .scaleY(if (lead) SUBJECT_LEAD_SCALE else 1f)
+            .alpha(0f)
+            .setDuration(SUBJECT_LEAD_MS)
+            .setInterpolator(Interpolators.STANDARD_DECELERATE)
+            .withEndAction {
+                layer.tag = null
+                layer.visibility = android.view.View.GONE
+                layer.setAlpha(1f)
+                layer.scaleX = 1f
+                layer.scaleY = 1f
+            }
+            .start()
+    }
+
     // runs each layout, stock clock keeps rebinding
     private fun reassertStockClockHide() {
         if (!attached) return
         // keep stock hidden until ours is fully gone
         val hideStock = petalClockVisible ||
-            (keyguardGoingAway && clockView.visibility == android.view.View.VISIBLE)
+            (keyguardGoingAway && enabled)
         val targetVisibility = if (hideStock) android.view.View.INVISIBLE else android.view.View.VISIBLE
         val large = keyguardRootView.findViewById<android.view.View>(
             ClockViewIds.LOCKSCREEN_CLOCK_VIEW_LARGE)
@@ -498,8 +550,7 @@ class PetalDepthController @Inject constructor(
         val sensor = sm.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR)
             ?: sm.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR) ?: return
         // UI rate is plenty here
-        baselineRoll = null
-        baselinePitch = null
+        baselineTiltMatrix = null
         sensorRegistered = sm.registerListener(
             sensorListener, sensor, SensorManager.SENSOR_DELAY_UI)
     }
@@ -509,9 +560,9 @@ class PetalDepthController @Inject constructor(
             context.getSystemService(SensorManager::class.java)?.unregisterListener(sensorListener)
         }
         sensorRegistered = false
-        baselineRoll = null
-        baselinePitch = null
-        mainHandler.removeCallbacks(tiltRunnable)
+        baselineTiltMatrix = null
+        subjectView.removeCallbacks(tiltRunnable)
+        lastTiltFrame = 0L
         tiltFrameScheduled = false
         if (!resetTilt) return
         tiltTargetX = 0f
@@ -525,6 +576,10 @@ class PetalDepthController @Inject constructor(
     override fun dump(pw: PrintWriter, args: Array<out String>) {
         pw.println("PetalDepthController:")
         pw.println("  enabled=$enabled generation=$cutoutGeneration shadeExpanded=$shadeExpanded")
+        pw.println(
+            "  attached=$attached goingAway=$keyguardGoingAway cover=$mediaCoverActive" +
+                " cd=$cdPlayerActive dozing=${statusBarStateController.isDozing}" +
+                " state=${statusBarStateController.state}")
         pw.println(
             "  subject=${subjectView.subjectForDump()?.width}x${subjectView.subjectForDump()?.height}" +
                 " visibility=${subjectView.visibility}")

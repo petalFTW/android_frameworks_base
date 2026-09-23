@@ -57,7 +57,8 @@ import javax.inject.Inject;
 public class AmbientState implements Dumpable {
 
     private static final float MAX_PULSE_HEIGHT = 100000f;
-    private static final boolean NOTIFICATIONS_HAVE_SHADOWS = false;
+    // Render soft shadows from each row outline, outside its clipped content.
+    private static final boolean NOTIFICATIONS_HAVE_SHADOWS = true;
 
     private final SectionProvider mSectionProvider;
     private final BypassController mBypassController;

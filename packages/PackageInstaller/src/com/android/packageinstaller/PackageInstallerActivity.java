@@ -61,6 +61,7 @@ import androidx.annotation.NonNull;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 /**
  * This activity is launched when a new application is installed via side loading
@@ -89,6 +90,9 @@ public class PackageInstallerActivity extends Activity {
     static final String EXTRA_IS_TRUSTED_SOURCE = "EXTRA_IS_TRUSTED_SOURCE";
     private static final String ALLOW_UNKNOWN_SOURCES_KEY =
             PackageInstallerActivity.class.getName() + "ALLOW_UNKNOWN_SOURCES_KEY";
+
+    private static final Set<String> BLOCKED_INSTALL_PACKAGES =
+            Set.of("com.google.android.safetycore");
 
     private int mSessionId = -1;
     private Uri mPackageURI;
@@ -452,6 +456,12 @@ public class PackageInstallerActivity extends Activity {
 
         if (!wasSetUp) {
             return;
+        }
+
+        if (mPkgInfo != null && BLOCKED_INSTALL_PACKAGES.contains(mPkgInfo.packageName)) {
+            Log.w(TAG, "Blocking installation of " + mPkgInfo.packageName);
+            setPmResult(PackageManager.INSTALL_FAILED_INTERNAL_ERROR);
+            finish();
         }
     }
 

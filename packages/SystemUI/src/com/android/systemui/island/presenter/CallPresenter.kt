@@ -28,7 +28,6 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.android.systemui.island.IslandGeometry
-import com.android.systemui.island.render.EqualizerView
 
 // name and call intents, scraped from the dialer notif
 data class CallPayload(
@@ -38,26 +37,31 @@ data class CallPayload(
     val answerIntent: PendingIntent?,
     val declineIntent: PendingIntent?,
     val hangUpIntent: PendingIntent?,
+    val contentIntent: PendingIntent? = null,
     val startTime: Long = 0L,
 )
 
 private const val ACCENT_CALL = 0xFF32D74B.toInt()
 private const val ACCENT_DECLINE = 0xFFFF3B30.toInt()
 
-// call card: bars when collapsed, avatar and buttons when open
+// Call icon and caller when collapsed; incoming actions when expanded.
 class CallPresenter(
     private val context: Context,
     private val geometry: IslandGeometry,
     private val payload: CallPayload,
 ) : IslandPresenter {
 
-    private var equalizer: EqualizerView? = null
+    private var host: IslandPresenter.Host? = null
+
+    override fun setHost(host: IslandPresenter.Host?) { this.host = host }
+
     private val telecomManager = context.getSystemService(android.telecom.TelecomManager::class.java)
 
     private fun answerCall() {
-        if (payload.answerIntent?.sendSafe() == true) return
-        // no intent from the dialer, fall back to telecom
-        runCatching { telecomManager?.acceptRingingCall() }
+        if (payload.answerIntent?.sendSafe() != true) {
+            runCatching { telecomManager?.acceptRingingCall() }
+        }
+        openCall()
     }
 
     private fun declineCall() {
@@ -73,22 +77,28 @@ class CallPresenter(
     }
 
     override fun bindCollapsed(container: ViewGroup): Int {
-        equalizer = EqualizerView(context).apply {
-            barCount = 3
-            setMetrics(
-                geometry.equalizerBarWidth,
-                geometry.equalizerGap,
-                geometry.equalizerMaxHeight,
-            )
-            setBarColor(ACCENT_CALL)
+        val row = LinearLayout(context).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(geometry.capsulePaddingStart, 0, geometry.capsulePaddingEnd, 0)
         }
-        val lp = FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            (geometry.equalizerMaxHeight * 1.2f).toInt(),
-            Gravity.CENTER or Gravity.END,
-        ).apply { marginEnd = geometry.capsulePaddingEnd }
-        container.addView(equalizer, lp)
-        return geometry.callCapsuleWidth
+        row.addView(ImageView(context).apply {
+            setImageResource(android.R.drawable.sym_action_call)
+            setColorFilter(ACCENT_CALL)
+            contentDescription = payload.subtitle
+        }, LinearLayout.LayoutParams(geometry.dp(20f), geometry.dp(20f)))
+        row.addView(TextView(context).apply {
+            text = payload.name
+            setTextColor(Color.WHITE)
+            setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 12f)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+            marginStart = geometry.dp(8f)
+        })
+        val width = maxOf(geometry.callCapsuleWidth, geometry.dp(160f))
+        container.addView(row, FrameLayout.LayoutParams(width,
+            ViewGroup.LayoutParams.MATCH_PARENT))
+        return width
     }
 
     override fun bindExpanded(container: ViewGroup) {
@@ -118,6 +128,7 @@ class CallPresenter(
             orientation = LinearLayout.VERTICAL
         }
         val name = TextView(context).apply {
+            setTextColor(Color.WHITE)
             text = payload.name.ifBlank { "Incoming call" }
             setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 16f)
             typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD)
@@ -125,6 +136,7 @@ class CallPresenter(
         }
         textColumn.addView(name)
         val sub = TextView(context).apply {
+            setTextColor(Color.WHITE)
             text = payload.subtitle
             setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 12f)
             alpha = 0.6f
@@ -168,16 +180,25 @@ class CallPresenter(
     override fun tint(): IslandTint = IslandTint(accent = ACCENT_CALL)
 
     override fun onPrimaryAction(): Boolean {
-        // tapping a call card just collapses it
-        return false
+        if (payload.isIncoming) return false
+        openCall()
+        return true
     }
 
-    override fun onDestroy() {
-        equalizer = null
+    private fun openCall() {
+        val intent = payload.contentIntent
+        if (intent != null && host != null) {
+            host?.launchPendingIntent(intent)
+            return
+        }
+        if (intent?.sendSafe() == true) return
+        runCatching { telecomManager?.showInCallScreen(false) }
     }
 
     private fun callButton(color: Int, glyph: Int, onClick: () -> Unit): ImageView =
         ImageView(context).apply {
+            contentDescription = if (color == ACCENT_CALL) "Answer call"
+                else if (payload.isIncoming) "Decline call" else "End call"
             setImageResource(glyph)
             setColorFilter(Color.WHITE)
             background = GradientDrawable().apply {

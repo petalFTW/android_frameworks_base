@@ -45,14 +45,9 @@ import com.google.android.msdl.domain.MSDLPlayer
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.DisposableHandle
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flowOf
 
 object DeviceEntryIconViewBinder {
     private const val TAG = "DeviceEntryIconViewBinder"
-
-    // how far the udfps icon drops when the cd player is up, in dp
-    private const val CD_FP_DROP_DP = 48f
 
     /**
      * Updates UI for:
@@ -74,7 +69,6 @@ object DeviceEntryIconViewBinder {
         vibratorHelper: VibratorHelper,
         msdlPlayer: MSDLPlayer,
         overrideColor: Color? = null,
-        cdPlayerVisible: Flow<Boolean> = flowOf(false),
     ): DisposableHandle {
         val disposables = DisposableHandles()
         val touchHandlingView = view.touchHandlingView
@@ -112,9 +106,7 @@ object DeviceEntryIconViewBinder {
         disposables +=
             view.repeatWhenAttached(mainImmediateDispatcher) {
                 repeatOnLifecycle(Lifecycle.State.CREATED) {
-                    // petal: burn-in y and the cd dodge offset stack up
                     var burnInY = 0
-                    var cdDropPx = 0
                     launch("$TAG#viewModel.useBackgroundProtection") {
                         viewModel.useBackgroundProtection.collect { useBackgroundProtection ->
                             if (useBackgroundProtection) {
@@ -128,20 +120,8 @@ object DeviceEntryIconViewBinder {
                         viewModel.burnInOffsets.collect { burnInOffsets ->
                             burnInY = burnInOffsets.y
                             view.translationX = burnInOffsets.x.toFloat()
-                            view.translationY = (burnInY + cdDropPx).toFloat()
+                            view.translationY = burnInY.toFloat()
                             view.aodFpDrawable.progress = burnInOffsets.progress
-                        }
-                    }
-                    // drop the fingerprint a bit so the cd play/pause is tappable
-                    launch("$TAG#petalCdFpDrop") {
-                        cdPlayerVisible.collect { showing ->
-                            cdDropPx =
-                                if (showing) {
-                                    (CD_FP_DROP_DP * view.resources.displayMetrics.density).toInt()
-                                } else {
-                                    0
-                                }
-                            view.translationY = (burnInY + cdDropPx).toFloat()
                         }
                     }
 
@@ -240,8 +220,17 @@ object DeviceEntryIconViewBinder {
                     // Start with an empty state
                     Log.d(TAG, "Initializing device entry fgIconView")
                     fgIconView.setImageState(StateSet.NOTHING, /* merge */ false)
+                    // petal: watch for the fp -> unlocked hop and fire the shockwave
+                    var prevType = DeviceEntryIconView.IconType.NONE
                     launch("$TAG#fpIconView.viewModel") {
                         fgViewModel.viewModel.collect { viewModel ->
+                            val type = viewModel.type
+                            if (type == DeviceEntryIconView.IconType.UNLOCK &&
+                                prevType == DeviceEntryIconView.IconType.FINGERPRINT) {
+                                view.playUnlockBurst()
+                            }
+                            prevType = type
+                            view.isFingerprintIcon = type == DeviceEntryIconView.IconType.FINGERPRINT
                             Log.d(TAG, "Updating device entry icon image state $viewModel")
                             if (viewModel.type.contentDescriptionResId != -1) {
                                 fgIconView.contentDescription =

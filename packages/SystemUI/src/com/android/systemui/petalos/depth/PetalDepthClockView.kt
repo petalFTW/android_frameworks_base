@@ -22,7 +22,6 @@ import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Shader
-import android.graphics.Typeface
 import android.os.Handler
 import android.os.Looper
 import android.text.format.DateFormat
@@ -111,6 +110,12 @@ class PetalDepthClockView(context: Context) : View(context) {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         visibility = GONE
         twentyFourHour = DateFormat.is24HourFormat(context)
+        // feed the clock rubik, shrug if the resource is missing
+        runCatching {
+            org.petalos.config.DepthClockMaterials.setBaseTypeface(
+                context.resources.getFont(R.font.petal_rubik)
+            )
+        }
         applyTypeface(style)
     }
 
@@ -121,15 +126,15 @@ class PetalDepthClockView(context: Context) : View(context) {
                 in org.petalos.config.DepthClockMaterials.HEAVY..org.petalos.config.DepthClockMaterials.LAST ->
                     org.petalos.config.DepthClockMaterials.typeface(forStyle)
                 STYLE_BLOCKBUSTER, STYLE_MONOLITH ->
-                    Typeface.create("sans-serif-black", Typeface.NORMAL)
-                STYLE_VOGUE -> Typeface.create("serif", Typeface.NORMAL)
-                STYLE_GOLD -> Typeface.create("serif", Typeface.BOLD)
-                STYLE_NEON -> Typeface.create("sans-serif-light", Typeface.NORMAL)
-                else -> Typeface.create("sans-serif-condensed", Typeface.BOLD)
+                    org.petalos.config.DepthClockMaterials.weighted(900, false)
+                STYLE_VOGUE -> org.petalos.config.DepthClockMaterials.weighted(400, true)
+                STYLE_GOLD -> org.petalos.config.DepthClockMaterials.weighted(700, true)
+                STYLE_NEON -> org.petalos.config.DepthClockMaterials.weighted(300, false)
+                else -> org.petalos.config.DepthClockMaterials.weighted(700, false)
             }
         fillPaint.typeface = face
         strokePaint.typeface = face
-        datePaint.typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        datePaint.typeface = org.petalos.config.DepthClockMaterials.weighted(500, false)
     }
 
     fun setStyle(newStyle: Int) {

@@ -87,6 +87,14 @@ class LiquidGlassDrawable : Drawable() {
     )
     private val chromaShaders = arrayOfNulls<LinearGradient>(3)
 
+    /** chromatic edge aura, -1 is off. driven by the app's automix transitions. */
+    private var auraProgress = -1f
+    private val auraPaints = arrayOf(
+        Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE },
+        Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE },
+        Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE },
+    )
+
 
     private val neonMeasurePath = Path()
     private val neonSegment = Path()
@@ -147,6 +155,17 @@ class LiquidGlassDrawable : Drawable() {
         }
     }
 
+    /** sheen gain, 255 leaves the shader alone */
+    private var sheenStrength = 0xFF
+
+    fun setSheenStrength(strength: Int) {
+        if (sheenStrength != strength) {
+            sheenStrength = strength
+            sheenPaint.alpha = strength
+            invalidateSelf()
+        }
+    }
+
     fun setNeonColor(@ColorInt color: Int) {
         neonColor = color
     }
@@ -161,6 +180,14 @@ class LiquidGlassDrawable : Drawable() {
     fun setChromaProgress(progress: Float) {
         if (chromaProgress != progress) {
             chromaProgress = progress
+            invalidateSelf()
+        }
+    }
+
+    /** 0..1 while the app automixes, -1 off. */
+    fun setAuraProgress(progress: Float) {
+        if (auraProgress != progress) {
+            auraProgress = progress
             invalidateSelf()
         }
     }
@@ -186,6 +213,9 @@ class LiquidGlassDrawable : Drawable() {
             rimShaderDirty = false
         }
         canvas.drawPath(rimPath, rimPaint)
+
+        // chromatic edge aura while the app automixes
+        if (auraProgress in 0f..1f) drawChromaAura(canvas)
 
         // neon sweep
         if (neonProgress >= 0f) drawNeon(canvas)
@@ -275,6 +305,38 @@ class LiquidGlassDrawable : Drawable() {
         return fadeIn * fadeOut
     }
 
+    /**
+     * A blurred chromatic fringe hugging the blob's rim: three offset RGB
+     * strokes of the outline, screened together so the edges split into a
+     * prismatic halo while the two records trade.
+     */
+    private fun drawChromaAura(canvas: Canvas) {
+        val a = auraAlpha(auraProgress)
+        if (a <= 0.01f) return
+        val save = canvas.save()
+        canvas.clipPath(path)
+        val offset = rimWidthPx * 1.6f
+        for (i in auraPaints.indices) {
+            auraPaints[i].color = auraWithAlpha((a * AURA_ALPHA).toInt(), CHROMA_COLORS[i])
+            val dx = (i - 1) * offset
+            val dy = (i - 1) * offset * 0.35f
+            val s = canvas.save()
+            canvas.translate(dx, dy)
+            canvas.drawPath(rimPath, auraPaints[i])
+            canvas.restoreToCount(s)
+        }
+        canvas.restoreToCount(save)
+    }
+
+    private fun auraAlpha(p: Float): Float {
+        val fadeIn = (p / AURA_FADE_FRACTION).coerceIn(0f, 1f)
+        val fadeOut = ((1f - p) / AURA_FADE_FRACTION).coerceIn(0f, 1f)
+        return fadeIn * fadeOut
+    }
+
+    private fun auraWithAlpha(alpha: Int, color: Int): Int =
+        Color.argb(alpha, Color.red(color), Color.green(color), Color.blue(color))
+
 
     private fun drawSheen(canvas: Canvas) {
         val w = rect.width()
@@ -338,6 +400,17 @@ class LiquidGlassDrawable : Drawable() {
                 android.graphics.PorterDuff.Mode.SCREEN
             )
         }
+        // chromatic aura: a wide, blurred RGB stroke of the outline
+        for (i in auraPaints.indices) {
+            auraPaints[i].strokeWidth = (rimWidthPx * 6f).coerceAtLeast(6f)
+            auraPaints[i].maskFilter = BlurMaskFilter(
+                (rimWidthPx * 6f).coerceAtLeast(6f),
+                BlurMaskFilter.Blur.NORMAL,
+            )
+            auraPaints[i].xfermode = android.graphics.PorterDuffXfermode(
+                android.graphics.PorterDuff.Mode.SCREEN
+            )
+        }
         geometryDirty = false
     }
 
@@ -366,6 +439,10 @@ class LiquidGlassDrawable : Drawable() {
         private const val CHROMA_FADE_FRACTION = 0.22f
         private const val CHROMA_BAND_ALPHA = 0x5A
         private val CHROMA_COLORS = intArrayOf(0xFFFF5050.toInt(), 0xFF50FF9B.toInt(), 0xFF5AA0FF.toInt())
+
+        /** chromatic aura tuning */
+        private const val AURA_FADE_FRACTION = 0.18f
+        private const val AURA_ALPHA = 0xB4
 
         @Volatile
         private var cachedNoise: Bitmap? = null

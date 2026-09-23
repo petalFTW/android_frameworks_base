@@ -30,6 +30,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -144,6 +145,15 @@ constructor(
                         }
                 }
             val petalPagerState = rememberPagerState(0) { petalCirclePages.size }
+            // petalOS: come back to the first tile page every time the control center is
+            // opened, instead of leaving it wherever the user swiped to last.
+            LaunchedEffect(listening, petalPagerState) {
+                snapshotFlow { listening() }.collect {
+                    if (listening() && petalPagerState.pageCount > 0) {
+                        petalPagerState.scrollToPage(0)
+                    }
+                }
+            }
             // fixed height so a short last page doesn't drag the pager and dots with it
             val petalPageHeight =
                 PetalQsSkin.compactTileHeight() * PetalQsSkin.petalQsPageRows +

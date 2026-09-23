@@ -42,7 +42,7 @@ import com.android.systemui.log.TouchHandlingViewLogger
 import com.android.systemui.log.core.Logger
 import com.android.systemui.log.dagger.KeyguardBlueprintLog
 import com.android.systemui.log.dagger.LongPressTouchLog
-import com.android.systemui.petalos.PetalCdLockScreenController
+import com.android.systemui.petalos.PetalUdfpsRippleController
 import com.android.systemui.plugins.FalsingManager
 import com.android.systemui.res.R
 import com.android.systemui.shade.NotificationPanelView
@@ -72,9 +72,9 @@ constructor(
     private val falsingManager: Lazy<FalsingManager>,
     private val vibratorHelper: Lazy<VibratorHelper>,
     private val msdlPlayer: Lazy<MSDLPlayer>,
-    private val petalCdController: Lazy<PetalCdLockScreenController>,
     @LongPressTouchLog private val logBuffer: LogBuffer,
     @KeyguardBlueprintLog blueprintLogBuffer: LogBuffer,
+    private val udfpsRipple: PetalUdfpsRippleController,
 ) : KeyguardSection() {
     private val blueprintLogger = Logger(blueprintLogBuffer, TAG)
     private val deviceEntryIconViewId = R.id.device_entry_icon_view
@@ -87,7 +87,11 @@ constructor(
                     null,
                     logger = TouchHandlingViewLogger(logBuffer = logBuffer, TAG),
                 )
-                .apply { id = deviceEntryIconViewId }
+                .apply {
+                    id = deviceEntryIconViewId
+                    // fingerprint press throws the ripple into its own window
+                    onFingerprintTouch = { udfpsRipple.splash(this) }
+                }
 
         constraintLayout.addView(view)
     }
@@ -106,7 +110,6 @@ constructor(
                     falsingManager.get(),
                     vibratorHelper.get(),
                     msdlPlayer.get(),
-                    cdPlayerVisible = petalCdController.get().cdShowing,
                 )
         }
     }

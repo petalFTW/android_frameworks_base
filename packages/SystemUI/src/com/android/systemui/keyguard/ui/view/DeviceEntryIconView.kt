@@ -23,6 +23,7 @@ import android.graphics.drawable.AnimatedVectorDrawable
 import android.util.AttributeSet
 import android.util.StateSet
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
@@ -62,19 +63,37 @@ constructor(
     val aodFpDrawable: LottieDrawable = LottieDrawable()
     var accessibilityHintType: AccessibilityHintType = AccessibilityHintType.NONE
 
+    // set by the binder so taps only splash when a fingerprint icon is up
+    var isFingerprintIcon: Boolean = false
+
+    // the overlay ripple lives in its own window, we just poke it on touch
+    var onFingerprintTouch: (() -> Unit)? = null
+
     private var animatedIconDrawable: AnimatedStateListDrawable = AnimatedStateListDrawable()
 
     init {
+        // let the ripple spill past the icon instead of getting chopped off
+        clipChildren = false
         setupIconStates()
         setupIconTransitions()
         setupAccessibilityDelegate()
 
-        // Ordering matters. From background to foreground we want:
-        //     bgView, iconView, longpressHandlingView overlay
+        // background, icon, then the touch catcher on top
         addBgImageView()
         addIconImageView()
         addTouchHandlingView()
     }
+
+    // finger is down on the print, kick the overlay splash right away
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN && isFingerprintIcon) {
+            onFingerprintTouch?.invoke()
+        }
+        return super.dispatchTouchEvent(event)
+    }
+
+    // the press ripple now owns the whole show, unlock just lets it finish
+    fun playUnlockBurst() = Unit
 
     private fun setupAccessibilityDelegate() {
         accessibilityDelegate =
@@ -104,12 +123,7 @@ constructor(
             }
     }
 
-    /**
-     * Setups different icon states.
-     * - All lottie views will require a LottieOnCompositionLoadedListener to update
-     *   LottieProperties (like color) of the view.
-     * - Drawable properties can be updated using ImageView properties like imageTintList.
-     */
+    // wire the lock/unlock/fp drawables, aod flavours included
     private fun setupIconStates() {
         // Lockscreen States
         // LOCK

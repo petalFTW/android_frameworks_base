@@ -140,7 +140,14 @@ constructor(
     private val bridgeTransitionReceiver =
         object : android.content.BroadcastReceiver() {
             override fun onReceive(c: Context?, intent: android.content.Intent?) {
-                state.value = state.value.copy(transitionPulse = SystemClock.uptimeMillis())
+                val owner = intent?.getStringExtra("owner")
+                if (!owner.isNullOrBlank() && owner != trackedController?.packageName) return
+                state.value = state.value.copy(
+                    transitionPulse = SystemClock.uptimeMillis(),
+                    automixDurationMs = if (!owner.isNullOrBlank())
+                        (intent?.getIntExtra("duration", 10000) ?: 10000).coerceIn(900, 32000)
+                        else 0,
+                )
             }
         }
 
@@ -265,7 +272,10 @@ constructor(
         val playback = controller.playbackState
         val duration = metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L
         val actions = playback?.actions ?: 0L
-        val playing = playback?.state == PlaybackState.STATE_PLAYING
+        val playing = when (playback?.state) {
+            PlaybackState.STATE_BUFFERING, PlaybackState.STATE_CONNECTING -> state.value.playing
+            else -> playback?.state == PlaybackState.STATE_PLAYING
+        }
         state.value =
             state.value.copy(
                 hasMedia = true,
@@ -334,11 +344,10 @@ constructor(
         val onKeyguard =
             statusBarStateController.state == StatusBarState.KEYGUARD &&
                 !statusBarStateController.isDozing
-        // a paused session should not pin the cd on the lockscreen forever
+        // keep the cd up for the whole session; pausing just tucks the disc into the sleeve
         val visible =
             enabled &&
                 state.value.hasMedia &&
-                isPlayingOrBuffering() &&
                 onKeyguard &&
                 !shadeExpanded &&
                 !keyguardStateController.isKeyguardGoingAway
@@ -350,13 +359,6 @@ constructor(
             for (l in cdStateListeners) l(visible)
         }
         if (visible && state.value.playing) startTicker() else stopTicker()
-    }
-
-    // buffering counts as "playing" here, only a real pause hides the cd
-    private fun isPlayingOrBuffering(): Boolean {
-        val playbackState = trackedController?.playbackState?.state ?: return false
-        return playbackState == PlaybackState.STATE_PLAYING ||
-            playbackState == PlaybackState.STATE_BUFFERING
     }
 
     private fun onShadeExpansionChanged(expanded: Boolean) {

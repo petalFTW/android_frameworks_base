@@ -90,6 +90,8 @@ class NotificationSignalSource @Inject constructor(
         val n = sbn.notification
         android.util.Log.d(TAG, "maybeEmit key=${entry.key} imp=${entry.ranking.importance}")
 
+        if (n.category == Notification.CATEGORY_CALL || n.isStyle(Notification.CallStyle::class.java)) return
+
         // user opened it, don't pop it back up when the app re-posts
         if (router.isRecentlyOpened(entry.key)) {
             android.util.Log.d(TAG, "suppressing recently-opened notification ${entry.key}")

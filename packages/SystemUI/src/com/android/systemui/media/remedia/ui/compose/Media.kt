@@ -406,10 +406,13 @@ private fun Card(
 @Composable
 private fun rememberAnimatedColorScheme(colorScheme: MediaColorScheme?): AnimatedColorScheme {
     val petalSkin = PetalQsSkin.isEnabled(LocalContext.current)
-    val primaryColor = if (petalSkin) Color(0xFFE1E5ED)
-        else colorScheme?.primary ?: MaterialTheme.colorScheme.primaryFixed
-    val onPrimaryColor = if (petalSkin) Color(0xFF202127)
-        else colorScheme?.onPrimary ?: MaterialTheme.colorScheme.onPrimaryFixed
+    val petalDark = PetalQsSkin.dark()
+    val primaryColor = if (petalSkin) {
+        if (petalDark) Color(0xFFE1E5ED) else Color(0xFF2C2E36)
+    } else colorScheme?.primary ?: MaterialTheme.colorScheme.primaryFixed
+    val onPrimaryColor = if (petalSkin) {
+        if (petalDark) Color(0xFF202127) else Color(0xFFF5F5F8)
+    } else colorScheme?.onPrimary ?: MaterialTheme.colorScheme.onPrimaryFixed
     val backgroundColor = colorScheme?.background ?: MaterialTheme.colorScheme.onSurface
     val animatedPrimary by animateColorAsState(targetValue = primaryColor)
     val animatedOnPrimary by animateColorAsState(targetValue = onPrimaryColor)
@@ -1211,8 +1214,13 @@ private fun DeviceChip(
     // The inner composable consumes the user events from the InteractionSource and feeds them into
     // its indication.
     val petalSkin = PetalQsSkin.isEnabled(LocalContext.current)
-    val chipFill = if (petalSkin) Color(0xCC292B32) else style.fillColor
-    val chipContent = if (petalSkin) Color(0xFFF5F5F8) else style.contentColor
+    val petalDark = PetalQsSkin.dark()
+    val chipFill = if (petalSkin) {
+        if (petalDark) Color(0xCC292B32) else Color(0xCCE7E9F0)
+    } else style.fillColor
+    val chipContent = if (petalSkin) {
+        if (petalDark) Color(0xFFF5F5F8) else Color(0xFF202127)
+    } else style.contentColor
     val clickInteractionSource = remember { MutableInteractionSource() }
     Expandable(
         controller =

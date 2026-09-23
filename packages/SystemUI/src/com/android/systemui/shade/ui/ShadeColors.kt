@@ -17,41 +17,25 @@
 package com.android.systemui.shade.ui
 
 import android.content.Context
-import androidx.compose.ui.graphics.toArgb
 import com.android.internal.graphics.ColorUtils
 import com.android.systemui.res.R
-import org.petalos.config.PetalConfig
 
 object ShadeColors {
-    /**
-     * Calculate notification shade panel color.
-     *
-     * @param context Context to resolve colors.
-     * @param blurSupported Whether blur is enabled (can be off due to battery saver)
-     * @param withScrim Whether to composite a scrim when blur is enabled (used by legacy shade).
-     * @return color for the shade panel.
-     */
+    // shade panel colour, blur fallback handled inside
     @JvmStatic
     fun shadePanel(context: Context, blurSupported: Boolean, withScrim: Boolean): Int {
-        // Match the Petal controls with smoked frost, including a legible solid fallback
-        // when battery saver or device capabilities disable blur. Explicit Hub colors win.
-        if (
-            com.android.systemui.petalos.PetalQsSkin.isEnabled(context) &&
-                !PetalConfig.isQsCustomEnabled(context)
-        ) {
-            return if (blurSupported) frostPanelColor()
-            else com.android.systemui.petalos.PetalQsSkin.FrostTint.toArgb()
-        }
-        return shadePanelStock(context, blurSupported, withScrim)
+        return if (blurSupported) frostPanelColor(context) else neutralPanelBase(context)
     }
 
-    /** petalOS frost panel color (smoked translucent glass tint). */
+    private fun neutralPanelBase(context: Context): Int =
+        if (com.android.systemui.petalos.PetalQsSkin.isDark(context)) 0xFF181818.toInt()
+        else 0xFFF5F5F5.toInt()
+
+    /** A single achromatic veil over the shared QS and notification blur. */
     @JvmStatic
-    fun frostPanelColor(): Int =
-        ColorUtils.setAlphaComponent(
-            com.android.systemui.petalos.PetalQsSkin.FrostTint.toArgb(),
-            com.android.systemui.petalos.PetalQsSkin.FrostScrimAlpha,
-        )
+    fun frostPanelColor(context: Context): Int =
+        ColorUtils.setAlphaComponent(neutralPanelBase(context),
+            if (com.android.systemui.petalos.PetalQsSkin.isDark(context)) 0x80 else 0xB0)
 
     /**
      * Panel color for surfaces that share their backdrop with the bouncer: always the stock
@@ -63,12 +47,6 @@ object ShadeColors {
         shadePanelStock(context, blurSupported, withScrim = true)
 
     private fun shadePanelStock(context: Context, blurSupported: Boolean, withScrim: Boolean): Int {
-        if (PetalConfig.isQsCustomEnabled(context)) {
-            val color = PetalConfig.getQsColor(context)
-            if (color != PetalConfig.DISABLED) {
-                return ColorUtils.setAlphaComponent(color, PetalConfig.getQsAlpha(context))
-            }
-        }
         return if (blurSupported) {
             if (withScrim) {
                 ColorUtils.compositeColors(
@@ -85,11 +63,8 @@ object ShadeColors {
 
     @JvmStatic
     fun notificationScrim(context: Context, blurSupported: Boolean): Int {
-        return if (blurSupported) {
-            notificationScrimStandard(context)
-        } else {
-            notificationScrimFallback(context)
-        }
+        // The full-screen behind scrim already provides contrast for both regions.
+        return android.graphics.Color.TRANSPARENT
     }
 
     @JvmStatic
@@ -114,16 +89,4 @@ object ShadeColors {
         return context.getColor(R.color.shade_panel_fallback)
     }
 
-    @JvmStatic
-    private fun notificationScrimStandard(context: Context): Int {
-        return ColorUtils.setAlphaComponent(
-            context.getColor(R.color.notification_scrim_base),
-            (0.5f * 255).toInt(),
-        )
-    }
-
-    @JvmStatic
-    private fun notificationScrimFallback(context: Context): Int {
-        return context.getColor(R.color.notification_scrim_fallback)
-    }
 }

@@ -39,6 +39,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
@@ -49,6 +50,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -94,6 +96,7 @@ data class PetalCdState(
     val canNext: Boolean = false,
     // bumped every bridge transition so the disc does its chroma thing
     val transitionPulse: Long = 0L,
+    val automixDurationMs: Int = 0,
 )
 
 private val Ink = Color(0xFFF4F4F7)
@@ -114,13 +117,13 @@ fun PetalCdMediaPlayer(
         modifier = modifier.fillMaxWidth(),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        // square, 64% wide, actually centered now
+        // square, 60% wide, the disc hangs out the side of it
         BoxWithConstraints(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
             contentAlignment = Alignment.Center,
         ) {
-            val side = maxWidth * 0.64f
-            CdAssembly(state, side)
+            val side = maxWidth * 0.60f
+            CdAssembly(state, side, onPlayPause)
         }
         Spacer(Modifier.height(18.dp))
         Text(
@@ -155,12 +158,12 @@ fun PetalCdMediaPlayer(
             )
         }
         Spacer(Modifier.height(14.dp))
-        IosControls(state, onPlayPause, onPrevious, onNext)
+        IosControls(state, onPrevious, onNext)
     }
 }
 
 @Composable
-private fun CdAssembly(state: PetalCdState, side: Dp) {
+private fun CdAssembly(state: PetalCdState, side: Dp, onPlayPause: () -> Unit) {
     val transition = rememberInfiniteTransition(label = "cd")
     // the 3d spin. slow yaw, smaller pitch
     val yaw by
@@ -192,40 +195,88 @@ private fun CdAssembly(state: PetalCdState, side: Dp) {
     }
     val degrees = flip.value % 360f
     val showBack = degrees > 90f && degrees < 270f
+
+    // disc slides out of the sleeve when playing, hides back inside when paused
+    val slide = remember { Animatable(if (state.playing) 1f else 0f) }
+    LaunchedEffect(state.playing) {
+        slide.animateTo(if (state.playing) 1f else 0f, tween(500, easing = FastOutSlowInEasing))
+    }
+    LaunchedEffect(state.transitionPulse) {
+        if (state.transitionPulse == 0L || !state.playing) return@LaunchedEffect
+        // new track, give the disc a little kick out of the sleeve
+        slide.snapTo(0.55f)
+        slide.animateTo(1f, tween(450, easing = FastOutSlowInEasing))
+    }
+
+    // ghost icon for play/pause, pops up on tap then fucks right off
+    val flash = remember { Animatable(0f) }
+    var flashKey by remember { mutableIntStateOf(0) }
+    LaunchedEffect(flashKey) {
+        if (flashKey == 0) return@LaunchedEffect
+        flash.snapTo(1f)
+        flash.animateTo(0f, tween(600, easing = FastOutSlowInEasing))
+    }
+    val toggle = {
+        flashKey++
+        onPlayPause()
+    }
+
+    val disc = side * 0.95f
+    val overhang = disc * 0.40f
+    val assemblyWidth = side + overhang
     val densityValue = LocalDensity.current.density
     Box(
         modifier =
-            Modifier.size(side).graphicsLayer {
+            Modifier.size(width = assemblyWidth, height = side).graphicsLayer {
                 rotationY = yaw + flip.value
                 rotationX = pitch
                 cameraDistance = 10f * densityValue
             },
-        contentAlignment = Alignment.Center,
     ) {
+        // disc goes UNDER the sleeve, the case hides whatever is still inside it
+        val discX = side / 2f + (side / 2f - disc * 0.10f) * slide.value
+        Box(Modifier.offset(x = discX - disc / 2f, y = (side - disc) / 2f)) {
+            RefractionDisc(state, disc, showBack, yaw, pitch)
+        }
         if (showBack) {
-            // rotate the back so it isn't mirrored
-            Box(Modifier.size(side).graphicsLayer { rotationY = 180f }) {
-                CaseBack(state, side)
-            }
+            // whole thing is flipped here, so the art reads as the reverse
+            Box(Modifier.size(side)) { CaseBack(state, side, toggle) }
         } else {
-            CaseFront(state, side)
+            Box(Modifier.size(side)) { CaseFront(state, side, toggle) }
+        }
+        if (flash.value > 0f) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Icon(
+                    painter =
+                        painterResource(
+                            // show what is happening, not what tapping does
+                            if (state.playing) android.R.drawable.ic_media_play
+                            else android.R.drawable.ic_media_pause
+                        ),
+                    contentDescription = null,
+                    tint = Ink.copy(alpha = 0.55f * flash.value),
+                    modifier = Modifier.size(44.dp).offset(x = -overhang / 2f),
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun CaseFront(state: PetalCdState, side: Dp) {
+private fun CaseFront(state: PetalCdState, side: Dp, onPlayPause: () -> Unit) {
     val radius = side * 0.08f
-    Box(modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(radius))) {
-        val artwork = state.artwork
-        if (artwork != null) {
-            Image(
-                bitmap = artwork,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
-        } else {
+    Box(
+        modifier =
+            Modifier.fillMaxSize()
+                .clip(RoundedCornerShape(radius))
+                // the case itself is the play/pause button now, big center button is dead
+                .clickable { onPlayPause() },
+    ) {
+        FadingArt(
+            bitmap = state.artwork,
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize(),
+        ) {
             Box(
                 modifier =
                     Modifier.fillMaxSize()
@@ -233,13 +284,6 @@ private fun CaseFront(state: PetalCdState, side: Dp) {
                             Brush.linearGradient(listOf(Color(0xFF2A2F45), Color(0xFF171A26)))
                         )
             )
-        }
-        // the disc floats over the case
-        Box(
-            modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center,
-        ) {
-            RefractionDisc(state, side * 0.74f)
         }
         // glass rim + gloss
         Box(
@@ -258,9 +302,67 @@ private fun CaseFront(state: PetalCdState, side: Dp) {
     }
 }
 
+/**
+ * Album art that crossfades when it changes, so the sleeve fades the incoming
+ * cover in over the outgoing one — the lockscreen "cover art fade".
+ */
+@Composable
+private fun FadingArt(
+    bitmap: ImageBitmap?,
+    contentDescription: String?,
+    modifier: Modifier,
+    placeholder: @Composable () -> Unit,
+) {
+    var previous by remember { mutableStateOf<ImageBitmap?>(null) }
+    var current by remember { mutableStateOf<ImageBitmap?>(null) }
+    val fade = remember { Animatable(1f) }
+    LaunchedEffect(bitmap) {
+        if (bitmap !== current) {
+            previous = current
+            current = bitmap
+            if (previous != null && bitmap != null) {
+                fade.snapTo(0f)
+                fade.animateTo(1f, tween(600, easing = FastOutSlowInEasing))
+            } else {
+                fade.snapTo(1f)
+            }
+        }
+    }
+    Box(modifier = modifier) {
+        previous?.let {
+            Image(
+                bitmap = it,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+        val c = current
+        if (c != null) {
+            Image(
+                bitmap = c,
+                contentDescription = contentDescription,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { this.alpha = fade.value },
+            )
+        } else {
+            placeholder()
+        }
+    }
+}
+
 // spinning glass disc. art on top, refraction rings and chroma rim over it
 @Composable
-private fun RefractionDisc(state: PetalCdState, side: Dp) {
+private fun RefractionDisc(
+    state: PetalCdState,
+    side: Dp,
+    dataSide: Boolean,
+    tiltY: Float,
+    tiltX: Float,
+) {
+    val density = LocalDensity.current.density
     val spin = rememberInfiniteTransition(label = "disc")
     val angle by
         spin.animateFloat(
@@ -282,48 +384,148 @@ private fun RefractionDisc(state: PetalCdState, side: Dp) {
     LaunchedEffect(state.transitionPulse) {
         if (state.transitionPulse == 0L) return@LaunchedEffect
         chroma.snapTo(1f)
-        dip.snapTo(1f)
-        launch { chroma.animateTo(0f, tween(1500, easing = FastOutSlowInEasing)) }
-        dip.animateTo(0f, tween(1500, easing = FastOutSlowInEasing))
+        if (state.automixDurationMs > 0) {
+            // Keep the aura for the complete blend; do not obscure the artwork.
+            dip.snapTo(0f)
+            kotlinx.coroutines.delay((state.automixDurationMs - 600).toLong())
+            chroma.animateTo(0f, tween(600))
+        } else {
+            dip.snapTo(1f)
+            launch { chroma.animateTo(0f, tween(1500, easing = FastOutSlowInEasing)) }
+            dip.animateTo(0f, tween(1500, easing = FastOutSlowInEasing))
+        }
     }
     val chromaVal = chroma.value
     val dipVal = dip.value
     val artwork = state.artwork
 
+    val edgeX = (-tiltY / 15f * 2.6f).dp
+    val edgeY = (tiltX / 7f * 2.6f).dp
     Box(
         modifier =
             Modifier.size(side)
                 .graphicsLayer {
+                    // give the disc its own sway so it is not welded to the case
+                    rotationY = tiltY * 0.6f
+                    rotationX = tiltX * 0.6f
                     // only spin while playing, feels dead otherwise
                     rotationZ = if (state.playing) angle else 0f
+                    cameraDistance = 7f * density
                     alpha = 1f - 0.5f * dipVal
                     scaleX = 1f - 0.04f * dipVal
                     scaleY = 1f - 0.04f * dipVal
-                }
-                .shadow(10.dp, CircleShape, clip = false)
-                .clip(CircleShape),
+                },
     ) {
-        if (artwork != null) {
-            Image(
+        // side wall: dark puck shoved off axis so the disc has some thickness
+        Box(
+            modifier =
+                Modifier.fillMaxSize()
+                    .offset(x = edgeX, y = edgeY)
+                    .background(
+                        Brush.radialGradient(
+                            listOf(Color(0xFF23252F), Color(0xFF08080D))
+                        ),
+                        CircleShape,
+                    )
+        )
+        Box(
+            modifier =
+                Modifier.fillMaxSize()
+                    .shadow(6.dp, CircleShape, clip = false)
+                    .clip(CircleShape),
+        ) {
+        // label side gets the art, the flip shows the bare data side instead
+        if (!dataSide) {
+            FadingArt(
                 bitmap = artwork,
                 contentDescription = null,
-                contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
-            )
-        } else {
-            Box(
-                modifier =
-                    Modifier.fillMaxSize().background(
-                        Brush.radialGradient(
-                            listOf(Color(0xFF3A4060), Color(0xFF181B28))
+            ) {
+                Box(
+                    modifier =
+                        Modifier.fillMaxSize().background(
+                            Brush.radialGradient(
+                                listOf(Color(0xFF3A4060), Color(0xFF181B28))
+                            )
                         )
-                    )
-            )
+                )
+            }
         }
         Canvas(modifier = Modifier.fillMaxSize()) {
             val c = center
             val r = size.minDimension / 2f
 
+            if (dataSide) {
+                // dark chromatic arse-end of the disc
+                drawCircle(
+                    brush =
+                        Brush.radialGradient(
+                            0f to Color(0xFF4A4470),
+                            0.32f to Color(0xFF221F35),
+                            0.72f to Color(0xFF121019),
+                            1f to Color(0xFF07060B),
+                            center = c,
+                            radius = r,
+                        ),
+                    radius = r,
+                    center = c,
+                )
+                // oil slick so it isn't a flat black puck
+                drawCircle(
+                    brush =
+                        Brush.sweepGradient(
+                            0f to Color.Transparent,
+                            0.14f to Color(0x2460A0FF),
+                            0.3f to Color(0x16FF6060),
+                            0.48f to Color(0x2050FFB0),
+                            0.7f to Color(0x1A9F60FF),
+                            0.88f to Color(0x18FFD060),
+                            1f to Color.Transparent,
+                        ),
+                    radius = r,
+                    center = c,
+                    blendMode = BlendMode.Plus,
+                )
+                // laser written data, stupid thin rings
+                val inner = r * 0.21f
+                val tracks = 88
+                val stepR = (r - inner) / tracks
+                for (i in 0 until tracks) {
+                    val band = ((i * 2654435761L) % 100L) / 100f
+                    val a = (0x12 + (0x30 * band).toInt()).coerceAtMost(0x42)
+                    drawCircle(
+                        color = Color(0xE8, 0xEE, 0xFF, a),
+                        radius = inner + stepR * i,
+                        center = c,
+                        style = Stroke(width = 0.6.dp.toPx()),
+                    )
+                }
+                // brighter guide tracks so it reads as pressed media
+                for (frac in listOf(0.34f, 0.58f, 0.8f)) {
+                    drawCircle(
+                        color = Color(0x33BFE8FF),
+                        radius = inner + (r - inner) * frac,
+                        center = c,
+                        style = Stroke(width = 1.dp.toPx()),
+                    )
+                }
+            }
+
+            if (state.automixDurationMs > 0 && chromaVal > 0f) {
+                val auraColors = listOf(Color(0xFFFF6090), Color(0xFF9060FF),
+                    Color(0xFF50DFFF), Color(0xFF70FFA0), Color(0xFFFF6090))
+                rotate(sweep) {
+                    for (ring in 1..5) {
+                        drawCircle(
+                            brush = androidx.compose.ui.graphics.Brush.sweepGradient(auraColors, c),
+                            radius = r - ring.dp.toPx(),
+                            center = c,
+                            alpha = chromaVal * (0.22f - ring * 0.025f),
+                            style = Stroke(width = (12 - ring).dp.toPx()),
+                        )
+                    }
+                }
+            }
             // chromatic rim. rgb rings sit offset so the edge fringes, pulse widens it
             val off = (1.dp.toPx() + 2.4.dp.toPx() * chromaVal)
             val rimAlpha = ((0x30 + 0x90 * chromaVal).toInt()).coerceAtMost(0xC0)
@@ -411,61 +613,44 @@ private fun RefractionDisc(state: PetalCdState, side: Dp) {
                 style = Stroke(width = r * 0.055f),
             )
         }
+        }
     }
 }
 
 @Composable
-private fun CaseBack(state: PetalCdState, side: Dp) {
+private fun CaseBack(state: PetalCdState, side: Dp, onPlayPause: () -> Unit) {
     val radius = side * 0.08f
     Box(
         modifier =
             Modifier.fillMaxSize()
                 .clip(RoundedCornerShape(radius))
+                // back is tappable too, the thing keeps flipping over every few seconds
+                .clickable { onPlayPause() }
                 .background(Brush.linearGradient(listOf(Color(0xFF1B1D25), Color(0xFF0C0D12))))
                 .border(1.dp, CaseRim, RoundedCornerShape(radius)),
         contentAlignment = Alignment.Center,
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier.padding(horizontal = side * 0.12f),
-        ) {
-            Text(
-                text = state.title.ifEmpty { state.artist },
-                color = Ink,
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-                textAlign = TextAlign.Center,
+        // cover art bleeding through the case, dimmed to hell. no text, its not a cassette
+        state.artwork?.let { artwork ->
+            Image(
+                bitmap = artwork,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize().graphicsLayer { alpha = 0.35f },
             )
-            if (state.title.isNotEmpty()) {
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = state.artist,
-                    color = InkDim,
-                    fontSize = 14.sp,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    textAlign = TextAlign.Center,
-                )
-            }
-            Spacer(Modifier.height(18.dp))
-            // fake track lines so the back looks legit
-            Column(
-                verticalArrangement = Arrangement.spacedBy(6.dp),
-                modifier = Modifier.fillMaxWidth(0.72f),
-            ) {
-                repeat(4) { index ->
-                    Box(
-                        modifier =
-                            Modifier.fillMaxWidth(if (index == 3) 0.6f else 1f)
-                                .height(2.dp)
-                                .clip(RoundedCornerShape(1.dp))
-                                .background(Color(0x22FFFFFF))
-                    )
-                }
-            }
         }
+        // gloss so this side reads as glass too
+        Box(
+            modifier =
+                Modifier.fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            0f to Color(0x16FFFFFF),
+                            0.28f to Color.Transparent,
+                            1f to Color(0x22000000),
+                        )
+                    )
+        )
     }
 }
 
@@ -535,13 +720,14 @@ private fun IosScrubber(
 @Composable
 private fun IosControls(
     state: PetalCdState,
-    onPlayPause: () -> Unit,
     onPrevious: () -> Unit,
     onNext: () -> Unit,
 ) {
+    // prev/next only. play/pause lives on the case now, stop looking for it
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(38.dp),
+        // wide gap so the fingerprint icon lands between them, not on top
+        horizontalArrangement = Arrangement.spacedBy(104.dp),
     ) {
         Icon(
             painter = painterResource(android.R.drawable.ic_media_previous),
@@ -549,26 +735,6 @@ private fun IosControls(
             tint = if (state.canPrevious) Ink else Color(0x55FFFFFF),
             modifier = Modifier.size(30.dp).clickable(enabled = state.canPrevious) { onPrevious() },
         )
-        Box(
-            modifier =
-                Modifier.size(66.dp)
-                    .clip(CircleShape)
-                    .background(Color(0x22FFFFFF))
-                    .border(1.dp, CaseRim, CircleShape)
-                    .clickable { onPlayPause() },
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                painter =
-                    painterResource(
-                        if (state.playing) android.R.drawable.ic_media_pause
-                        else android.R.drawable.ic_media_play
-                    ),
-                contentDescription = null,
-                tint = Ink,
-                modifier = Modifier.size(34.dp),
-            )
-        }
         Icon(
             painter = painterResource(android.R.drawable.ic_media_next),
             contentDescription = null,

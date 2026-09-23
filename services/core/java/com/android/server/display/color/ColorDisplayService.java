@@ -137,6 +137,15 @@ public final class ColorDisplayService extends SystemService {
     private static final int PERCENTAGE_MIN = 0;
     private static final int PERCENTAGE_MAX = 100;
 
+    // petalOS extra dim schedule. private on purpose, the settings app mirrors these literals.
+    private static final String RBC_AUTO_MODE = "petal_reduce_bright_colors_auto_mode";
+    private static final String RBC_CUSTOM_START = "petal_reduce_bright_colors_custom_start_time";
+    private static final String RBC_CUSTOM_END = "petal_reduce_bright_colors_custom_end_time";
+    private static final String RBC_DEFAULT_START = "22:00";
+    private static final String RBC_DEFAULT_END = "07:00";
+    private static final int RBC_AUTO_MODE_DISABLED = 0;
+    private static final int RBC_AUTO_MODE_CUSTOM = 1;
+
     /**
      * Evaluator used to animate color matrix transitions.
      */
@@ -191,6 +200,8 @@ public final class ColorDisplayService extends SystemService {
     private ReduceBrightColorsListener mReduceBrightColorsListener;
 
     private NightDisplayAutoMode mNightDisplayAutoMode;
+
+    private CustomReduceBrightColorsAutoMode mReduceBrightColorsAutoMode;
 
     /**
      * Map of color modes -> display composition colorspace
@@ -400,6 +411,18 @@ public final class ColorDisplayService extends SystemService {
                                 onReduceBrightColorsStrengthLevelChanged();
                                 mHandler.sendEmptyMessage(MSG_APPLY_REDUCE_BRIGHT_COLORS);
                                 break;
+                            case RBC_AUTO_MODE:
+                                onReduceBrightColorsAutoModeChanged(
+                                        getReduceBrightColorsAutoModeInternal());
+                                break;
+                            case RBC_CUSTOM_START:
+                                onReduceBrightColorsCustomStartTimeChanged(
+                                        getReduceBrightColorsCustomStartTimeInternal());
+                                break;
+                            case RBC_CUSTOM_END:
+                                onReduceBrightColorsCustomEndTimeChanged(
+                                        getReduceBrightColorsCustomEndTimeInternal());
+                                break;
                         }
                     }
                 }
@@ -430,6 +453,12 @@ public final class ColorDisplayService extends SystemService {
         cr.registerContentObserver(Secure.getUriFor(Secure.REDUCE_BRIGHT_COLORS_ACTIVATED),
                 false /* notifyForDescendants */, mContentObserver, mCurrentUser);
         cr.registerContentObserver(Secure.getUriFor(Secure.REDUCE_BRIGHT_COLORS_LEVEL),
+                false /* notifyForDescendants */, mContentObserver, mCurrentUser);
+        cr.registerContentObserver(Secure.getUriFor(RBC_AUTO_MODE),
+                false /* notifyForDescendants */, mContentObserver, mCurrentUser);
+        cr.registerContentObserver(Secure.getUriFor(RBC_CUSTOM_START),
+                false /* notifyForDescendants */, mContentObserver, mCurrentUser);
+        cr.registerContentObserver(Secure.getUriFor(RBC_CUSTOM_END),
                 false /* notifyForDescendants */, mContentObserver, mCurrentUser);
         if (Flags.enableColorCorrectionSaturation()) {
             cr.registerContentObserver(
@@ -482,6 +511,7 @@ public final class ColorDisplayService extends SystemService {
                 onReduceBrightColorsActivationChanged(/*userInitiated*/ false);
                 mHandler.sendEmptyMessage(MSG_APPLY_REDUCE_BRIGHT_COLORS);
             }
+            onReduceBrightColorsAutoModeChanged(getReduceBrightColorsAutoModeInternal());
         }
     }
 
@@ -509,6 +539,10 @@ public final class ColorDisplayService extends SystemService {
         }
 
         if (mReduceBrightColorsTintController.isAvailable(getContext())) {
+            if (mReduceBrightColorsAutoMode != null) {
+                mReduceBrightColorsAutoMode.onStop();
+                mReduceBrightColorsAutoMode = null;
+            }
             mReduceBrightColorsTintController.setActivated(null);
         }
     }
@@ -571,6 +605,56 @@ public final class ColorDisplayService extends SystemService {
 
         if (mNightDisplayAutoMode != null) {
             mNightDisplayAutoMode.onCustomEndTimeChanged(endTime);
+        }
+    }
+
+    private int getReduceBrightColorsAutoModeInternal() {
+        return Secure.getIntForUser(getContext().getContentResolver(), RBC_AUTO_MODE,
+                RBC_AUTO_MODE_DISABLED, mCurrentUser);
+    }
+
+    private LocalTime getReduceBrightColorsCustomStartTimeInternal() {
+        return parseReduceBrightColorsTime(Secure.getStringForUser(getContext().getContentResolver(),
+                RBC_CUSTOM_START, mCurrentUser), RBC_DEFAULT_START);
+    }
+
+    private LocalTime getReduceBrightColorsCustomEndTimeInternal() {
+        return parseReduceBrightColorsTime(Secure.getStringForUser(getContext().getContentResolver(),
+                RBC_CUSTOM_END, mCurrentUser), RBC_DEFAULT_END);
+    }
+
+    private static LocalTime parseReduceBrightColorsTime(String raw, String fallback) {
+        try {
+            return LocalTime.parse(raw != null ? raw : fallback);
+        } catch (DateTimeParseException e) {
+            return LocalTime.parse(fallback);
+        }
+    }
+
+    private void onReduceBrightColorsAutoModeChanged(int autoMode) {
+        Slog.d(TAG, "onReduceBrightColorsAutoModeChanged: autoMode=" + autoMode);
+
+        if (mReduceBrightColorsAutoMode != null) {
+            mReduceBrightColorsAutoMode.onStop();
+            mReduceBrightColorsAutoMode = null;
+        }
+
+        if (autoMode == RBC_AUTO_MODE_CUSTOM
+                && mReduceBrightColorsTintController.isAvailable(getContext())) {
+            mReduceBrightColorsAutoMode = new CustomReduceBrightColorsAutoMode();
+            mReduceBrightColorsAutoMode.onStart();
+        }
+    }
+
+    private void onReduceBrightColorsCustomStartTimeChanged(LocalTime startTime) {
+        if (mReduceBrightColorsAutoMode != null) {
+            mReduceBrightColorsAutoMode.onCustomStartTimeChanged(startTime);
+        }
+    }
+
+    private void onReduceBrightColorsCustomEndTimeChanged(LocalTime endTime) {
+        if (mReduceBrightColorsAutoMode != null) {
+            mReduceBrightColorsAutoMode.onCustomEndTimeChanged(endTime);
         }
     }
 
@@ -1310,6 +1394,80 @@ public final class ColorDisplayService extends SystemService {
         @Override
         public void onAlarm() {
             Slog.d(TAG, "onAlarm");
+            updateActivated();
+        }
+    }
+
+    /** petalOS: custom start/end schedule for extra dim, mirrors night light's custom mode. */
+    private final class CustomReduceBrightColorsAutoMode implements AlarmManager.OnAlarmListener {
+
+        private final AlarmManager mAlarmManager;
+        private final BroadcastReceiver mTimeChangedReceiver;
+
+        private LocalTime mStartTime;
+        private LocalTime mEndTime;
+
+        CustomReduceBrightColorsAutoMode() {
+            mAlarmManager = (AlarmManager) getContext().getSystemService(Context.ALARM_SERVICE);
+            mTimeChangedReceiver = new BroadcastReceiver() {
+                @Override
+                public void onReceive(Context context, Intent intent) {
+                    updateActivated();
+                }
+            };
+        }
+
+        private void updateActivated() {
+            final LocalDateTime now = LocalDateTime.now();
+            final LocalDateTime start = getDateTimeBefore(mStartTime, now);
+            final LocalDateTime end = getDateTimeAfter(mEndTime, start);
+            final boolean activate = now.isBefore(end);
+
+            if (mReduceBrightColorsTintController.isActivatedStateNotSet()
+                    || mReduceBrightColorsTintController.isActivated() != activate) {
+                Secure.putIntForUser(getContext().getContentResolver(),
+                        Secure.REDUCE_BRIGHT_COLORS_ACTIVATED, activate ? 1 : 0, mCurrentUser);
+            }
+
+            updateNextAlarm(activate, now);
+        }
+
+        private void updateNextAlarm(boolean activated, LocalDateTime now) {
+            final LocalDateTime next = activated ? getDateTimeAfter(mEndTime, now)
+                    : getDateTimeAfter(mStartTime, now);
+            final long millis = next.atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
+            mAlarmManager.setExact(AlarmManager.RTC, millis, TAG, this, null);
+        }
+
+        void onStart() {
+            final IntentFilter intentFilter = new IntentFilter(Intent.ACTION_TIME_CHANGED);
+            intentFilter.addAction(Intent.ACTION_TIMEZONE_CHANGED);
+            getContext().registerReceiver(mTimeChangedReceiver, intentFilter);
+
+            mStartTime = getReduceBrightColorsCustomStartTimeInternal();
+            mEndTime = getReduceBrightColorsCustomEndTimeInternal();
+
+            // force an update so we land in the right state immediately
+            updateActivated();
+        }
+
+        void onStop() {
+            getContext().unregisterReceiver(mTimeChangedReceiver);
+            mAlarmManager.cancel(this);
+        }
+
+        void onCustomStartTimeChanged(LocalTime startTime) {
+            mStartTime = startTime;
+            updateActivated();
+        }
+
+        void onCustomEndTimeChanged(LocalTime endTime) {
+            mEndTime = endTime;
+            updateActivated();
+        }
+
+        @Override
+        public void onAlarm() {
             updateActivated();
         }
     }

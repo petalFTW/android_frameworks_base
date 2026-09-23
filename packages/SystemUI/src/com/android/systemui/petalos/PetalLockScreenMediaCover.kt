@@ -86,6 +86,9 @@ class PetalLockScreenMediaCover @Inject constructor(
     // hash of what's already up, avoids redraws
     private var appliedMetaHash = 0
 
+    // last cover we wrote, so a track change can crossfade into the next one
+    private var lastCover: Bitmap? = null
+
     // one io thread or strictmode yells
     private val applyExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
 
@@ -259,16 +262,43 @@ class PetalLockScreenMediaCover @Inject constructor(
             }
             val scaled = scaleToScreen(bitmap)
             // full-frame rect stops the service recentering
-            wallpaperManager.setBitmap(
-                scaled,
-                Rect(0, 0, scaled.width, scaled.height),
-                true,
-                WallpaperManager.FLAG_LOCK,
-            )
+            val frame = Rect(0, 0, scaled.width, scaled.height)
+            val previous = lastCover
+            if (previous != null &&
+                previous.width == scaled.width &&
+                previous.height == scaled.height
+            ) {
+                // crossfade the incoming sleeve in over the outgoing one
+                fadeTo(scaled, frame)
+            } else {
+                wallpaperManager.setBitmap(scaled, frame, true, WallpaperManager.FLAG_LOCK)
+            }
+            lastCover = scaled
             coverApplied = true
             appliedMetaHash = metaHash
         }.onFailure { Log.w(TAG, "Failed to set lock screen cover art", it) }
         mainExecutor.execute { notifyCoverStateChanged() }
+    }
+
+    // write a few blended frames so the lock wallpaper fades, not snaps
+    private fun fadeTo(target: Bitmap, frame: Rect) {
+        val from = lastCover ?: return
+        for (i in 1..FADE_STEPS) {
+            val t = i / FADE_STEPS.toFloat()
+            val blended = blend(from, target, t)
+            wallpaperManager.setBitmap(blended, frame, true, WallpaperManager.FLAG_LOCK)
+        }
+    }
+
+    private fun blend(from: Bitmap, to: Bitmap, t: Float): Bitmap {
+        val out = Bitmap.createBitmap(to.width, to.height, Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(out)
+        canvas.drawBitmap(from, 0f, 0f, null)
+        val paint = android.graphics.Paint().apply {
+            alpha = (t * 255f).toInt().coerceIn(0, 255)
+        }
+        canvas.drawBitmap(to, 0f, 0f, paint)
+        return out
     }
 
     private fun restoreWallpaper() {
@@ -277,6 +307,7 @@ class PetalLockScreenMediaCover @Inject constructor(
         if (!coverApplied && !hasBackup) return
         coverApplied = false
         appliedMetaHash = 0
+        lastCover = null
         val original = originalWallpaper ?: loadBackupBitmap()
         originalWallpaper = null
         runCatching {
@@ -370,5 +401,8 @@ class PetalLockScreenMediaCover @Inject constructor(
 
     companion object {
         private const val TAG = "PetalLockMediaCover"
+
+        /** blended frames written when the cover changes, for the crossfade. */
+        private const val FADE_STEPS = 4
     }
 }

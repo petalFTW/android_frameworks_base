@@ -170,6 +170,12 @@ class InstallRepository(private val context: Context) : EventResultPersister.Eve
 
         stagedSessionId = intent.getIntExtra(EXTRA_STAGED_SESSION_ID, SessionInfo.INVALID_ID)
 
+        getBlockedInstallPackageName()?.let { blockedPackage ->
+            Log.w(LOG_TAG, "Blocking installation of $blockedPackage")
+            cleanupInstall()
+            return InstallAborted(ABORT_REASON_INTERNAL_ERROR)
+        }
+
         callingPackage = callerInfo.packageName
         callingUid = callerInfo.uid
 
@@ -732,6 +738,11 @@ class InstallRepository(private val context: Context) : EventResultPersister.Eve
             }
         }
         isAppUpdating = isAppUpdating(newPackageInfo)
+        isBlockedPackage(newPackageInfo?.packageName)?.let { blockedPackage ->
+            Log.w(LOG_TAG, "Blocking installation of $blockedPackage")
+            cleanupInstall()
+            return InstallAborted(ABORT_REASON_INTERNAL_ERROR)
+        }
         val (existingUpdateOwner, requestedUpdateOwner) =
             getUpdateOwners(newPackageInfo, userActionReason, isAppUpdating)
 
@@ -749,6 +760,11 @@ class InstallRepository(private val context: Context) : EventResultPersister.Eve
         newPackageInfo = generateStubPackageInfo(sessionInfo.getAppPackageName())
         appSnippet = getAppSnippet(context, sessionInfo)
         isAppUpdating = isAppUpdating(newPackageInfo)
+        isBlockedPackage(newPackageInfo?.packageName)?.let { blockedPackage ->
+            Log.w(LOG_TAG, "Blocking installation of $blockedPackage")
+            cleanupInstall()
+            return InstallAborted(ABORT_REASON_INTERNAL_ERROR)
+        }
         val (existingUpdateOwner, requestedUpdateOwner) =
             getUpdateOwners(newPackageInfo, userActionReason, isAppUpdating)
 
@@ -1026,6 +1042,12 @@ class InstallRepository(private val context: Context) : EventResultPersister.Eve
      * signal the PackageInstaller that the user has granted permission to proceed with the install
      */
     fun initiateInstall() {
+        isBlockedPackage(newPackageInfo?.packageName)?.let { blockedPackage ->
+            Log.w(LOG_TAG, "Blocking installation of $blockedPackage")
+            cleanupInstall()
+            _installResult.value = InstallAborted(ABORT_REASON_INTERNAL_ERROR)
+            return
+        }
         if (sessionId > 0) {
             packageInstaller.setPermissionsResult(sessionId, true)
             if (localLogv) {
@@ -1225,6 +1247,24 @@ class InstallRepository(private val context: Context) : EventResultPersister.Eve
         const val SCHEME_PACKAGE = "package"
         const val BROADCAST_ACTION = "com.android.packageinstaller.ACTION_INSTALL_COMMIT"
         private val LOG_TAG = InstallRepository::class.java.simpleName
+        private val BLOCKED_INSTALL_PACKAGES = setOf("com.google.android.safetycore")
+    }
+
+    private fun isBlockedPackage(packageName: String?): String? {
+        return packageName?.takeIf { it in BLOCKED_INSTALL_PACKAGES }
+    }
+
+    private fun getBlockedInstallPackageName(): String? {
+        return sequenceOf(
+            if (sessionId != SessionInfo.INVALID_ID)
+                packageInstaller.getSessionInfo(sessionId)?.getAppPackageName()
+            else null,
+            if (stagedSessionId != SessionInfo.INVALID_ID)
+                packageInstaller.getSessionInfo(stagedSessionId)?.getAppPackageName()
+            else null,
+            intent.getStringExtra(PackageInstaller.EXTRA_PACKAGE_NAME),
+            if (intent.data?.scheme == SCHEME_PACKAGE) intent.data?.schemeSpecificPart else null
+        ).firstOrNull { it in BLOCKED_INSTALL_PACKAGES }
     }
 
     data class CallerInfo(val packageName: String?, val uid: Int)

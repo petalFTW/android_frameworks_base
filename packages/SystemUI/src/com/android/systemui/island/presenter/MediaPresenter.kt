@@ -16,8 +16,10 @@
 
 package com.android.systemui.island.presenter
 
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.res.Configuration
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -34,6 +36,7 @@ import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -58,38 +61,71 @@ class MediaPresenter(
     private var titleView: TextView? = null
     private var artistView: TextView? = null
     private var artView: ImageView? = null
+    private var artOverlay: ImageView? = null
     private var accentButtonBg: GradientDrawable? = null
     private var automixPill: TextView? = null
     private var automixDecision: Boolean? = null
+    private var trackIdentity = trackIdentity(controller.metadata)
     private var destroyed = false
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private val callback =
         object : MediaController.Callback() {
             override fun onMetadataChanged(metadata: MediaMetadata?) {
-                transitionDip()
+                val identity = trackIdentity(metadata)
+                if (identity != trackIdentity) {
+                    trackIdentity = identity
+                    transitionDip()
+                }
                 updateContent()
                 refreshTint()
             }
 
             override fun onPlaybackStateChanged(state: PlaybackState?) {
-                playing = state?.state == PlaybackState.STATE_PLAYING
+                playing = when (state?.state) {
+                    PlaybackState.STATE_BUFFERING, PlaybackState.STATE_CONNECTING -> playing
+                    else -> state?.state == PlaybackState.STATE_PLAYING
+                }
                 updateTransport()
+            }
+        }
+
+    // PetalMusic tells us which sleeve is coming in, when the blend is audible
+    private val artFadeReceiver =
+        object : BroadcastReceiver() {
+            override fun onReceive(c: Context?, intent: Intent?) {
+                if (intent?.getStringExtra(EXTRA_OWNER) != controller.packageName) return
+                if (!intent.getBooleanExtra(EXTRA_ACTIVE, false)) {
+                    cancelArtFade()
+                    return
+                }
+                val cover = intent.getStringExtra(EXTRA_COVER) ?: return
+                val duration = intent.getIntExtra(EXTRA_DURATION, 600).toLong().coerceAtLeast(250L)
+                startArtFade(cover, duration)
             }
         }
 
     init {
         playing = controller.playbackState?.state == PlaybackState.STATE_PLAYING
         controller.registerCallback(callback)
+        runCatching {
+            context.registerReceiver(
+                artFadeReceiver,
+                IntentFilter(ACTION_ART_FADE),
+                Context.RECEIVER_EXPORTED,
+            )
+        }
         extractTint()
     }
 
     override fun bindCollapsed(container: ViewGroup): Int {
         stopProgressTicker()
+        cancelArtFade()
         seekBar = null
         titleView = null
         artistView = null
         artView = null
+        artOverlay = null
 
         val row = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -142,16 +178,28 @@ class MediaPresenter(
             gravity = Gravity.CENTER_VERTICAL
         }
 
+        val artClip = object : android.view.ViewOutlineProvider() {
+            override fun getOutline(view: View, outline: android.graphics.Outline) {
+                outline.setRoundRect(0, 0, view.width, view.height, geometry.artRadius)
+            }
+        }
         artView = ImageView(context).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
             clipToOutline = true
-            outlineProvider = object : android.view.ViewOutlineProvider() {
-                override fun getOutline(view: View, outline: android.graphics.Outline) {
-                    outline.setRoundRect(0, 0, view.width, view.height, geometry.artRadius)
-                }
-            }
+            outlineProvider = artClip
         }
-        topRow.addView(artView, LinearLayout.LayoutParams(geometry.artSize, geometry.artSize))
+        // incoming sleeve rides over the outgoing one while a mix runs
+        val overlay = ImageView(context).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            clipToOutline = true
+            outlineProvider = artClip
+            alpha = 0f
+        }
+        artOverlay = overlay
+        val artSlot = FrameLayout(context)
+        artSlot.addView(artView, FrameLayout.LayoutParams(geometry.artSize, geometry.artSize))
+        artSlot.addView(overlay, FrameLayout.LayoutParams(geometry.artSize, geometry.artSize))
+        topRow.addView(artSlot, LinearLayout.LayoutParams(geometry.artSize, geometry.artSize))
 
         val textColumn = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -371,8 +419,11 @@ class MediaPresenter(
         stopProgressTicker()
         mainHandler.removeCallbacksAndMessages(null)
         controller.unregisterCallback(callback)
+        runCatching { context.unregisterReceiver(artFadeReceiver) }
+        artOverlay?.animate()?.cancel()
         cachedTint = null
         artView = null
+        artOverlay = null
         titleView = null
         artistView = null
         seekBar = null
@@ -384,9 +435,17 @@ class MediaPresenter(
         record = null
     }
 
+    private fun trackIdentity(metadata: MediaMetadata?): List<String?> = listOf(
+        metadata?.getString(MediaMetadata.METADATA_KEY_MEDIA_ID),
+        metadata?.getString(MediaMetadata.METADATA_KEY_TITLE),
+        metadata?.getString(MediaMetadata.METADATA_KEY_ARTIST),
+    )
+
     // quick dip + fade back in when the track flips
     private fun transitionDip() {
         val art = artView ?: return
+        // a live cover crossfade already owns the art, don't dip under it
+        if ((artOverlay?.alpha ?: 0f) > 0.01f) return
         art.animate().cancel()
         art.animate()
             .alpha(0.15f)
@@ -396,6 +455,48 @@ class MediaPresenter(
                 art.animate().alpha(1f).setDuration(700L).start()
             }
             .start()
+    }
+
+    // same feel as the app: incoming cover fades in over the old one, slight grow
+    private fun startArtFade(cover: String, durationMs: Long) {
+        val overlay = artOverlay ?: return
+        val current = controller.metadata?.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)
+            ?: controller.metadata?.getString(MediaMetadata.METADATA_KEY_ART_URI)
+        if (cover == current) return
+        Thread {
+            val bitmap = decodeArtwork(Uri.parse(cover)) ?: return@Thread
+            mainHandler.post {
+                if (destroyed || artOverlay !== overlay) return@post
+                overlay.animate().cancel()
+                overlay.setImageBitmap(bitmap)
+                overlay.alpha = 0f
+                overlay.scaleX = 1f
+                overlay.scaleY = 1f
+                overlay.animate()
+                    .alpha(1f)
+                    .scaleX(1.06f)
+                    .scaleY(1.06f)
+                    .setDuration(durationMs)
+                    .withEndAction {
+                        if (destroyed) return@withEndAction
+                        artView?.setImageBitmap(bitmap)
+                        resetArtOverlay()
+                    }
+                    .start()
+            }
+        }.start()
+    }
+
+    private fun cancelArtFade() {
+        artOverlay?.animate()?.cancel()
+        resetArtOverlay()
+    }
+
+    private fun resetArtOverlay() {
+        val overlay = artOverlay ?: return
+        overlay.alpha = 0f
+        overlay.scaleX = 1f
+        overlay.scaleY = 1f
     }
 
     // new art means new accent, push it through
@@ -480,8 +581,7 @@ class MediaPresenter(
 
     private fun decodeArtwork(uri: Uri): Bitmap? =
         runCatching {
-            val bytes = context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                ?: return null
+            val bytes = openStreamBytes(uri) ?: return null
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
             val req = geometry.artSize * 2
@@ -491,6 +591,20 @@ class MediaPresenter(
                 bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample },
             )
         }.getOrNull()
+
+    // resolver first (content/file), then pull remote sleeves off the wire
+    private fun openStreamBytes(uri: Uri): ByteArray? {
+        runCatching { context.contentResolver.openInputStream(uri) }
+            .getOrNull()
+            ?.use { return it.readBytes() }
+        val scheme = uri.scheme
+        if (scheme == "http" || scheme == "https") {
+            return runCatching {
+                java.net.URL(uri.toString()).openStream().use { it.readBytes() }
+            }.getOrNull()
+        }
+        return null
+    }
 
     private fun updateTransport() {
         val glyph =
@@ -571,6 +685,13 @@ class MediaPresenter(
     private companion object {
         // seek bar poll interval while playing
         const val TICK_MS = 500L
+
+        // incoming-cover cue from PetalMusic's in-app mixer
+        const val ACTION_ART_FADE = "org.rab1d.bridge.action.TRANSITION_ART"
+        const val EXTRA_OWNER = "owner"
+        const val EXTRA_COVER = "cover"
+        const val EXTRA_DURATION = "duration"
+        const val EXTRA_ACTIVE = "active"
 
         // AutoMix is opt-in per app and defaults to off. The choice is kept in
         // memory only, so it survives an island collapse but a SystemUI restart

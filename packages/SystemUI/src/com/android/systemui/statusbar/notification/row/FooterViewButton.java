@@ -41,6 +41,12 @@ public class FooterViewButton extends AlphaOptimizedButton {
     public FooterViewButton(Context context, AttributeSet attrs, int defStyleAttr,
             int defStyleRes) {
         super(context, attrs, defStyleAttr, defStyleRes);
+        // petalOS: island glass pill instead of the stock footer chip
+        if (com.android.systemui.petalos.PetalNotificationGlass.enabled(context)) {
+            setBackground(
+                    com.android.systemui.petalos.PetalNotificationGlass
+                            .footerButtonBackground(context));
+        }
     }
 
     /**

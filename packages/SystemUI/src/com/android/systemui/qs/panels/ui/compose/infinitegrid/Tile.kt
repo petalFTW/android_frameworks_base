@@ -118,6 +118,7 @@ import com.android.systemui.haptics.msdl.qs.TileHapticsViewModelFactoryProvider
 import com.android.systemui.lifecycle.rememberViewModel
 import com.android.systemui.petalos.PetalQsSkin
 import com.android.systemui.petalos.PetalQsSkin.activeTileGlow
+import com.android.systemui.petalos.PetalQsSkin.liquidGlass
 import com.android.systemui.qs.flags.QsDetailedView
 import com.android.systemui.qs.panels.ui.compose.BounceableInfo
 import com.android.systemui.qs.panels.ui.compose.infinitegrid.CommonTileDefaults.InactiveCornerRadius
@@ -197,11 +198,17 @@ fun ContentScope.Tile(
 
         // petalOS: observe the skin toggle so flipping it in petalOS Hub immediately restyles
         val skinEnabled = petalSkinEnabled()
+        val dark = PetalQsSkin.dark()
         val fallbackInteractionSource = remember(tile.spec) { MutableInteractionSource() }
         val resolvedInteractionSource = interactionSource ?: fallbackInteractionSource
         val isPressed by resolvedInteractionSource.collectIsPressedAsState()
         val colors =
-            TileDefaults.getColorForState(uiState, iconOnly && !petalExpandToPill, skinEnabled)
+            TileDefaults.getColorForState(
+                uiState,
+                iconOnly && !petalExpandToPill,
+                skinEnabled,
+                dark,
+            )
         val hapticsViewModel: TileHapticsViewModel? =
             rememberViewModel(traceName = "TileHapticsViewModel") {
                 tileHapticsViewModelFactoryProvider.getHapticsViewModelFactory()?.create(tile)
@@ -255,18 +262,30 @@ fun ContentScope.Tile(
 
         TileExpandable(
             // petalOS: for compact tiles the card is drawn by the content itself, so the
-            color = { if (petalIconTile) Color.Transparent else animatedColor },
+            color = { if (skinEnabled) Color.Transparent else animatedColor },
             shape = tileShape,
             squishiness = squishiness,
             hapticsViewModel = hapticsViewModel,
             clipToShape = !petalIconTile,
             // petalOS: thin light outline rim on the large glass cards (concept sheen edge).
-            borderColor = if (skinEnabled) PetalQsSkin.TileGlassBorder else Color.Transparent,
+            borderColor = if (skinEnabled) PetalQsSkin.tileGlassBorder(dark) else Color.Transparent,
             borderWidth = if (skinEnabled) 1.dp else 0.dp,
             modifier =
                 modifier
                     .then(petalPulseModifier)
                     .then(surfaceRevealModifier)
+                    // wide cards get the island glass treatment
+                    .then(
+                        if (skinEnabled && !petalIconTile) {
+                            Modifier.liquidGlass(
+                                cornerRadius = PetalQsSkin.TileCornerRadius,
+                                tint = animatedColor,
+                                dark = dark,
+                            )
+                        } else {
+                            Modifier
+                        }
+                    )
                     // petalOS: evaluated inline (not via a plain Modifier factory lambda) so the
                     .then(
                         if (!petalIconTile) {
@@ -357,6 +376,7 @@ fun ContentScope.Tile(
                 modifier = contentRevealModifier.activeTileGlow(
                     skinEnabled && !petalIconTile && uiState.state == STATE_ACTIVE,
                     PetalQsSkin.emission(),
+                    dark,
                 ),
                 petalExpanded = petalExpandToPill,
             ) {
@@ -370,6 +390,7 @@ fun ContentScope.Tile(
                         secondaryLabel = uiState.secondaryLabel,
                         expandToPill = petalExpandToPill,
                         active = uiState.state == STATE_ACTIVE,
+                        dark = dark,
                         accessibilityUiState = uiState.accessibilityUiState,
                         modifier =
                             Modifier.align(Alignment.Center).bounceScale {
@@ -508,6 +529,7 @@ private fun PetalIconTileContent(
     secondaryLabel: String?,
     expandToPill: Boolean,
     active: Boolean,
+    dark: Boolean,
     accessibilityUiState: AccessibilityUiState,
     modifier: Modifier = Modifier,
 ) {
@@ -518,9 +540,9 @@ private fun PetalIconTileContent(
                 modifier
                     .fillMaxWidth()
                     .clip(shape)
-                    .background(colors.background)
-                    .activeTileGlow(active, PetalQsSkin.emission())
-                    .border(1.dp, PetalQsSkin.TileGlassBorderBrush, shape)
+                    .liquidGlass(PetalQsSkin.TileCornerRadius, colors.background, dark)
+                    .activeTileGlow(active, PetalQsSkin.emission(), dark)
+                    .border(1.dp, PetalQsSkin.tileGlassBorderBrush(dark), shape)
         ) {
             // QQS keeps its existing whole-card toggle action. The visual icon target,
             PetalConnectivityTileContent(
@@ -544,9 +566,9 @@ private fun PetalIconTileContent(
             modifier =
                 Modifier.size(PetalQsSkin.IconTileSize)
                     .clip(shape)
-                    .background(colors.background)
-                    .activeTileGlow(active, PetalQsSkin.emission())
-                    .border(1.dp, PetalQsSkin.TileGlassBorderBrush, shape),
+                    .liquidGlass(20.dp, colors.background, dark)
+                    .activeTileGlow(active, PetalQsSkin.emission(), dark)
+                    .border(1.dp, PetalQsSkin.tileGlassBorderBrush(dark), shape),
             contentAlignment = Alignment.Center,
         ) {
             SmallTileContent(
@@ -557,7 +579,7 @@ private fun PetalIconTileContent(
         }
         BasicText(
             text = label,
-            style = TextStyle(color = PetalQsSkin.TileGlyphOnDark, fontSize = 12.sp,
+            style = TextStyle(color = PetalQsSkin.glyphOn(dark), fontSize = 12.sp,
                 lineHeight = 16.sp, textAlign = TextAlign.Center),
             autoSize = TextAutoSize.StepBased(minFontSize = 6.sp, maxFontSize = 12.sp),
             maxLines = 1,
@@ -580,6 +602,7 @@ private fun TileExpandable(
     borderWidth: Dp = 0.dp,
     content: @Composable (Expandable) -> Unit,
 ) {
+    val dark = PetalQsSkin.dark()
     Expandable(
         controller = rememberExpandableController(color = color, shape = shape),
         // petalOS: compact tiles draw their own card + label and must not be clipped
@@ -592,7 +615,11 @@ private fun TileExpandable(
                 // petalOS: draw the outline after the clip so it follows the card's rounded rim.
                 .then(
                     if (clipToShape && borderWidth > 0.dp) {
-                        Modifier.border(borderWidth, PetalQsSkin.TileGlassBorderBrush, shape)
+                        Modifier.border(
+                            borderWidth,
+                            PetalQsSkin.tileGlassBorderBrush(dark),
+                            shape,
+                        )
                     } else {
                         Modifier
                     }
@@ -647,11 +674,13 @@ fun LargeStaticTile(
     modifier: Modifier = Modifier,
 ) {
     val skinEnabled = petalSkinEnabled()
+    val dark = PetalQsSkin.dark()
     val colors =
         TileDefaults.getColorForState(
             uiState = uiState,
             iconOnly = false,
             skinEnabled = skinEnabled,
+            dark = dark,
         )
 
     Box(
@@ -663,7 +692,7 @@ fun LargeStaticTile(
                     )
                     .value
             )
-            .background(colors.background)
+            .liquidGlass(PetalQsSkin.TileCornerRadius, colors.background, dark)
             .height(TileHeight)
             .largeTilePadding()
     ) {
@@ -807,6 +836,7 @@ private object TileDefaults {
         uiState: TileUiState,
         iconOnly: Boolean,
         skinEnabled: Boolean,
+        dark: Boolean = true,
     ): TileColors {
         // petalOS: when the quick settings skin is enabled, use the petal card palette
         if (skinEnabled) {
@@ -816,6 +846,7 @@ private object TileDefaults {
                     handlesSecondaryClick = uiState.handlesSecondaryClick,
                     iconOnly = iconOnly,
                     emission = PetalQsSkin.emission(),
+                    dark = dark,
                 )
             return TileColors(
                 background = skin.background,
