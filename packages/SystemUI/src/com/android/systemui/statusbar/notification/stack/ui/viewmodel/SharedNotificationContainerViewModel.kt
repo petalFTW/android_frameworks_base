@@ -83,6 +83,7 @@ import com.android.systemui.keyguard.ui.viewmodel.PrimaryBouncerToLockscreenTran
 import com.android.systemui.keyguard.ui.viewmodel.ViewStateAccessor
 import com.android.systemui.media.controls.domain.pipeline.MediaDataManager
 import com.android.systemui.media.controls.shared.model.MediaData
+import com.android.systemui.petalos.depth.PetalDepthNotificationPosition
 import com.android.systemui.res.R
 import com.android.systemui.scene.domain.interactor.SceneInteractor
 import com.android.systemui.scene.shared.flag.SceneContainerFlag
@@ -118,6 +119,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.combineTransform
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -513,14 +515,16 @@ constructor(
             )
             .dumpValue("shadeCollapseFadeIn")
 
-    /**
-     * The container occupies the entire screen, and must be positioned relative to other elements.
-     *
-     * On keyguard, this generally fits below the clock and above the lock icon, or in split shade,
-     * the top of the screen to the lock icon.
-     *
-     * When the shade is expanding, the position is controlled by... the shade.
-     */
+    private val mediaStackMeasurements = MutableStateFlow(0f to 0f)
+
+    private data class DepthStackLayout(
+        val media: Boolean,
+        val mediaHeight: Float,
+        val playerHeight: Float,
+        val placement: PetalDepthNotificationPosition.Placement,
+    )
+
+    // Under the clock while locked; the shade takes over when dragged.
     val bounds: StateFlow<NotificationContainerBounds> by lazy {
         SceneContainerFlag.assertInLegacyMode()
         combine(
@@ -533,12 +537,44 @@ constructor(
                         shadeInteractor.qsExpansion,
                     )
                     .onStart { emit(Triple(0f, false, 0f)) },
-            ) { onLockscreen, bounds, paddingTop, (top, isInTransitionToAnyState, qsExpansion) ->
+                combine(hasActiveMedia, mediaStackMeasurements, PetalDepthNotificationPosition.placement) {
+                        media, (height, playerHeight), placement ->
+                    DepthStackLayout(media && playerHeight > 0f, height, playerHeight, placement)
+                },
+            ) { onLockscreen, bounds, paddingTop, (top, isInTransitionToAnyState, qsExpansion), (media, mediaHeight, playerHeight, placement) ->
                 if (onLockscreen) {
-                    bounds.copy(top = bounds.top - paddingTop)
+                    var ribbonBottom = bounds.bottom
+                    // The depth clock doesn't live in the stock clock's barrier.
+                    var ribbonTop = if (media && org.petalos.config.PetalConfig.isDepthEnabled(context) &&
+                        org.petalos.config.PetalConfig.getDepthClockStyle(context) > 0 &&
+                        context.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT &&
+                        !context.resources.getBoolean(R.bool.config_use_split_notification_shade)) {
+                        // Don't shove the entire bloody player into the shelf.
+                        if (mediaHeight > 0f) {
+                            val density = context.resources.displayMetrics.density
+                            val shelfSpace = if (playerHeight > 0f)
+                                (mediaHeight - playerHeight - 12f * density).coerceAtLeast(0f) else 0f
+                            // Only the shelf borrows space; the ribbon stays clear of the sensor.
+                            ribbonBottom += minOf(28f * density, shelfSpace)
+                            maxOf(bounds.top, context.resources.displayMetrics.heightPixels * 0.43f)
+                                .coerceAtMost((ribbonBottom - mediaHeight - 2f).coerceAtLeast(0f))
+                        } else bounds.top
+                    } else bounds.top
+                    if (placement.enabled && placement.startPercent != org.petalos.config.DepthNotificationPlacement.AUTOMATIC &&
+                        context.resources.configuration.orientation == android.content.res.Configuration.ORIENTATION_PORTRAIT &&
+                        !context.resources.getBoolean(R.bool.config_use_split_notification_shade)) {
+                        val minimumHeight = maxOf(
+                            context.resources.getDimensionPixelSize(R.dimen.notification_min_height).toFloat(),
+                            if (media) mediaHeight else 0f,
+                        ) + 2f
+                        ribbonTop = org.petalos.config.DepthNotificationPlacement.resolveTop(
+                            ribbonTop, ribbonBottom, context.resources.displayMetrics.heightPixels.toFloat(),
+                            placement.startPercent, minimumHeight,
+                        )
+                    }
+                    bounds.copy(top = ribbonTop - paddingTop, bottom = ribbonBottom)
                 } else {
-                    // When QS expansion > 0, it should directly set the top padding so do not
-                    // animate it
+                    // QS follows your finger, no extra animation bollocks.
                     val animate = qsExpansion == 0f && !isInTransitionToAnyState
                     bounds.copy(top = top, isAnimated = animate)
                 }
@@ -1006,7 +1042,10 @@ constructor(
             }
     }
 
-    fun notificationStackChanged() {
+    fun notificationStackChanged(minimumMediaHeight: Float? = null, mediaPlayerHeight: Float = 0f) {
+        minimumMediaHeight?.let {
+            mediaStackMeasurements.value = it.coerceAtLeast(0f) to mediaPlayerHeight.coerceAtLeast(0f)
+        }
         interactor.notificationStackChanged()
     }
 

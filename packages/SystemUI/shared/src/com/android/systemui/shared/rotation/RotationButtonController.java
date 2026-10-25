@@ -400,7 +400,7 @@ public class RotationButtonController {
             mRotateHideAnimator = null;
 
             // Reset the alpha if any has changed due to hide animation
-            view.setAlpha(1f);
+            if (!(mRotationButton instanceof FloatingRotationButton)) view.setAlpha(1f);
 
             // Run the rotate icon's animation if it has one
             if (currentDrawable instanceof AnimatedVectorDrawable) {
@@ -416,6 +416,12 @@ public class RotationButtonController {
             mRotationButton.show();
         } else { // Hide
             mViewRippler.stop(); // Prevent any pending ripples, force hide or not
+
+            if (mRotationButton instanceof FloatingRotationButton floatingButton) {
+                if (force) floatingButton.hideImmediately();
+                else floatingButton.hide();
+                return;
+            }
 
             if (force) {
                 // If a hide animator is running stop it and make invisible

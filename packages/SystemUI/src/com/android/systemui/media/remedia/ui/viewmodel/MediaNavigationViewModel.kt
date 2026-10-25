@@ -62,6 +62,8 @@ sealed interface MediaNavigationViewModel {
         val onScrubFinished: (delta: Offset) -> Unit,
         /** Accessibility string to attach to the seekbar UI element. */
         val contentDescription: String,
+        val elapsedTime: String = "",
+        val duration: String = "",
     ) : MediaNavigationViewModel
 
     /** The seek bar should be hidden. */

@@ -1059,4 +1059,7 @@ interface IActivityManager {
      */
     oneway void reportOptimizationInfo(in IBinder app, in String compilerFilter,
             in String compilationReason);
+
+    // Presentation policy only. Caller identity is derived by the service, not supplied by apps.
+    boolean isPetalStateOverrideEnabled(int state, @nullable String packageName, int userId);
 }

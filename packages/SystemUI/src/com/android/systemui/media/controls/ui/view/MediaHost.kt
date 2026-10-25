@@ -21,6 +21,7 @@ import android.util.ArraySet
 import android.view.View
 import android.view.View.OnAttachStateChangeListener
 import com.android.systemui.media.controls.domain.pipeline.MediaDataManager
+import com.android.systemui.media.controls.shared.model.MediaData
 import com.android.systemui.media.controls.ui.controller.MediaCarouselController
 import com.android.systemui.media.controls.ui.controller.MediaCarouselControllerLogger
 import com.android.systemui.media.controls.ui.controller.MediaHierarchyManager
@@ -86,6 +87,19 @@ class MediaHost(
 
     private val listener =
         object : MediaDataManager.Listener {
+            override fun onMediaDataLoaded(
+                key: String,
+                oldKey: String?,
+                data: MediaData,
+                immediately: Boolean,
+            ) {
+                updateViewVisibility()
+            }
+
+            override fun onCurrentActiveMediaChanged(key: String?, data: MediaData?) {
+                updateViewVisibility()
+            }
+
             override fun onMediaDataRemoved(key: String, userInitiated: Boolean) {
                 updateViewVisibility()
             }
@@ -157,9 +171,15 @@ class MediaHost(
                 }
             }
 
-        // Whenever the state changes, let our state manager know
-        state.changedListener = { mediaHostStatesManager.updateHostState(location, state) }
+        state.changedListener = {
+            val styleChanged = mediaHostStatesManager.mediaHostStates[location]?.petalStyle !=
+                state.petalStyle
+            mediaHostStatesManager.updateHostState(location, state)
+            // the player shrank, don't leave its old bloody parking space behind
+            if (styleChanged) hostView.requestLayout()
+        }
 
+        mediaHostStatesManager.updateHostState(location, state)
         updateViewVisibility()
     }
 
@@ -181,7 +201,8 @@ class MediaHost(
     fun updateViewVisibility() {
         val oldState = state.visible
         state.visible =
-            if (mediaCarouselController.isLockedAndHidden()) {
+            if (location == MediaHierarchyManager.LOCATION_LOCKSCREEN &&
+                mediaCarouselController.isLockedAndHidden()) {
                 false
             } else if (showsOnlyActiveMedia) {
                 mediaDataManager.hasActiveMedia()
@@ -197,6 +218,13 @@ class MediaHost(
     }
 
     class MediaHostStateHolder @Inject constructor() : MediaHostState {
+        override var petalStyle = com.android.systemui.petalos.PetalMediaStyle.Stock
+            set(value) {
+                if (field == value) return
+                field = value
+                changedListener?.invoke()
+            }
+
         override var measurementInput: MeasurementInput? = null
             set(value) {
                 if (value?.equals(field) != true) {
@@ -284,6 +312,7 @@ class MediaHost(
         override fun copy(): MediaHostState {
             val mediaHostState = MediaHostStateHolder()
             mediaHostState.expansion = expansion
+            mediaHostState.petalStyle = petalStyle
             mediaHostState.expandedMatchesParentHeight = expandedMatchesParentHeight
             mediaHostState.squishFraction = squishFraction
             mediaHostState.showsOnlyActiveMedia = showsOnlyActiveMedia
@@ -305,6 +334,7 @@ class MediaHost(
             if (expansion != other.expansion) {
                 return false
             }
+            if (petalStyle != other.petalStyle) return false
             if (squishFraction != other.squishFraction) {
                 return false
             }
@@ -329,6 +359,7 @@ class MediaHost(
         override fun hashCode(): Int {
             var result = measurementInput?.hashCode() ?: 0
             result = 31 * result + expansion.hashCode()
+            result = 31 * result + petalStyle.hashCode()
             result = 31 * result + squishFraction.hashCode()
             result = 31 * result + falsingProtectionNeeded.hashCode()
             result = 31 * result + showsOnlyActiveMedia.hashCode()
@@ -350,6 +381,8 @@ class MediaHost(
  * to only update that key if the underlying view needs to have a different measurement.
  */
 interface MediaHostState {
+    var petalStyle: com.android.systemui.petalos.PetalMediaStyle
+
 
     companion object {
         const val EXPANDED: Float = 1.0f

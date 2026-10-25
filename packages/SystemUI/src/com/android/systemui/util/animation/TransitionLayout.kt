@@ -31,11 +31,7 @@ import com.android.systemui.animation.LaunchableView
 import com.android.systemui.animation.LaunchableViewDelegate
 import com.android.systemui.statusbar.CrossFadeHelper
 
-/**
- * A view that handles displaying of children and transitions of them in an optimized way,
- * minimizing the number of measure passes, while allowing for maximum flexibility
- * and interruptibility.
- */
+// Cache the geometry so these transitions don't keep measuring the whole damn tree.
 class TransitionLayout @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
@@ -47,7 +43,6 @@ class TransitionLayout @JvmOverloads constructor(
     private val originalViewAlphas: MutableMap<Int, Float> = mutableMapOf()
     private var measureAsConstraint: Boolean = false
     private var currentState: TransitionViewState = TransitionViewState()
-    private var updateScheduled = false
     private var isPreDrawApplicatorRegistered = false
 
     private var desiredMeasureWidth = 0
@@ -58,20 +53,16 @@ class TransitionLayout @JvmOverloads constructor(
             superSetVisibility = { super.setVisibility(it) },
         )
 
-    /**
-     * The measured state of this view which is the one we will lay ourselves out with. This
-     * may differ from the currentState if there is an external animation or transition running.
-     * This state will not be used to measure the widgets, where the current state is preferred.
-     */
+    // Parent measurement can target another host; the children still follow currentState.
     var measureState: TransitionViewState = TransitionViewState()
         set(value) {
+            field = value
             val newWidth = value.measureWidth
             val newHeight = value.measureHeight
             if (newWidth != desiredMeasureWidth || newHeight != desiredMeasureHeight) {
                 desiredMeasureWidth = newWidth
                 desiredMeasureHeight = newHeight
-                // We need to make sure next time we're measured that our onMeasure will be called.
-                // Otherwise our parent thinks we still have the same height
+                // Tell the parent the target size changed, or it keeps the old height.
                 if (isInLayout()) {
                     forceLayout()
                 } else {
@@ -81,7 +72,6 @@ class TransitionLayout @JvmOverloads constructor(
         }
     private val preDrawApplicator = object : ViewTreeObserver.OnPreDrawListener {
         override fun onPreDraw(): Boolean {
-            updateScheduled = false
             viewTreeObserver.removeOnPreDrawListener(this)
             isPreDrawApplicatorRegistered = false
             applyCurrentState()
@@ -120,6 +110,14 @@ class TransitionLayout @JvmOverloads constructor(
         }
     }
 
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        // Reparenting binned the callback; don't leave another host's geometry behind.
+        if (currentState.widgetStates.isNotEmpty()) {
+            applyCurrentStateOnPredraw()
+        }
+    }
+
     /**
      * Apply the current state to the view and its widgets
      */
@@ -131,23 +129,8 @@ class TransitionLayout @JvmOverloads constructor(
             val child = getChildAt(i)
             val widgetState = currentState.widgetStates.get(child.id) ?: continue
 
-            // TextViews which are measured and sized differently should be handled with a
-            // "clip mode", which means we clip explicitly rather than implicitly by passing
-            // different sizes to measure/layout than setLeftTopRightBottom.
-            // Then to accommodate RTL text, we need a "clip shift" which allows us to have the
-            // clipBounds be attached to the right side of the view instead of the left.
-            val clipModeShift =
-                    if (child is TextView && widgetState.width < widgetState.measureWidth) {
-                if (child.layout.getParagraphDirection(0) == Layout.DIR_RIGHT_TO_LEFT) {
-                    widgetState.measureWidth - widgetState.width
-                } else {
-                    0
-                }
-            } else {
-                null
-            }
-
-            if (child.measuredWidth != widgetState.measureWidth ||
+            // Text changes can bin the layout even when its measured size hasn't changed.
+            if (child.isLayoutRequested || child.measuredWidth != widgetState.measureWidth ||
                     child.measuredHeight != widgetState.measureHeight) {
                 val measureWidthSpec = MeasureSpec.makeMeasureSpec(widgetState.measureWidth,
                         MeasureSpec.EXACTLY)
@@ -156,6 +139,26 @@ class TransitionLayout @JvmOverloads constructor(
                 child.measure(measureWidthSpec, measureHeightSpec)
                 child.layout(0, 0, child.measuredWidth, child.measuredHeight)
             }
+
+            // Clip from the right for RTL; a fresh TextView may not have a layout yet.
+            val clipModeShift =
+                     if (child is TextView && widgetState.width < widgetState.measureWidth) {
+                val paragraphDirection = child.layout?.takeIf { it.lineCount > 0 }
+                    ?.getParagraphDirection(0)
+                    ?: if (child.layoutDirection == View.LAYOUT_DIRECTION_RTL) {
+                        Layout.DIR_RIGHT_TO_LEFT
+                    } else {
+                        Layout.DIR_LEFT_TO_RIGHT
+                    }
+                if (paragraphDirection == Layout.DIR_RIGHT_TO_LEFT) {
+                    widgetState.measureWidth - widgetState.width
+                } else {
+                    0
+                }
+            } else {
+                null
+            }
+
             val clipShift = clipModeShift ?: 0
             val left = widgetState.x.toInt() + contentTranslationX - clipShift
             val top = widgetState.y.toInt() + contentTranslationY
@@ -183,12 +186,9 @@ class TransitionLayout @JvmOverloads constructor(
     }
 
     private fun applyCurrentStateOnPredraw() {
-        if (!updateScheduled) {
-            updateScheduled = true
-            if (!isPreDrawApplicatorRegistered) {
-                viewTreeObserver.addOnPreDrawListener(preDrawApplicator)
-                isPreDrawApplicatorRegistered = true
-            }
+        if (!isPreDrawApplicatorRegistered) {
+            viewTreeObserver.addOnPreDrawListener(preDrawApplicator)
+            isPreDrawApplicatorRegistered = true
         }
     }
 
@@ -238,14 +238,7 @@ class TransitionLayout @JvmOverloads constructor(
         boundsRect.set(0, 0, width.toInt(), height.toInt())
     }
 
-    /**
-     * Calculates a view state for a given ConstraintSet and measurement, saving all positions
-     * of all widgets.
-     *
-     * @param input the measurement input this should be done with
-     * @param constraintSet the constraint set to apply
-     * @param resusableState the result that we can reuse to minimize memory impact
-     */
+    // Measure another host temporarily, then put the live geometry back before drawing.
     fun calculateViewState(
         input: MeasurementInput,
         constraintSet: ConstraintSet,
@@ -275,10 +268,7 @@ class TransitionLayout @JvmOverloads constructor(
     }
 
     private fun applySetToFullLayout(constraintSet: ConstraintSet) {
-        // Let's reset our views to the initial gone state of the layout, since the constraintset
-        // might only be a subset of the views. Otherwise the gone state would be calculated
-        // wrongly later if we made this invisible in the layout (during apply we make sure they
-        // are invisible instead
+        // Partial constraints still need the original gone flags, not last frame's visibility.
         val childCount = childCount
         for (i in 0 until childCount) {
             val child = getChildAt(i)
@@ -292,10 +282,7 @@ class TransitionLayout @JvmOverloads constructor(
         constraintSet.applyTo(this)
     }
 
-    /**
-     * Ensures that our views are never gone but invisible instead, this allows us to animate them
-     * without remeasuring.
-     */
+    // Invisible keeps the geometry around; gone would kick off another measure.
     private fun ensureViewsNotGone() {
         val childCount = childCount
         for (i in 0 until childCount) {

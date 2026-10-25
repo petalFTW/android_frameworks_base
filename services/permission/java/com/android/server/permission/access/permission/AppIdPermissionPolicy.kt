@@ -1215,6 +1215,27 @@ class AppIdPermissionPolicy : SchemePolicy() {
                 }
             }
 
+            // The INTERNET permission is a runtime permission that's granted by default, so
+            // that it can be toggled by the user per app without breaking apps that don't
+            // request it at runtime. It's only granted when requested by an installed
+            // package in the app ID, and only if the state wasn't already decided by the
+            // user or fixed by a policy, in which case the existing flags are respected.
+            if (
+                permissionName == Manifest.permission.INTERNET &&
+                    requestingPackageStates.size > 0 &&
+                    !newFlags.hasAnyBit(
+                        PermissionFlags.RUNTIME_GRANTED or
+                            PermissionFlags.LEGACY_GRANTED or
+                            PermissionFlags.IMPLICIT_GRANTED or
+                            PermissionFlags.USER_SET or
+                            PermissionFlags.USER_FIXED or
+                            PermissionFlags.POLICY_FIXED or
+                            PermissionFlags.SYSTEM_FIXED
+                    )
+            ) {
+                newFlags = newFlags or PermissionFlags.RUNTIME_GRANTED
+            }
+
             val wasExempt = newFlags.hasAnyBit(PermissionFlags.MASK_EXEMPT)
             val wasRestricted = newFlags.hasAnyBit(PermissionFlags.MASK_RESTRICTED)
             val isExempt =

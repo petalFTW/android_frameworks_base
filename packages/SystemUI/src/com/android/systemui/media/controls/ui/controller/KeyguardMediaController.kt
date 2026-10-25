@@ -64,10 +64,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
-/**
- * Controls the media notifications on the lock screen, handles its visibility and placement -
- * switches media player positioning between split pane container vs single pane container
- */
+// Keeps lockscreen media in the right pane, and out of AOD's way.
 @SysUISingleton
 class KeyguardMediaController
 @Inject
@@ -84,6 +81,7 @@ constructor(
     private val mediaViewModelFactory: MediaViewModel.Factory,
     private val mediaCarouselInteractor: MediaCarouselInteractor,
     private val falsingSystem: MediaFalsingSystem,
+    private val depthController: dagger.Lazy<com.android.systemui.statusbar.NotificationShadeDepthController>,
 ) : Dumpable {
     private var lastUsedStatusBarState = -1
 
@@ -116,6 +114,7 @@ constructor(
         if (!MediaControlsInComposeFlag.isEnabled) {
             // First let's set the desired state that we want for this host
             mediaHost.expansion = MediaHostState.EXPANDED
+            mediaHost.petalStyle = com.android.systemui.petalos.PetalMediaStyle.Lockscreen
             mediaHost.showsOnlyActiveMedia = true
             mediaHost.falsingProtectionNeeded = true
 
@@ -160,18 +159,23 @@ constructor(
 
     private fun setComposeContent(composeView: ComposeView) {
         composeView.setContent {
-            Media(
-                viewModelFactory = mediaViewModelFactory,
-                presentationStyle = MediaPresentationStyle.Default,
-                behavior =
-                    MediaUiBehavior(
-                        carouselVisibility = MediaCarouselVisibility.WhenAnyCardIsActive,
-                        isCarouselScrollFalseTouch = {
-                            falsingSystem.isFalseTouch(Classifier.MEDIA_CAROUSEL_SWIPE)
-                        },
-                    ),
-                onDismissed = { mediaCarouselInteractor.onSwipeToDismiss() },
-            )
+            androidx.compose.runtime.CompositionLocalProvider(
+                com.android.systemui.petalos.LocalPetalMediaStyle provides
+                    com.android.systemui.petalos.PetalMediaStyle.Lockscreen,
+            ) {
+                Media(
+                    viewModelFactory = mediaViewModelFactory,
+                    presentationStyle = MediaPresentationStyle.Default,
+                    behavior =
+                        MediaUiBehavior(
+                            carouselVisibility = MediaCarouselVisibility.WhenAnyCardIsActive,
+                            isCarouselScrollFalseTouch = {
+                                falsingSystem.isFalseTouch(Classifier.MEDIA_CAROUSEL_SWIPE)
+                            },
+                        ),
+                    onDismissed = { mediaCarouselInteractor.onSwipeToDismiss() },
+                )
+            }
         }
     }
 
@@ -282,8 +286,36 @@ constructor(
                 mediaHost.hostView.parent?.let {
                     (it as? ViewGroup)?.removeView(mediaHost.hostView)
                 }
-                activeContainer.addView(mediaHost.hostView)
+                if (useSplitShade) {
+                    activeContainer.addView(mediaHost.hostView)
+                } else {
+                    // petal: park the default player a bit lower; the CD player has its own spot
+                    val wrapper = offsetWrapper
+                    // shade reinflation swaps the container out from under us, pry it loose first
+                    (wrapper.parent as? ViewGroup)?.removeView(wrapper)
+                    if (mediaHost.hostView.parent !== wrapper) {
+                        wrapper.addView(
+                            mediaHost.hostView,
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                        )
+                    }
+                    activeContainer.addView(
+                        wrapper,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    )
+                }
             }
+        }
+    }
+
+    // padded shell so the player sits lower without fighting the stack's measuring
+    private val offsetWrapper: ViewGroup by lazy {
+        android.widget.FrameLayout(context).apply {
+            setPadding(0, context.resources.getDimensionPixelSize(
+                com.android.systemui.res.R.dimen.petal_lock_media_top_offset), 0, 0)
+            clipToPadding = false
         }
     }
 
@@ -316,7 +348,9 @@ constructor(
             isMediaHostVisible &&
                 isBypassNotEnabled &&
                 keyguardOrUserSwitcher &&
+                !org.petalos.config.PetalConfig.isLockCdPlayerEnabled(context) &&
                 shouldBeVisibleForSplitShade
+        depthController.get().lockscreenMediaVisible = visible
         logger.logRefreshMediaPosition(
             reason = reason,
             visible = visible,

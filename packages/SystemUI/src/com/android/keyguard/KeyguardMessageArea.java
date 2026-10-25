@@ -134,9 +134,15 @@ public abstract class KeyguardMessageArea extends TextView implements SecurityMe
             return;
         }
         CharSequence status = mMessage;
-        setVisibility(TextUtils.isEmpty(status) || (!mIsVisible) ? INVISIBLE : VISIBLE);
+        setVisibility((TextUtils.isEmpty(status) && !shouldShowEmptyMessage()) || (!mIsVisible)
+                ? INVISIBLE : VISIBLE);
         setText(status);
         updateTextColor();
+    }
+
+    /** Whether non-text content still needs this message area when the message is cleared. */
+    protected boolean shouldShowEmptyMessage() {
+        return false;
     }
 
     /**

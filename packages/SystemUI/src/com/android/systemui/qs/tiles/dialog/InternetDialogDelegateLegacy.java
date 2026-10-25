@@ -91,9 +91,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.Executor;
 
-/**
- * Dialog for showing mobile network, connected Wi-Fi network and Wi-Fi networks.
- */
+// networks and the toggles that go with them
 public class InternetDialogDelegateLegacy implements
         SystemUIDialog.Delegate,
         InternetDetailsContentController.InternetDialogCallback {
@@ -278,6 +276,7 @@ public class InternetDialogDelegateLegacy implements
                 context.getText(R.string.accessibility_desc_quick_settings));
         final Window window = dialog.getWindow();
         window.setContentView(mDialogView);
+        com.android.internal.graphics.drawable.PetalGlassDrawable.applyToWindow(window);
 
         window.setWindowAnimations(R.style.Animation_InternetDialog);
 
@@ -386,12 +385,7 @@ public class InternetDialogDelegateLegacy implements
         }
     }
 
-    /**
-     * Update the internet dialog when receiving the callback.
-     *
-     * @param shouldUpdateMobileNetwork {@code true} for update the mobile network layout,
-     *                                  otherwise {@code false}.
-     */
+    // callback refresh; mobile bits are optional
     void updateDialog(boolean shouldUpdateMobileNetwork) {
         mBackgroundExecutor.execute(() -> {
             mDataInternetContent.postValue(getInternetContent(shouldUpdateMobileNetwork));

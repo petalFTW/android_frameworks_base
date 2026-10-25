@@ -4454,7 +4454,9 @@ public class ActivityManager {
      */
     public boolean isBackgroundRestricted() {
         try {
-            return getService().isBackgroundRestricted(mContext.getOpPackageName());
+            final boolean restricted = getService().isBackgroundRestricted(mContext.getOpPackageName());
+            return restricted && !PetalStateOverrides.isEnabledForPackage(
+                    PetalStateOverrides.BACKGROUND, mContext.getOpPackageName(), mContext.getUserId());
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }

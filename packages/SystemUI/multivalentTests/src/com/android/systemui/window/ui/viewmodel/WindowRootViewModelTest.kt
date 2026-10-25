@@ -49,7 +49,7 @@ class WindowRootViewModelTest : SysuiTestCase() {
     val underTest by lazy { kosmos.windowRootViewModel }
 
     @Test
-    fun bouncerTransitionChangesWindowBlurRadius() =
+    fun bouncerTransitionUsesFivePercentBlur() =
         testScope.runTest {
             kosmos.fakeWindowRootViewBlurRepository.isBlurSupported.value = true
             val blurRadius by collectLastValue(underTest.blurRadius)
@@ -59,8 +59,12 @@ class WindowRootViewModelTest : SysuiTestCase() {
             kosmos.fakeBouncerTransitions.first().windowBlurRadius.value = 30.0f
             runCurrent()
 
-            assertThat(blurRadius).isEqualTo(30)
+            assertThat(blurRadius).isEqualTo(1.5f)
             assertThat(isSurfaceOpaque).isEqualTo(false)
+
+            kosmos.windowRootViewBlurRepository.blurRequestedByShade.value = 60.0f
+            runCurrent()
+            assertThat(blurRadius).isEqualTo(60f)
         }
 
     @Test

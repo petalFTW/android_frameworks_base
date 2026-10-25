@@ -59,16 +59,28 @@ class IslandAnimator(private val view: View) {
     private var springW: SpringAnimation? = null
     private var springH: SpringAnimation? = null
     private var alphaAnimator: ValueAnimator? = null
+    private var sizeAnimator: ValueAnimator? = null
+    private var translationXAnimator: ValueAnimator? = null
+    private var translationYAnimator: ValueAnimator? = null
+
+    val isMotionRunning: Boolean
+        get() = alphaAnimator?.isStarted == true ||
+            translationXAnimator?.isStarted == true || translationYAnimator?.isStarted == true
 
     // called when the size spring stops moving
     var onSettled: (() -> Unit)? = null
 
-    private val onEnd = DynamicAnimation.OnAnimationEndListener { _, _, _, _ ->
+    private val onEnd = DynamicAnimation.OnAnimationEndListener { _, cancelled, _, _ ->
         view.requestLayout()
-        onSettled?.invoke()
+        if (!cancelled && springW?.isRunning != true && springH?.isRunning != true) {
+            onSettled?.invoke()
+        }
     }
 
     fun animateSize(targetW: Int, targetH: Int, expanding: Boolean) {
+        springW?.cancel()
+        springH?.cancel()
+        sizeAnimator?.cancel()
         when (mode) {
             AnimationMode.NONE -> {
                 setSize(targetW, targetH)
@@ -90,7 +102,6 @@ class IslandAnimator(private val view: View) {
                 IslandConstants.SPRING_COLLAPSE_STIFFNESS to IslandConstants.SPRING_COLLAPSE_DAMPING
             }
 
-        springW?.cancel()
         springW = SpringAnimation(view, widthProp)
             .setSpring(SpringForce().apply {
                 this.stiffness = stiffness
@@ -100,7 +111,6 @@ class IslandAnimator(private val view: View) {
         springW?.spring?.finalPosition = targetW.toFloat()
         springW?.start()
 
-        springH?.cancel()
         springH = SpringAnimation(view, heightProp)
             .setSpring(SpringForce().apply {
                 this.stiffness = stiffness
@@ -130,23 +140,28 @@ class IslandAnimator(private val view: View) {
             }
             addListener(
                 object : AnimatorListenerAdapter() {
+                    private var cancelled = false
+
+                    override fun onAnimationCancel(animation: android.animation.Animator) {
+                        cancelled = true
+                    }
+
                     override fun onAnimationEnd(animation: android.animation.Animator) {
-                        onSettled?.invoke()
+                        if (!cancelled) onSettled?.invoke()
                     }
                 },
             )
         }
-        alphaAnimator?.cancel()
-        alphaAnimator = animator
+        sizeAnimator = animator
         animator.start()
     }
 
     fun animateAlpha(target: Float, durationMs: Long = 220L) {
+        alphaAnimator?.cancel()
         if (mode == AnimationMode.NONE) {
             view.alpha = target
             return
         }
-        alphaAnimator?.cancel()
         alphaAnimator = ValueAnimator.ofFloat(view.alpha, target).apply {
             duration = durationMs
             interpolator = PathInterpolator(0.3f, 0f, 0.8f, 0.15f)
@@ -156,61 +171,73 @@ class IslandAnimator(private val view: View) {
     }
 
     fun animateTranslationX(target: Float, durationMs: Long = 220L, onEnd: (() -> Unit)? = null) {
+        translationXAnimator?.cancel()
         if (mode == AnimationMode.NONE) {
             view.translationX = target
             onEnd?.invoke()
             return
         }
-        alphaAnimator?.cancel()
-        alphaAnimator = ValueAnimator.ofFloat(view.translationX, target).apply {
+        translationXAnimator = ValueAnimator.ofFloat(view.translationX, target).apply {
             duration = durationMs
             interpolator = PathInterpolator(0.3f, 0f, 0.8f, 0.15f)
             addUpdateListener { a -> view.translationX = a.animatedValue as Float }
             addListener(
                 object : AnimatorListenerAdapter() {
+                    private var cancelled = false
+
+                    override fun onAnimationCancel(animation: android.animation.Animator) {
+                        cancelled = true
+                    }
+
                     override fun onAnimationEnd(animation: android.animation.Animator) {
-                        onEnd?.invoke()
+                        if (!cancelled) onEnd?.invoke()
                     }
                 },
             )
         }
-        alphaAnimator?.start()
+        translationXAnimator?.start()
     }
 
     fun animateTranslationY(target: Float, durationMs: Long = 220L, onEnd: (() -> Unit)? = null) {
+        translationYAnimator?.cancel()
         if (mode == AnimationMode.NONE) {
             view.translationY = target
             onEnd?.invoke()
             return
         }
-        alphaAnimator?.cancel()
-        alphaAnimator = ValueAnimator.ofFloat(view.translationY, target).apply {
+        translationYAnimator = ValueAnimator.ofFloat(view.translationY, target).apply {
             duration = durationMs
             interpolator = PathInterpolator(0.3f, 0f, 0.8f, 0.15f)
             addUpdateListener { a -> view.translationY = a.animatedValue as Float }
             addListener(
                 object : AnimatorListenerAdapter() {
+                    private var cancelled = false
+
+                    override fun onAnimationCancel(animation: android.animation.Animator) {
+                        cancelled = true
+                    }
+
                     override fun onAnimationEnd(animation: android.animation.Animator) {
-                        onEnd?.invoke()
+                        if (!cancelled) onEnd?.invoke()
                     }
                 },
             )
         }
-        alphaAnimator?.start()
+        translationYAnimator?.start()
     }
 
     // slide back to center and fade back in
     fun settleTranslationX(onEnd: (() -> Unit)? = null) {
+        cancelHorizontalMotion()
         if (mode == AnimationMode.NONE) {
             view.translationX = 0f
             view.alpha = 1f
             onEnd?.invoke()
             return
         }
-        alphaAnimator?.cancel()
         val startTx = view.translationX
         val startAlpha = view.alpha
-        alphaAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+        translationXAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
             duration = 280L
             interpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
             addUpdateListener { a ->
@@ -220,19 +247,58 @@ class IslandAnimator(private val view: View) {
             }
             addListener(
                 object : AnimatorListenerAdapter() {
+                    private var cancelled = false
+
+                    override fun onAnimationCancel(animation: android.animation.Animator) {
+                        cancelled = true
+                    }
+
                     override fun onAnimationEnd(animation: android.animation.Animator) {
-                        onEnd?.invoke()
+                        if (!cancelled) onEnd?.invoke()
                     }
                 },
             )
         }
-        alphaAnimator?.start()
+        translationXAnimator?.start()
+    }
+
+    fun settleTranslationY() {
+        cancelVerticalMotion()
+        if (mode == AnimationMode.NONE) {
+            view.translationY = 0f
+            return
+        }
+        val start = view.translationY
+        translationYAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 280L
+            interpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
+            addUpdateListener { view.translationY = start * (1f - it.animatedFraction) }
+        }
+        translationYAnimator?.start()
+    }
+
+    fun cancelHorizontalMotion() {
+        translationXAnimator?.cancel()
+        translationXAnimator = null
+        alphaAnimator?.cancel()
+        alphaAnimator = null
+    }
+
+    fun cancelVerticalMotion() {
+        translationYAnimator?.cancel()
+        translationYAnimator = null
+    }
+
+    fun cancelMotion() {
+        cancelHorizontalMotion()
+        cancelVerticalMotion()
     }
 
     fun cancelAll() {
         springW?.cancel()
         springH?.cancel()
-        alphaAnimator?.cancel()
+        sizeAnimator?.cancel()
+        cancelMotion()
     }
 
     private fun setSize(w: Int, h: Int) {

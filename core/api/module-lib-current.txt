@@ -62,6 +62,17 @@ package android.app {
     method public void onCanceled(@NonNull android.app.PendingIntent);
   }
 
+  @FlaggedApi("android.app.petal_reported_state_overrides") public final class PetalStateOverrides {
+    method public static boolean isEnabled(int);
+    method public static boolean isEnabledForPackage(int, @Nullable String, int);
+    field public static final int BACKGROUND = 4; // 0x4
+    field public static final int BATTERY_OPTIMIZATION = 3; // 0x3
+    field public static final int BLUETOOTH = 1; // 0x1
+    field public static final int LOCATION = 2; // 0x2
+    field public static final int LOCATION_PERMISSION = 6; // 0x6
+    field public static final int STANDBY = 5; // 0x5
+  }
+
   public class StatusBarManager {
     method @RequiresPermission(android.Manifest.permission.STATUS_BAR) public void setExpansionDisabledForSimNetworkLock(boolean);
   }

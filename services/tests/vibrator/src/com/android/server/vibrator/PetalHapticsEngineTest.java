@@ -32,6 +32,31 @@ public class PetalHapticsEngineTest {
                     VibrationEffect.EFFECT_POP, VibrationEffect.EFFECT_HEAVY_CLICK).build();
 
     @Test
+    public void simpleTapUsesStrongCalibratedEffectWhenSupported() {
+        for (int id : new int[] {HapticFeedbackConstants.VIRTUAL_KEY,
+                HapticFeedbackConstants.CONTEXT_CLICK, HapticFeedbackConstants.CALENDAR_DATE}) {
+            VibrationEffect.Composed effect =
+                    (VibrationEffect.Composed) PetalHapticsEngine.feedback(id, mMacanc);
+            assertEquals(List.of(new PrebakedSegment(VibrationEffect.EFFECT_HEAVY_CLICK,
+                    true, VibrationEffect.EFFECT_STRENGTH_STRONG)), effect.getSegments());
+            effect.validate();
+        }
+        assertEquals(PetalHapticsEngine.feedback(HapticFeedbackConstants.CONTEXT_CLICK, mMacanc),
+                PetalHapticsEngine.defaultTap(mMacanc));
+    }
+
+    @Test
+    public void simpleTapKeepsShortFallbackAndWheelTicksStayDistinct() {
+        VibrationEffect.Composed fallback = (VibrationEffect.Composed)
+                PetalHapticsEngine.defaultTap(VibratorInfo.EMPTY_VIBRATOR_INFO);
+        fallback.validate();
+        assertEquals(22, fallback.getDuration());
+        assertTrue(fallback.getSegments().stream().allMatch(s -> s instanceof StepSegment));
+        assertNotEquals(PetalHapticsEngine.feedback(HapticFeedbackConstants.CONTEXT_CLICK, mMacanc),
+                PetalHapticsEngine.feedback(HapticFeedbackConstants.SEGMENT_FREQUENT_TICK, mMacanc));
+    }
+
+    @Test
     public void preservesNativeEffectsAndRepeatingAlertWaveforms() {
         List<VibrationEffectSegment> segments = new ArrayList<>(List.of(
                 new PrebakedSegment(VibrationEffect.EFFECT_CLICK, true,

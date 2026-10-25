@@ -18,6 +18,7 @@ package com.android.systemui.qs.panels.ui.compose.infinitegrid
 
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
@@ -60,6 +61,7 @@ import com.android.systemui.qs.panels.ui.viewmodel.BounceableTileViewModel
 import com.android.systemui.qs.panels.ui.viewmodel.DetailsViewModel
 import com.android.systemui.qs.panels.ui.viewmodel.EditTileViewModel
 import com.android.systemui.qs.panels.ui.viewmodel.IconTilesViewModel
+import com.android.systemui.qs.panels.ui.viewmodel.InFirstPageViewModel
 import com.android.systemui.qs.panels.ui.viewmodel.InfiniteGridViewModel
 import com.android.systemui.qs.panels.ui.viewmodel.TextFeedbackContentViewModel
 import com.android.systemui.qs.panels.ui.viewmodel.TileViewModel
@@ -67,6 +69,8 @@ import com.android.systemui.qs.pipeline.shared.TileSpec
 import com.android.systemui.qs.shared.ui.QuickSettings.Elements.toElementKey
 import com.android.systemui.petalos.LocalPetalMediaRow
 import com.android.systemui.petalos.PetalQsSkin
+import com.android.systemui.petalos.petalQsTileEntrance
+import com.android.systemui.petalos.rememberPetalQsReveal
 import com.android.systemui.res.R
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
@@ -81,6 +85,7 @@ constructor(
     override val viewModelFactory: InfiniteGridViewModel.Factory,
     private val textFeedbackContentViewModelFactory: TextFeedbackContentViewModel.Factory,
     private val tileHapticsViewModelFactoryProvider: TileHapticsViewModelFactoryProvider,
+    private val inFirstPageViewModel: InFirstPageViewModel,
 ) : PaginatableGridLayout {
 
     @Composable
@@ -114,28 +119,20 @@ constructor(
         val squishiness by viewModel.squishinessViewModel.squishiness.collectAsStateWithLifecycle()
         val scope = rememberCoroutineScope()
 
-        // petalOS: control-center layout — the large tiles (Wi-Fi / Bluetooth pills) come first,
-        // then the concept's middle row (media player + brightness & volume vertical pills)
-        // provided through LocalPetalMediaRow, then the circular icon-only tiles.
+        // Pills, player, then the little controls again.
         val petalMediaRow = LocalPetalMediaRow.current
-        val petalSkin = PetalQsSkin.isEnabled(context)
+        val petalSkin = PetalQsSkin.enabled()
         if (petalSkin && petalMediaRow != null) {
-            // The artwork reserves the first two slots for half-width pills. After those slots,
-            // retain the user's expanded/compact resize choices using petal pill/circle geometry.
+            // First two get pills; leave the user's other sizes alone.
             val connectivitySpan = (columns / 2).coerceAtLeast(1)
             val petalLarge =
                 sizedTiles.take(2).map { SizedTileImpl(it.tile, connectivitySpan) }
             val petalCircles =
                 sizedTiles.drop(2).map {
-                    // Preserve the user's resize choice after the two concept headline slots.
-                    // Expanded tiles use the same half-row pill span; compact tiles stay circular.
+                    // Resized favourites still get their half row.
                     SizedTileImpl(it.tile, if (it.width > 1) connectivitySpan else 1)
                 }
-            // petalOS: at most two rows of normal tiles per page (PetalQsSkin.petalQsPageRows).
-            // Pages beyond the first are reachable through a horizontal pager so the shade keeps
-            // opening and closing in a single vertical swipe. The petal layout composes its
-            // button groups and pager directly and does not depend on the AOSP
-            // qs_material_expressive_tiles flag, which is disabled in this build.
+            // Two rows per page; side swipes leave the shade gesture alone.
             val petalCirclePages =
                 remember(petalCircles, columns) {
                     splitInRows(petalCircles, columns)
@@ -145,13 +142,20 @@ constructor(
                         }
                 }
             val petalPagerState = rememberPagerState(0) { petalCirclePages.size }
-            // petalOS: come back to the first tile page every time the control center is
-            // opened, instead of leaving it wherever the user swiped to last.
+            val petalTileCount =
+                2 + (petalCirclePages.firstOrNull()?.sumOf { it.size } ?: 0)
+            // Rewind while shut so nobody sees the bloody snap.
             LaunchedEffect(listening, petalPagerState) {
-                snapshotFlow { listening() }.collect {
-                    if (listening() && petalPagerState.pageCount > 0) {
+                snapshotFlow { listening() }.collect { isListening ->
+                    if (!isListening && petalPagerState.pageCount > 0) {
                         petalPagerState.scrollToPage(0)
                     }
+                }
+            }
+            // Tell stock expansion which page we're on; it was stuck on first.
+            LaunchedEffect(petalPagerState) {
+                snapshotFlow { petalPagerState.currentPage == 0 }.collect {
+                    inFirstPageViewModel.inFirstPage = it
                 }
             }
             // fixed height so a short last page doesn't drag the pager and dots with it
@@ -172,6 +176,8 @@ constructor(
                     horizontalPadding = dimensionResource(R.dimen.qs_tile_margin_horizontal),
                     modifier = Modifier,
                 ) { sizedTile, interactionSource ->
+                    val index = petalLarge.indexOfFirst { it.tile.spec == sizedTile.tile.spec }
+                    val reveal = rememberPetalQsReveal(index = index, count = petalTileCount)
                     Tile(
                         tile = sizedTile.tile,
                         iconOnly = false,
@@ -184,10 +190,28 @@ constructor(
                         enableRevealEffect = enableRevealEffect,
                         bounceableInfo = null,
                         interactionSource = interactionSource,
+                        petalReveal = reveal,
+                        modifier =
+                            Modifier.petalQsTileEntrance(
+                                petalLarge.indexOfFirst { it.tile.spec == sizedTile.tile.spec },
+                                phase = 1,
+                                side =
+                                    if (
+                                        petalLarge.indexOfFirst {
+                                            it.tile.spec == sizedTile.tile.spec
+                                        } == 0
+                                    ) {
+                                        -1f
+                                    } else {
+                                        1f
+                                    },
+                                count = petalTileCount,
+                                reveal = reveal,
+                            ),
                     )
                 }
-                petalMediaRow()
             }
+            petalMediaRow()
             if (petalCirclePages.size > 1) {
                 HorizontalPager(
                     state = petalPagerState,
@@ -204,12 +228,25 @@ constructor(
                         detailsViewModel = detailsViewModel,
                         tileHapticsViewModelFactoryProvider = tileHapticsViewModelFactoryProvider,
                         scope = scope,
+                        // tiles fall in/out as the page slides under the finger
+                        pageProgress = {
+                            val pos =
+                                petalPagerState.currentPage +
+                                    petalPagerState.currentPageOffsetFraction
+                            (1f - kotlin.math.abs(page - pos)).coerceIn(0f, 1f)
+                        },
+                        // + when the page sits to the right of centre, so tiles trail the swipe
+                        pageSlide = {
+                            val pos =
+                                petalPagerState.currentPage +
+                                    petalPagerState.currentPageOffsetFraction
+                            (page - pos).coerceIn(-1f, 1f)
+                        },
+                        count = 2 + petalCirclePages[page].sumOf { it.size },
                     )
                 }
             } else {
-                // petalOS: on a cold boot the tile list can still be empty while the petal skin is
-                // active, which makes petalCirclePages an empty list. Guard the non-pager branch so
-                // we don't crash SystemUI with NoSuchElementException while tiles are still loading.
+                // Tiles might still be loading, don't crash the damn shade.
                 if (petalCirclePages.isNotEmpty()) {
                     PetalCirclePage(
                         circlePage = petalCirclePages.first(),
@@ -221,18 +258,25 @@ constructor(
                         detailsViewModel = detailsViewModel,
                         tileHapticsViewModelFactoryProvider = tileHapticsViewModelFactoryProvider,
                         scope = scope,
+                        count = 2 + petalCirclePages.first().sumOf { it.size },
                     )
                 }
             }
             if (petalCirclePages.size > 1) {
                 Spacer(modifier = Modifier.height(12.dp))
-                PagerDots(
-                    pagerState = petalPagerState,
-                    activeColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                    nonActiveColor =
-                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                    modifier = Modifier.align(Alignment.CenterHorizontally),
-                )
+                val dotsIndex = 2 + columns * PetalQsSkin.petalQsPageRows
+                Box(
+                    modifier =
+                        Modifier.align(Alignment.CenterHorizontally)
+                            .petalQsTileEntrance(dotsIndex, phase = 1, count = petalTileCount)
+                ) {
+                    PagerDots(
+                        pagerState = petalPagerState,
+                        activeColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        nonActiveColor =
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                    )
+                }
             }
             }
             TileListener(tiles, listening)
@@ -398,10 +442,7 @@ constructor(
     }
 }
 
-/**
- * petalOS: one page of circle tiles (at most [PetalQsSkin.petalQsPageRows] rows), rendered with the
- * expressive [ButtonGroupGrid]. Used by the petal pager in [TileGrid].
- */
+// One page of circles, keep the pager rows together.
 @Composable
 private fun ContentScope.PetalCirclePage(
     circlePage: List<List<SizedTileImpl<TileViewModel>>>,
@@ -413,10 +454,13 @@ private fun ContentScope.PetalCirclePage(
     detailsViewModel: DetailsViewModel,
     tileHapticsViewModelFactoryProvider: TileHapticsViewModelFactoryProvider,
     scope: CoroutineScope,
+    pageProgress: (() -> Float)? = null,
+    pageSlide: (() -> Float)? = null,
+    count: Int = 0,
 ) {
-    // this loop wasn't in a Column, rows stacked on top of each other, how gay
+    // rows stack inside a Column so the pager height stays honest
     Column(verticalArrangement = Arrangement.spacedBy(dimensionResource(R.dimen.qs_tile_margin_vertical))) {
-        for (row in circlePage) {
+        for ((rowIndex, row) in circlePage.withIndex()) {
             ButtonGroupGrid(
                 sizedTiles = row,
                 columns = columns,
@@ -425,6 +469,12 @@ private fun ContentScope.PetalCirclePage(
                 horizontalPadding = dimensionResource(R.dimen.qs_tile_margin_horizontal),
                 modifier = Modifier,
             ) { sizedTile, interactionSource ->
+                // Count the actual tiles; resized rows threw this crap off.
+                val col = row.indexOfFirst { it.tile.spec == sizedTile.tile.spec }.coerceAtLeast(0)
+                val half = (row.size - 1) / 2f
+                val side = if (half <= 0f) 0f else (col - half) / half
+                val index = 2 + circlePage.take(rowIndex).sumOf { it.size } + col
+                val reveal = rememberPetalQsReveal(index = index, count = count, pageProgress = pageProgress)
                 Tile(
                     tile = sizedTile.tile,
                     iconOnly = sizedTile.width == 1,
@@ -437,6 +487,17 @@ private fun ContentScope.PetalCirclePage(
                     enableRevealEffect = enableRevealEffect,
                     bounceableInfo = null,
                     interactionSource = interactionSource,
+                    petalReveal = reveal,
+                    modifier =
+                        Modifier.petalQsTileEntrance(
+                            index,
+                            phase = 1,
+                            pageProgress = pageProgress,
+                            pageSlide = pageSlide,
+                            side = side,
+                            count = count,
+                            reveal = reveal,
+                        ),
                 )
             }
         }

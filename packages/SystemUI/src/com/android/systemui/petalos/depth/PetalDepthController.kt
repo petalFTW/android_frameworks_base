@@ -111,6 +111,41 @@ class PetalDepthController @Inject constructor(
     private val clockLayoutListener = ViewTreeObserver.OnGlobalLayoutListener {
         reassertStockClockHide()
     }
+    private val mediaPosition = IntArray(2)
+    private val clockPosition = IntArray(2)
+    private val mediaSpacingListener = ViewTreeObserver.OnPreDrawListener {
+        updateMediaSpacing()
+        true
+    }
+
+    private fun updateMediaSpacing() {
+        // Keep the settled clock size while QS borrows the player.
+        if (petalClockVisible && shadeExpanded) return
+        val stack = keyguardRootView.rootView.findViewById<android.view.ViewGroup>(
+            R.id.notification_stack_scroller)
+        var bottom = Int.MAX_VALUE
+        if (petalClockVisible && !shadeExpanded && !cdPlayerActive && stack != null) {
+            for (index in 0 until stack.childCount) {
+                val child = stack.getChildAt(index)
+                if (child is com.android.systemui.statusbar.notification.stack.MediaContainerView &&
+                    child.visibility != android.view.View.GONE && child.height > 0) {
+                    val player = child.findViewById<com.android.systemui.util.animation.TransitionLayout>(
+                        R.id.qs_media_controls)
+                    if (player?.getTag(R.id.petal_media_cover) !=
+                        com.android.systemui.petalos.PetalMediaStyle.Lockscreen ||
+                        !child.isShown || child.actualHeight <= 0 ||
+                        child.actualHeight < (player?.measureState?.measureHeight ?: 0)) return
+                    child.getLocationOnScreen(mediaPosition)
+                    clockView.getLocationOnScreen(clockPosition)
+                    // Leave a bit of air above the glass, for fuck's sake.
+                    bottom = mediaPosition[1] - clockPosition[1] -
+                        (24f * context.resources.displayMetrics.density).toInt()
+                    break
+                }
+            }
+        }
+        clockView.setContentBottom(bottom)
+    }
 
     // --- settings -----------------------------------------------------------------------------
 
@@ -202,8 +237,7 @@ class PetalDepthController @Inject constructor(
                 baselineTiltMatrix = displayTiltMatrix.copyOf()
                 return
             }
-            // Relative rotation avoids Euler pitch singularities when the phone
-            // is upright. Both axes use the same angular range in display space.
+            // Euler pitch went wonky upright; relative rotation behaves.
             val r02 = baseline[0] * displayTiltMatrix[2] +
                 baseline[3] * displayTiltMatrix[5] + baseline[6] * displayTiltMatrix[8]
             val r12 = baseline[1] * displayTiltMatrix[2] +
@@ -270,6 +304,8 @@ class PetalDepthController @Inject constructor(
             Settings.System.getUriFor(PetalConfig.KEY_DEPTH_CLOCK_SCALE), false, settingsObserver)
         resolver.registerContentObserver(
             Settings.System.getUriFor(PetalConfig.KEY_DEPTH_TILT_DP), false, settingsObserver)
+        resolver.registerContentObserver(
+            Settings.System.getUriFor(PetalConfig.KEY_DEPTH_NOTIFICATION_START), false, settingsObserver)
 
         statusBarStateController.addCallback(stateListener)
         keyguardStateController.addCallback(keyguardStateListener)
@@ -294,6 +330,7 @@ class PetalDepthController @Inject constructor(
             attached = true
             if (keyguardRootView.viewTreeObserver.isAlive) {
                 keyguardRootView.viewTreeObserver.addOnGlobalLayoutListener(clockLayoutListener)
+                keyguardRootView.viewTreeObserver.addOnPreDrawListener(mediaSpacingListener)
             }
             refreshFromSettings()
         }
@@ -301,6 +338,7 @@ class PetalDepthController @Inject constructor(
 
     private fun refreshFromSettings() {
         enabled = PetalConfig.isDepthEnabled(context)
+        PetalDepthNotificationPosition.update(enabled, PetalConfig.getDepthNotificationStartPct(context))
         parallaxEnabled = PetalConfig.isDepthParallaxEnabled(context)
         val generation = PetalConfig.getDepthGeneration(context)
         val uri = PetalConfig.getDepthCutoutUri(context)
@@ -355,7 +393,7 @@ class PetalDepthController @Inject constructor(
                     BitmapFactory.decodeStream(it)
                 }
             }.getOrNull()
-            // Liquid glass refracts the applied wallpaper rather than the frosted texture.
+            // Liquid wants the real paper, not the frost.
             val liquid = runCatching {
                 context.contentResolver.openInputStream(
                     Uri.parse("content://org.petalos.depth/liquid.png"))?.use {
@@ -384,9 +422,11 @@ class PetalDepthController @Inject constructor(
         }
     }.onFailure { Log.w(TAG, "Failed to load cutout $uri", it) }.getOrNull()
 
-    // only show on the lockscreen with shade closed
+    // lockscreen only. the shade used to nuke this the second you twitched the pull
+    // down, which left a black hole where the wallpaper should be. leave it up.
     private fun updateVisibility() {
         if (!attached) return
+        clockView.setDepthApplied(enabled && subjectView.hasSubject)
         // listener callbacks get dropped across unlock/doze churn, so re-read the
         // real state every time instead of trusting whatever we last heard
         keyguardGoingAway = keyguardStateController.isKeyguardGoingAway
@@ -405,7 +445,7 @@ class PetalDepthController @Inject constructor(
         val onKeyguard =
             statusBarStateController.state == StatusBarState.KEYGUARD &&
                 !statusBarStateController.isDozing
-        val visible = enabled && subjectView.hasSubject && onKeyguard && !shadeExpanded &&
+        val visible = enabled && subjectView.hasSubject && onKeyguard &&
             !mediaCoverActive && !cdPlayerActive && !keyguardGoingAway
 
         // unlocking, fade into home
@@ -433,7 +473,7 @@ class PetalDepthController @Inject constructor(
         // mid-fade, leave it alone
 
         // Keep the clock visible beneath the CD player; only the cutout is suppressed.
-        val clockVisible = enabled && clockStyle > 0 && onKeyguard && !shadeExpanded &&
+        val clockVisible = enabled && clockStyle > 0 && onKeyguard &&
             !keyguardGoingAway
         petalClockVisible = clockVisible
         if (clockView.visibility == android.view.View.VISIBLE) {
@@ -575,6 +615,7 @@ class PetalDepthController @Inject constructor(
 
     override fun dump(pw: PrintWriter, args: Array<out String>) {
         pw.println("PetalDepthController:")
+        pw.println("  bouncerClock=${clockView.bouncerStateForDump()}")
         pw.println("  enabled=$enabled generation=$cutoutGeneration shadeExpanded=$shadeExpanded")
         pw.println(
             "  attached=$attached goingAway=$keyguardGoingAway cover=$mediaCoverActive" +

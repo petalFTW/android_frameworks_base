@@ -2989,7 +2989,11 @@ public final class PowerManager {
      * features to the app. Guardrails for extreme cases may still be applied.
      */
     public boolean isIgnoringBatteryOptimizations(String packageName) {
-        return getPowerExemptionManager().isAllowListed(packageName, true);
+        final boolean allowlisted = getPowerExemptionManager().isAllowListed(packageName, true);
+        return allowlisted || (packageName != null
+                && android.app.PetalStateOverrides.isEnabledForPackage(
+                android.app.PetalStateOverrides.BATTERY_OPTIMIZATION, packageName,
+                mContext.getUserId()));
     }
 
     /**

@@ -18,6 +18,7 @@ package com.android.systemui.media.controls.ui.controller
 
 import android.os.UserHandle
 import android.platform.test.annotations.EnableFlags
+import android.platform.test.annotations.DisableFlags
 import android.provider.Settings
 import android.testing.TestableLooper
 import android.view.View.GONE
@@ -87,6 +88,7 @@ class KeyguardMediaControllerTest : SysuiTestCase() {
     private val hostView = UniqueObjectHostView(context)
     private lateinit var keyguardMediaController: KeyguardMediaController
     private lateinit var statusBarStateListener: StatusBarStateController.StateListener
+    private val depthController = mock<com.android.systemui.statusbar.NotificationShadeDepthController>()
 
     @Before
     fun setup() {
@@ -120,6 +122,7 @@ class KeyguardMediaControllerTest : SysuiTestCase() {
                 mediaViewModelFactory,
                 kosmos.mediaCarouselInteractor,
                 mediaFalsingSystem,
+                dagger.Lazy { depthController },
             )
         keyguardMediaController.attachSinglePaneContainer(mediaContainerView)
         keyguardMediaController.useSplitShade = false
@@ -144,6 +147,36 @@ class KeyguardMediaControllerTest : SysuiTestCase() {
         keyguardMediaController.refreshMediaPosition(TEST_REASON)
 
         assertThat(mediaContainerView.visibility).isEqualTo(GONE)
+    }
+
+    @Test
+    @DisableFlags(Flags.FLAG_MEDIA_CONTROLS_IN_COMPOSE)
+    fun defaultMediaWrapper_measuresContentAndOffset_withoutGrowingAgain() {
+        hostView.measurementManager = object : UniqueObjectHostView.MeasurementManager {
+            override fun onMeasure(input: com.android.systemui.util.animation.MeasurementInput) =
+                com.android.systemui.util.animation.MeasurementOutput(320, 200)
+        }
+        val wrapper = hostView.parent as FrameLayout
+        assertThat(wrapper.layoutParams.height).isEqualTo(android.view.ViewGroup.LayoutParams.WRAP_CONTENT)
+        val width = android.view.View.MeasureSpec.makeMeasureSpec(320, android.view.View.MeasureSpec.EXACTLY)
+        val height = android.view.View.MeasureSpec.makeMeasureSpec(0, android.view.View.MeasureSpec.UNSPECIFIED)
+        repeat(2) {
+            mediaContainerView.forceLayout()
+            mediaContainerView.measure(width, height)
+            assertThat(mediaContainerView.measuredHeight).isEqualTo(200 + wrapper.paddingTop)
+        }
+    }
+
+    @Test
+    @DisableFlags(Flags.FLAG_MEDIA_CONTROLS_IN_COMPOSE)
+    fun defaultMediaWrapper_reinflationMovesExistingWrapperToNewContainer() {
+        val wrapper = hostView.parent
+        val replacement = MediaContainerView(context, null)
+        keyguardMediaController.attachSinglePaneContainer(replacement)
+        assertThat(mediaContainerView.childCount).isEqualTo(0)
+        assertThat(replacement.childCount).isEqualTo(1)
+        assertThat(hostView.parent).isSameInstanceAs(wrapper)
+        assertThat((wrapper as android.view.View).parent).isSameInstanceAs(replacement)
     }
 
     @EnableFlags(Flags.FLAG_MEDIA_CONTROLS_IN_COMPOSE)

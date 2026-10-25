@@ -6034,6 +6034,34 @@ public class ActivityManagerService extends IActivityManager.Stub
         }
     }
 
+    private volatile PetalStateOverridePolicy mPetalStateOverridePolicy;
+    private final Object mPetalPolicyInitLock = new Object();
+
+    @Override
+    public boolean isPetalStateOverrideEnabled(int state, String packageName, int userId) {
+        final int uid = Binder.getCallingUid();
+        // self-query only, real access checks stay out of here
+        if (Binder.getCallingPid() == Process.myPid() || !Process.isApplicationUid(uid)
+                || userId != UserHandle.getUserId(uid)
+                || !com.android.internal.app.PetalSpoofConfig.isState(state)) return false;
+        if (!android.app.Flags.petalReportedStateOverrides()) return false;
+        final PetalStateOverridePolicy policy = mPetalStateOverridePolicy;
+        if (policy == null) return false;
+        final long identity = Binder.clearCallingIdentity();
+        try {
+            final int mode = policy.mode(uid, packageName, state);
+            return mode == com.android.internal.app.PetalSpoofConfig.ALWAYS
+                    || (mode == com.android.internal.app.PetalSpoofConfig.WHILE_ACTIVE
+                    && isAppForeground(uid))
+                    || (mode == com.android.internal.app.PetalSpoofConfig.WHILE_IN_RECENTS
+                    && mAtmInternal.hasRecentTaskForUid(uid));
+        } catch (RuntimeException e) {
+            return false;
+        } finally {
+            Binder.restoreCallingIdentity(identity);
+        }
+    }
+
     private boolean isAppForeground(int uid) {
         synchronized (mProcLock) {
             UidRecord uidRec = mProcessList.mActiveUids.get(uid);
@@ -9026,6 +9054,16 @@ public class ActivityManagerService extends IActivityManager.Stub
     public void systemReady(final Runnable goingCallback, @NonNull TimingsTraceAndSlog t) {
         t.traceBegin("PhaseActivityManagerReady");
         mSystemServiceManager.preSystemReady();
+        synchronized (mPetalPolicyInitLock) {
+            if (mPetalStateOverridePolicy == null && android.app.Flags.petalReportedStateOverrides()) {
+                try {
+                    mPetalStateOverridePolicy = new PetalStateOverridePolicy(mContext,
+                            com.android.internal.os.BackgroundThread.getHandler());
+                } catch (RuntimeException e) {
+                    Slog.e(TAG, "Reported-state overrides unavailable; keeping actual state", e);
+                }
+            }
+        }
         synchronized(this) {
             if (mSystemReady) {
                 // If we're done calling all the receivers, run the next "boot phase" passed in

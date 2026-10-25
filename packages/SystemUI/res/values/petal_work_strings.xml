@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- work mode notification redaction strings -->
+<resources>
+    <string name="petal_work_mode_label">Work mode</string>
+    <string name="petal_work_mode_paused_state">Redaction off</string>
+    <string name="petal_work_mode_content_state">Content blacked</string>
+    <string name="petal_work_mode_full_state">Fully redacted</string>
+    <string name="petal_work_mode_redacted">Redacted</string>
+    <string name="petal_work_mode_reply_hint">Reply</string>
+</resources>

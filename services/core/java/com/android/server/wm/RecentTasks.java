@@ -943,6 +943,18 @@ class RecentTasks {
         return list;
     }
 
+    boolean hasRecentTaskForUid(int uid) {
+        for (int i = 0; i < mTasks.size(); i++) {
+            final Task task = mTasks.get(i);
+            if (task.effectiveUid == uid && task.inRecents && task.isAvailable
+                    && isVisibleRecentTask(task)
+                    && (task.getBaseIntent().getFlags() & FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS) == 0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     @VisibleForTesting
     Set<Integer> getProfileIds(int userId) {
         Set<Integer> userIds = new ArraySet<>();

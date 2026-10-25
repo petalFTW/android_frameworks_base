@@ -452,6 +452,10 @@ public class NotificationShelf extends ActivatableNotificationView {
      * the icons from the notification area into the shelf.
      */
     public void updateAppearance() {
+        if (mHostLayout != null && mHostLayout.isPetalCollectionActive()) {
+            setVisibility(View.INVISIBLE);
+            return;
+        }
         // If the shelf should not be shown, then there is no need to update anything.
         if (!mShowNotificationShelf) {
             return;

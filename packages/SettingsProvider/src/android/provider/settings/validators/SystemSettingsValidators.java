@@ -183,6 +183,11 @@ public class SystemSettingsValidators {
         VALIDATORS.put(System.USER_ROTATION, new InclusiveIntegerRangeValidator(0, 3));
         VALIDATORS.put(System.DTMF_TONE_WHEN_DIALING, BOOLEAN_VALIDATOR);
         VALIDATORS.put(System.SOUND_EFFECTS_ENABLED, BOOLEAN_VALIDATOR);
+        VALIDATORS.put("petal_tap_sound", ANY_STRING_VALIDATOR);
+        VALIDATORS.put("petal_lock_sound", ANY_STRING_VALIDATOR);
+        VALIDATORS.put("petal_unlock_sound", ANY_STRING_VALIDATOR);
+        VALIDATORS.put("petal_dialpad_sound", ANY_STRING_VALIDATOR);
+        VALIDATORS.put("petal_charging_stopped_sound", ANY_STRING_VALIDATOR);
         VALIDATORS.put(System.HAPTIC_FEEDBACK_ENABLED, BOOLEAN_VALIDATOR);
         VALIDATORS.put(System.POWER_SOUNDS_ENABLED, BOOLEAN_VALIDATOR);
         VALIDATORS.put(System.DOCK_SOUNDS_ENABLED, BOOLEAN_VALIDATOR);

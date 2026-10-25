@@ -23,7 +23,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.dimensionResource
 import androidx.compose.ui.util.fastMap
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -31,6 +30,8 @@ import com.android.compose.animation.scene.ContentScope
 import com.android.systemui.compose.modifiers.sysuiResTag
 import com.android.systemui.grid.ui.compose.VerticalSpannedGrid
 import com.android.systemui.petalos.PetalQsSkin
+import com.android.systemui.petalos.petalQsTileEntrance
+import com.android.systemui.petalos.rememberPetalQsReveal
 import com.android.systemui.qs.composefragment.ui.GridAnchor
 import com.android.systemui.qs.flags.QSMaterialExpressiveTiles
 import com.android.systemui.qs.panels.ui.compose.infinitegrid.Tile
@@ -50,9 +51,8 @@ fun ContentScope.QuickQuickSettings(
     val tiles = sizedTiles.fastMap { it.tile }
     val squishiness by viewModel.squishinessViewModel.squishiness.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
-    val petalSkin = PetalQsSkin.isEnabled(LocalContext.current)
-    // The first two concept slots are always extended. Beyond those, preserve the user's resize
-    // choices so every tile configured as expanded morphs into the same petal pill geometry.
+    val petalSkin = PetalQsSkin.enabled()
+    // Keep the user's resized pills after the first two, yeah.
     val petalExpandedSpecs =
         remember(sizedTiles, petalSkin) {
             if (petalSkin) {
@@ -68,10 +68,9 @@ fun ContentScope.QuickQuickSettings(
     Box(modifier = modifier) {
         GridAnchor()
 
-        // petalOS: the petal skin composes its own button groups and pill geometry, which the
-        // legacy spanned grid cannot render, so the skin selects this path regardless of the
-        // (build-disabled) qs_material_expressive_tiles flag.
+        // Old grid can't do these pills, so use the button groups.
         if (petalSkin || QSMaterialExpressiveTiles.isEnabled) {
+            val petalSpecs = sizedTiles.fastMap { it.tile.spec }
             ButtonGroupGrid(
                 sizedTiles = sizedTiles,
                 columns = columns,
@@ -80,6 +79,8 @@ fun ContentScope.QuickQuickSettings(
                 horizontalPadding = dimensionResource(R.dimen.qs_tile_margin_horizontal),
                 modifier = Modifier.sysuiResTag("qqs_tile_layout"),
             ) { sizedTile, interactionSource ->
+                val index = petalSpecs.indexOf(sizedTile.tile.spec)
+                val reveal = rememberPetalQsReveal(index = index, mini = true)
                 Tile(
                     tile = sizedTile.tile,
                     iconOnly = petalSkin || sizedTile.isIcon,
@@ -94,6 +95,13 @@ fun ContentScope.QuickQuickSettings(
                     bounceableInfo = null,
                     interactionSource = interactionSource,
                     petalExpandToPill = sizedTile.tile.spec in petalExpandedSpecs,
+                    petalReveal = reveal,
+                    modifier =
+                        Modifier.petalQsTileEntrance(
+                            index,
+                            mini = true,
+                            reveal = reveal,
+                        ),
                 )
             }
         } else {

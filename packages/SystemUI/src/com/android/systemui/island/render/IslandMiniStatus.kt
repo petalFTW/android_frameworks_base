@@ -159,8 +159,9 @@ class IslandMiniStatusView(
             addAction(WifiManager.WIFI_STATE_CHANGED_ACTION)
             addAction(WifiManager.RSSI_CHANGED_ACTION)
             addAction(WifiManager.NETWORK_STATE_CHANGED_ACTION)
-            addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
-            addAction(BluetoothAdapter.ACTION_CONNECTION_STATE_CHANGED)
+            // petalOS: bluetooth rune disabled, no bt glyphs in the mini status row
+            // addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
+            // addAction(BluetoothAdapter.ACTION_CONNECTION_STATE_CHANGED)
         }
         runCatching { context.registerReceiver(receiver, filter) }
         runCatching {
@@ -168,7 +169,7 @@ class IslandMiniStatusView(
                 context.mainExecutor, telephonyCallback)
         }
         readWifiLevel()
-        refreshBt()
+        // refreshBt() // petalOS: bluetooth rune disabled
         loadNotifIcons()
         updateTime()
         handler.post(tickRunnable)
@@ -239,7 +240,7 @@ class IslandMiniStatusView(
         val slots = ArrayList<Float>(4)
         if (signalLevel >= 0) slots.add(dp(SIGNAL_DP))
         if (wifiConnected) slots.add(dp(WIFI_DP))
-        if (btOn) slots.add(dp(BT_DP))
+        // if (btOn) slots.add(dp(BT_DP)) // petalOS: bluetooth rune disabled
         if (batteryLevel >= 0) slots.add(dp(BATTERY_DP))
         return slots
     }
@@ -277,9 +278,10 @@ class IslandMiniStatusView(
             if (wifiConnected) {
                 drawWifi(canvas, x, dp(WIFI_DP)); x += dp(WIFI_DP + GAP_DP)
             }
-            if (btOn) {
-                drawBt(canvas, x, dp(BT_DP)); x += dp(BT_DP + GAP_DP)
-            }
+            // petalOS: bluetooth rune disabled
+            // if (btOn) {
+            //     drawBt(canvas, x, dp(BT_DP)); x += dp(BT_DP + GAP_DP)
+            // }
             if (batteryLevel >= 0) {
                 drawBattery(canvas, x, dp(BATTERY_DP))
             }

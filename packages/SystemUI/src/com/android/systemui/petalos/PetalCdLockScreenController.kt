@@ -48,10 +48,13 @@ import com.android.systemui.util.concurrency.DelayableExecutor
 import java.io.PrintWriter
 import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlin.math.abs
 import org.petalos.config.PetalConfig
 
 // 3d cd player on the lockscreen. drives the raw MediaSession, ignores the media pipeline
@@ -86,6 +89,7 @@ constructor(
                     onPrevious = ::onPrevious,
                     onNext = ::onNext,
                     onSeek = ::onSeek,
+                    onScratchMotion = ::onScratchMotion,
                 )
             }
         }
@@ -95,6 +99,8 @@ constructor(
     private var shadeExpanded = false
     private var trackedController: MediaController? = null
     private var artGeneration = 0
+    @Volatile private var scratchSpeed = 0f
+    private var scratchJob: Job? = null
 
     private val settingsObserver =
         object : ContentObserver(handler) {
@@ -130,7 +136,7 @@ constructor(
         object : Runnable {
             override fun run() {
                 refreshPosition()
-                if (state.value.playing && composeView.visibility == View.VISIBLE) {
+                if (state.value.playing && cdShowingState.value) {
                     handler.postDelayed(this, TICK_MS)
                 }
             }
@@ -203,7 +209,7 @@ constructor(
 
     // depth controller asks this so its cutout can get out of the way
     val isCdShowing: Boolean
-        get() = composeView.visibility == View.VISIBLE
+        get() = cdShowingState.value
 
     private val cdStateListeners = mutableListOf<(Boolean) -> Unit>()
 
@@ -351,9 +357,14 @@ constructor(
                 onKeyguard &&
                 !shadeExpanded &&
                 !keyguardStateController.isKeyguardGoingAway
-        val wasShowing = composeView.visibility == View.VISIBLE
+        val wasShowing = cdShowingState.value
         composeView.visibility = if (visible) View.VISIBLE else View.GONE
+        if (!visible) stopScratch()
         cdShowingState.value = visible
+        keyguardRootView.rootView.findViewById<
+            com.android.systemui.statusbar.notification.stack.NotificationStackScrollLayout>(
+                com.android.systemui.res.R.id.notification_stack_scroller)
+            ?.setPetalCdPlayer(composeView, visible)
         if (wasShowing != visible) {
             // tell depth to drop or bring back the cutout
             for (l in cdStateListeners) l(visible)
@@ -396,6 +407,27 @@ constructor(
         if (duration > 0) {
             controller.transportControls.seekTo((fraction.coerceIn(0f, 1f) * duration).toLong())
         }
+    }
+
+    private fun onScratchMotion(speed: Float) {
+        if (!isCdShowing || !speed.isFinite()) return
+        scratchSpeed = speed.coerceIn(-PetalCdScratchSynth.MAX_SPEED, PetalCdScratchSynth.MAX_SPEED)
+        if (abs(scratchSpeed) < PetalCdScratchSynth.MIN_SPEED || scratchJob?.isActive == true) return
+        scratchJob = scope.launch {
+            try {
+                PetalCdScratchAudio.play { scratchSpeed }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Log.w(TAG, "CD scratch output failed", error)
+            }
+        }
+    }
+
+    private fun stopScratch() {
+        scratchSpeed = 0f
+        scratchJob?.cancel()
+        scratchJob = null
     }
 
     override fun dump(pw: PrintWriter, args: Array<out String>) {

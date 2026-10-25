@@ -18,6 +18,7 @@ package com.android.systemui.island.presenter
 
 import android.app.PendingIntent
 import android.content.Context
+import android.service.notification.StatusBarNotification
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.view.Gravity
@@ -39,6 +40,8 @@ data class CallPayload(
     val hangUpIntent: PendingIntent?,
     val contentIntent: PendingIntent? = null,
     val startTime: Long = 0L,
+    val allowTelecomFallback: Boolean = true,
+    val sourceNotification: StatusBarNotification? = null,
 )
 
 private const val ACCENT_CALL = 0xFF32D74B.toInt()
@@ -52,13 +55,15 @@ class CallPresenter(
 ) : IslandPresenter {
 
     private var host: IslandPresenter.Host? = null
+    private val redaction = IslandRedactionBinder(context,
+        payload.sourceNotification?.packageName.orEmpty(), payload.sourceNotification)
 
     override fun setHost(host: IslandPresenter.Host?) { this.host = host }
 
     private val telecomManager = context.getSystemService(android.telecom.TelecomManager::class.java)
 
     private fun answerCall() {
-        if (payload.answerIntent?.sendSafe() != true) {
+        if (payload.answerIntent?.sendSafe() != true && payload.allowTelecomFallback) {
             runCatching { telecomManager?.acceptRingingCall() }
         }
         openCall()
@@ -67,38 +72,55 @@ class CallPresenter(
     private fun declineCall() {
         if (payload.declineIntent?.sendSafe() == true) return
         if (payload.hangUpIntent?.sendSafe() == true) return
-        runCatching { telecomManager?.endCall() }
+        if (payload.allowTelecomFallback) runCatching { telecomManager?.endCall() }
     }
 
     private fun hangUpCall() {
         if (payload.hangUpIntent?.sendSafe() == true) return
         if (payload.declineIntent?.sendSafe() == true) return
-        runCatching { telecomManager?.endCall() }
+        if (payload.allowTelecomFallback) runCatching { telecomManager?.endCall() }
     }
 
     override fun bindCollapsed(container: ViewGroup): Int {
+        val iconSize = geometry.dp(20f)
+        val gap = geometry.dp(8f)
+        val padStart = geometry.capsulePaddingStart
+        val padEnd = geometry.capsulePaddingEnd
+        val label = payload.name.ifBlank { "Unknown" }
+
         val row = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(geometry.capsulePaddingStart, 0, geometry.capsulePaddingEnd, 0)
+            setPadding(padStart, 0, padEnd, 0)
         }
         row.addView(ImageView(context).apply {
             setImageResource(android.R.drawable.sym_action_call)
             setColorFilter(ACCENT_CALL)
             contentDescription = payload.subtitle
-        }, LinearLayout.LayoutParams(geometry.dp(20f), geometry.dp(20f)))
-        row.addView(TextView(context).apply {
-            text = payload.name
+        }, LinearLayout.LayoutParams(iconSize, iconSize))
+        val name = TextView(context).apply {
+            text = label
+            keepIdentityWhenContentRedacted()
             setTextColor(Color.WHITE)
             setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 12f)
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
-        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-            marginStart = geometry.dp(8f)
-        })
-        val width = maxOf(geometry.callCapsuleWidth, geometry.dp(160f))
-        container.addView(row, FrameLayout.LayoutParams(width,
-            ViewGroup.LayoutParams.MATCH_PARENT))
-        return width
+        }
+        // hug the text, a fixed 128dp bar looked like shit for a short name
+        val maxText = (geometry.capsuleMaxWidth - padStart - padEnd - iconSize - gap)
+            .coerceAtLeast(geometry.dp(24f))
+        val textW = (name.paint.measureText(label).toInt() + geometry.dp(2f))
+            .coerceAtMost(maxText)
+        val rowW = (padStart + iconSize + gap + textW + padEnd)
+            .coerceIn(geometry.capsuleMinWidth, geometry.capsuleMaxWidth)
+        name.layoutParams = LinearLayout.LayoutParams(
+            (rowW - padStart - padEnd - iconSize - gap).coerceAtLeast(0),
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+        ).apply { marginStart = gap }
+        row.addView(name)
+        redaction.bind(row)
+        container.addView(row, FrameLayout.LayoutParams(rowW, ViewGroup.LayoutParams.MATCH_PARENT))
+        return rowW
     }
 
     override fun bindExpanded(container: ViewGroup) {
@@ -112,6 +134,7 @@ class CallPresenter(
         // just the first letter in a circle
         val avatar = TextView(context).apply {
             text = payload.name.firstOrNull()?.uppercase() ?: "?"
+            keepIdentityWhenContentRedacted()
             setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 24f)
             typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD)
             gravity = Gravity.CENTER
@@ -130,6 +153,7 @@ class CallPresenter(
         val name = TextView(context).apply {
             setTextColor(Color.WHITE)
             text = payload.name.ifBlank { "Incoming call" }
+            keepIdentityWhenContentRedacted()
             setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 16f)
             typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD)
             maxLines = 1
@@ -158,20 +182,29 @@ class CallPresenter(
             val accept = callButton(ACCENT_CALL, android.R.drawable.sym_call_incoming) {
                 answerCall()
             }
-            row.addView(decline)
-            row.addView(
-                accept,
-                LinearLayout.LayoutParams(geometry.dp(44f), geometry.dp(44f)).apply {
-                    marginStart = geometry.dp(6f)
-                },
-            )
-        } else {
+            if (payload.allowTelecomFallback || payload.declineIntent != null ||
+                payload.hangUpIntent != null
+            ) {
+                row.addView(decline)
+            }
+            if (payload.allowTelecomFallback || payload.answerIntent != null) {
+                row.addView(
+                    accept,
+                    LinearLayout.LayoutParams(geometry.dp(44f), geometry.dp(44f)).apply {
+                        marginStart = geometry.dp(6f)
+                    },
+                )
+            }
+        } else if (payload.allowTelecomFallback || payload.hangUpIntent != null ||
+            payload.declineIntent != null
+        ) {
             val hangUp = callButton(ACCENT_DECLINE, android.R.drawable.sym_call_missed) {
                 hangUpCall()
             }
             row.addView(hangUp)
         }
 
+        redaction.bind(row)
         container.addView(row)
     }
 
@@ -179,8 +212,12 @@ class CallPresenter(
 
     override fun tint(): IslandTint = IslandTint(accent = ACCENT_CALL)
 
+    override fun onDestroy() {
+        redaction.destroy()
+    }
+
     override fun onPrimaryAction(): Boolean {
-        if (payload.isIncoming) return false
+        if (payload.isIncoming && payload.allowTelecomFallback) return false
         openCall()
         return true
     }
@@ -192,7 +229,7 @@ class CallPresenter(
             return
         }
         if (intent?.sendSafe() == true) return
-        runCatching { telecomManager?.showInCallScreen(false) }
+        if (payload.allowTelecomFallback) runCatching { telecomManager?.showInCallScreen(false) }
     }
 
     private fun callButton(color: Int, glyph: Int, onClick: () -> Unit): ImageView =

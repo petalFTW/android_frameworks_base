@@ -121,7 +121,16 @@ public final class GmsCompat {
 
         curPackageId = appInfoExt.getPackageId();
 
-        if (isEnabledFor(appInfo)) {
+        final boolean enableCompat = isEnabledFor(appInfo);
+        final boolean eligibleClient = !isGmsCore()
+                && appInfoExt.hasFlag(AppInfoExtFlag.HAS_GMSCORE_CLIENT_LIBRARY);
+        // no second shim over microG, and no RPC loop over an empty provider shell
+        if ((enableCompat || eligibleClient) && (isMicrogProvider(appCtx)
+                || (!isGmsCore() && !isEnabledFor(PackageId.GMS_CORE_NAME, appCtx.getUserId())))) {
+            return;
+        }
+
+        if (enableCompat) {
             String processName = Application.getProcessName();
             if (isGmsCompatProcess(processName)) {
                 isInGmsCompatProcess = true;
@@ -131,8 +140,7 @@ public final class GmsCompat {
             }
         }
 
-        isEligibleForClientCompat = !isGmsCore() &&
-                appInfoExt.hasFlag(AppInfoExtFlag.HAS_GMSCORE_CLIENT_LIBRARY);
+        isEligibleForClientCompat = eligibleClient;
 
         if (isEligibleForClientCompat && GmsCompatLib.get() == null) {
             GmsCompatLib.init(appCtx, Application.getProcessName());
@@ -145,6 +153,15 @@ public final class GmsCompat {
 
     public static boolean isEnabledFor(@NonNull ApplicationInfo app) {
         return isEnabledFor(app.ext().getPackageId(), app.packageName, app.isPrivilegedApp());
+    }
+
+    /** @hide */
+    public static boolean isMicrogProvider(@NonNull Context context) {
+        // ask about the real cert, never the spoofed PackageInfo signatures
+        return context.getPackageManager().hasSigningCertificate(PackageId.GMS_CORE_NAME,
+                com.android.internal.util.HexDump.hexStringToByteArray(
+                        com.android.internal.gmscompat.MicrogCompat.SIGNER_SHA256),
+                PackageManager.CERT_INPUT_SHA256);
     }
 
     /** @hide */
@@ -278,12 +295,15 @@ public final class GmsCompat {
 
     /** @hide */
     public static boolean isClientOfGmsCore(@Nullable ApplicationInfo gmsCoreAppInfo) {
-        if (cachedIsClientOfGmsCore) {
-            return true;
-        }
-
         if (!isEligibleForClientCompat) {
             return false;
+        }
+        if (cachedIsClientOfGmsCore) {
+            if (isMicrogProvider(appContext())) {
+                cachedIsClientOfGmsCore = false;
+                return false;
+            }
+            return true;
         }
 
         boolean res = (gmsCoreAppInfo != null) ?

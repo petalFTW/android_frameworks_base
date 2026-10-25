@@ -35,12 +35,7 @@ import static android.ext.PackageId.TYCHO;
 import static android.ext.PackageId.TYCHO_NAME;
 import static android.ext.PackageId.UNKNOWN;
 
-/**
- * Lazy packageId assignment. Unlike the upstream parse-time approach, the packageId is computed
- * here, at ApplicationInfo-generation time, from cache-safe fields (package name, version code,
- * signing cert). This avoids the parse-time ext-field plumbing and its PackageCacher cache-boot
- * bug.
- */
+// resolve from cached name/version/cert; parse-time ext fields broke boot
 public final class PackageIdResolver {
     private static final String TAG = "PackageIdResolver";
 
@@ -71,7 +66,7 @@ public final class PackageIdResolver {
 
     private static int getPackageId(PackageImpl pkg) {
         return switch (pkg.getPackageName()) {
-            case GMS_CORE_NAME -> validate(pkg, GMS_CORE, 21_00_00_000L, mainGmsCerts());
+            case GMS_CORE_NAME -> validate(pkg, GMS_CORE, 21_00_00_000L, gmsCoreCerts());
             case PLAY_STORE_NAME -> validate(pkg, PLAY_STORE, 0L, mainGmsCerts());
             case G_SEARCH_APP_NAME -> validate(pkg, G_SEARCH_APP, 0L, mainGmsCerts());
             case G_CARRIER_SETTINGS_NAME -> validate(pkg, G_CARRIER_SETTINGS, 37L,
@@ -105,6 +100,13 @@ public final class PackageIdResolver {
                 // "58e1" MD5withRSA issued in April 2008
                 "1975b2f17177bc89a5dff31f9e64a6cae281a53dc1d1d59b1d147fe1c82afa00",
         };
+    }
+
+    private static String[] gmsCoreCerts() {
+        String[] certificates = java.util.Arrays.copyOf(mainGmsCerts(), 4);
+        // rotated signer on the bundled 26.32 set, gms only
+        certificates[3] = "5f2391277b1dbd489000467e4c2fa6af802430080457dce2f618992e9dfb5402";
+        return certificates;
     }
 
     private static int validate(PackageImpl pkg, int packageId, long minVersionCode,

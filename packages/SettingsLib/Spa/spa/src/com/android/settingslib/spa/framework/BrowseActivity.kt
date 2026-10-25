@@ -86,7 +86,7 @@ open class BrowseActivity : ComponentActivity() {
         spaEnvironment.logger.message(TAG, "onCreate", category = LogCategory.FRAMEWORK)
 
         setContent {
-            SettingsTheme {
+            ActivityTheme {
                 val sppRepository by spaEnvironment.pageProviderRepository
                 BrowseContent(
                     sppRepository = sppRepository,
@@ -95,6 +95,11 @@ open class BrowseActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    @Composable
+    protected open fun ActivityTheme(content: @Composable () -> Unit) {
+        SettingsTheme(content)
     }
 
     open fun isPageEnabled(page: SettingsPage) = page.isEnabled()

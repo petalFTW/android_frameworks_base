@@ -1175,7 +1175,8 @@ public class Notifier {
         }
     };
 
-    private void playChargingStartedFeedback(@UserIdInt int userId, boolean wireless) {
+    private void playChargingStartedFeedback(@UserIdInt int userId, boolean wireless,
+            boolean stopped) {
         if (!isChargingFeedbackEnabled(userId)) {
             return;
         }
@@ -1198,7 +1199,11 @@ public class Notifier {
             }
 
             // play sound
-            final String soundPath = Settings.Global.getString(mContext.getContentResolver(),
+            final String unplugSound = stopped ? Settings.System.getStringForUser(
+                    mContext.getContentResolver(), "petal_charging_stopped_sound",
+                    userId) : null;
+            final String soundPath = unplugSound != null ? unplugSound
+                    : Settings.Global.getString(mContext.getContentResolver(),
                     wireless ? Settings.Global.WIRELESS_CHARGING_STARTED_SOUND
                             : Settings.Global.CHARGING_STARTED_SOUND);
             if ("silent".equals(soundPath)) {
@@ -1223,7 +1228,7 @@ public class Notifier {
 
     private void showWirelessChargingStarted(int batteryLevel, @UserIdInt int userId) {
         // play sounds + haptics
-        playChargingStartedFeedback(userId, true /* wireless */);
+        playChargingStartedFeedback(userId, true /* wireless */, false /* stopped */);
 
         // show animation
         if (mShowWirelessChargingAnimationConfig && mStatusBarManagerInternal != null) {
@@ -1233,12 +1238,12 @@ public class Notifier {
     }
 
     private void showWiredChargingStarted(@UserIdInt int userId) {
-        playChargingStartedFeedback(userId, false /* wireless */);
+        playChargingStartedFeedback(userId, false /* wireless */, false /* stopped */);
         mSuspendBlocker.release();
     }
 
     private void showChargingStopped(@UserIdInt int userId, boolean wireless) {
-        playChargingStartedFeedback(userId, wireless);
+        playChargingStartedFeedback(userId, wireless, true /* stopped */);
         mSuspendBlocker.release();
     }
 

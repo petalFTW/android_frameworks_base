@@ -410,6 +410,8 @@ public final class NotificationPanelViewController implements
     Set<Animator> mTestSetOfAnimatorsUsed;
 
     private boolean mShowIconsWhenExpanded;
+    // petalOS: pending candidate for the icon flip above, needs two agreeing passes
+    private boolean mShowIconsCandidate;
     /** Whether the notifications are displayed full width (no margins on the side). */
     private boolean mIsFullWidth;
     private boolean mBlockingExpansionForCurrentTouch;
@@ -2332,9 +2334,18 @@ public final class NotificationPanelViewController implements
         if (showIconsWhenExpanded && isKeyguardShowing()) {
             showIconsWhenExpanded = false;
         }
-        if (showIconsWhenExpanded != mShowIconsWhenExpanded) {
+        // petalOS: opening height churns while QS scrolls (petal silent rows come and go) and
+        // every flip here recomputes disable flags, which blinks the whole top strip. a flip
+        // only counts when it sticks for two passes, single frame churn gets dropped
+        if (showIconsWhenExpanded == mShowIconsWhenExpanded) {
+            mShowIconsCandidate = showIconsWhenExpanded;
+            return;
+        }
+        if (showIconsWhenExpanded == mShowIconsCandidate) {
             mShowIconsWhenExpanded = showIconsWhenExpanded;
             mCommandQueue.recomputeDisableFlags(mDisplayId, false);
+        } else {
+            mShowIconsCandidate = showIconsWhenExpanded;
         }
     }
 

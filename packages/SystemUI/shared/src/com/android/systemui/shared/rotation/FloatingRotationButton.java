@@ -21,6 +21,10 @@ import android.annotation.IdRes;
 import android.annotation.LayoutRes;
 import android.annotation.Nullable;
 import android.annotation.StringRes;
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
+import android.animation.AnimatorSet;
+import android.animation.ObjectAnimator;
 import android.content.Context;
 import android.content.pm.ActivityInfo;
 import android.content.pm.ActivityInfo.Config;
@@ -34,6 +38,7 @@ import android.view.ViewGroup;
 import android.view.WindowManager;
 import android.view.WindowManager.LayoutParams;
 import android.view.animation.AccelerateDecelerateInterpolator;
+import android.view.animation.PathInterpolator;
 import android.widget.FrameLayout;
 
 import androidx.annotation.BoolRes;
@@ -72,6 +77,7 @@ public class FloatingRotationButton implements RotationButton {
     private final int mFloatingRotationBtnPositionLeftResource;
 
     private AnimatedVectorDrawable mAnimatedDrawable;
+    private AnimatorSet mVisibilityAnimator;
     private boolean mIsShowing;
     private int mDisplayRotation;
 
@@ -159,17 +165,29 @@ public class FloatingRotationButton implements RotationButton {
         }
 
         mIsShowing = true;
+        cancelVisibilityAnimation();
+        mKeyButtonView.setEnabled(true);
 
         final LayoutParams layoutParams = adjustViewPositionAndCreateLayoutParams();
-        mWindowManager.addView(mKeyButtonContainer, layoutParams);
+        if (mKeyButtonContainer.isAttachedToWindow()) {
+            mWindowManager.updateViewLayout(mKeyButtonContainer, layoutParams);
+            animateVisibility(true);
+        } else {
+            mKeyButtonView.setAlpha(0f);
+            mKeyButtonView.setScaleX(.72f);
+            mKeyButtonView.setScaleY(.72f);
+            mWindowManager.addView(mKeyButtonContainer, layoutParams);
+            OneShotPreDrawListener.add(mKeyButtonView, () -> {
+                if (mIsShowing) animateVisibility(true);
+            });
+        }
 
         if (mAnimatedDrawable != null) {
             mAnimatedDrawable.reset();
             mAnimatedDrawable.start();
         }
 
-        // Notify about visibility only after first traversal so we can properly calculate
-        // the touch region for the button
+        // wait for layout or the touch region is nonsense
         OneShotPreDrawListener.add(mKeyButtonView, () -> {
             if (mIsShowing && mUpdatesCallback != null) {
                 mUpdatesCallback.onVisibilityChanged(true);
@@ -184,16 +202,64 @@ public class FloatingRotationButton implements RotationButton {
         if (!mIsShowing) {
             return false;
         }
-        mWindowManager.removeViewImmediate(mKeyButtonContainer);
         mIsShowing = false;
+        mKeyButtonView.setEnabled(false);
+        LayoutParams params = (LayoutParams) mKeyButtonContainer.getLayoutParams();
+        params.flags |= LayoutParams.FLAG_NOT_TOUCHABLE;
+        mWindowManager.updateViewLayout(mKeyButtonContainer, params);
+        animateVisibility(false);
         if (mUpdatesCallback != null) {
             mUpdatesCallback.onVisibilityChanged(false);
         }
         return true;
     }
 
+    public void hideImmediately() {
+        cancelVisibilityAnimation();
+        boolean wasShowing = mIsShowing;
+        mIsShowing = false;
+        mKeyButtonView.setEnabled(false);
+        if (mKeyButtonContainer.isAttachedToWindow()) {
+            mWindowManager.removeViewImmediate(mKeyButtonContainer);
+        }
+        if (wasShowing && mUpdatesCallback != null) {
+            mUpdatesCallback.onVisibilityChanged(false);
+        }
+    }
+
+    private void cancelVisibilityAnimation() {
+        if (mVisibilityAnimator == null) return;
+        // cancelling mustn't run the old window-removal callback
+        mVisibilityAnimator.removeAllListeners();
+        mVisibilityAnimator.cancel();
+        mVisibilityAnimator = null;
+    }
+
+    private void animateVisibility(boolean showing) {
+        cancelVisibilityAnimation();
+        AnimatorSet animator = new AnimatorSet();
+        animator.playTogether(
+                ObjectAnimator.ofFloat(mKeyButtonView, View.ALPHA, showing ? 1f : 0f),
+                ObjectAnimator.ofFloat(mKeyButtonView, View.SCALE_X, showing ? 1f : .72f),
+                ObjectAnimator.ofFloat(mKeyButtonView, View.SCALE_Y, showing ? 1f : .72f));
+        animator.setDuration(showing ? 240 : 160);
+        animator.setInterpolator(new PathInterpolator(.2f, 0f, 0f, 1f));
+        animator.addListener(new AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(Animator animation) {
+                mVisibilityAnimator = null;
+                if (!mIsShowing && mKeyButtonContainer.isAttachedToWindow()) {
+                    mWindowManager.removeViewImmediate(mKeyButtonContainer);
+                }
+            }
+        });
+        mVisibilityAnimator = animator;
+        animator.start();
+    }
+
     @Override
     public void onDestroy() {
+        hideImmediately();
         setRotationButtonController(null);
         setOnClickListener(null);
         setOnHoverListener(null);
@@ -204,13 +270,9 @@ public class FloatingRotationButton implements RotationButton {
         }
 
         mKeyButtonView.animate().cancel();
-        mAnimatedDrawable.stop();
+        if (mAnimatedDrawable != null) mAnimatedDrawable.stop();
         mKeyButtonView.setImageDrawable(null);
-        // Calling AnimatedDrawable#stop() and ImageView.setImageDrawable(null) above will not let
-        // RenderThread clear ref to view (via AnimatedVectorDrawable$VectorDrawableAnimatorRT)
-        // quick enough for LeakCanary to ignore the leak. To mute LeakCanary, a workaround is to
-        // clear the mKeyButtonView.mParent so that LeakCanary won't complain the leak on
-        // mKeyButtonContainer.
+        // RenderThread hangs onto the parent too long, ditch it
         mKeyButtonContainer.removeView(mKeyButtonView);
     }
 

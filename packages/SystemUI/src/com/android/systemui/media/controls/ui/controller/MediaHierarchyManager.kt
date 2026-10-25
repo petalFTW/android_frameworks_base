@@ -74,8 +74,13 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.mapLatest
+import org.petalos.config.PetalConfig
 
 private val TAG: String = MediaHierarchyManager::class.java.simpleName
+
+private const val GRAVITY_SETTLE_START = 0.55f
+private const val GRAVITY_DROP = 0.05f
+private const val GRAVITY_SQUISH = 0.015f
 
 /** Similarly to isShown but also excludes views that have 0 alpha */
 val View.isShownNotFaded: Boolean
@@ -179,17 +184,18 @@ constructor(
             interpolator = Interpolators.FAST_OUT_SLOW_IN
             addUpdateListener {
                 updateTargetState()
+                val fraction = animatedFraction
                 val currentAlpha: Float
-                var boundsProgress = animatedFraction
+                var boundsProgress = fraction
                 if (isCrossFadeAnimatorRunning) {
                     animationCrossFadeProgress =
-                        MathUtils.lerp(animationStartCrossFadeProgress, 1.0f, animatedFraction)
+                        MathUtils.lerp(animationStartCrossFadeProgress, 1.0f, fraction)
                     // When crossfading, let's keep the bounds at the right location during fading
                     boundsProgress = if (animationCrossFadeProgress < 0.5f) 0.0f else 1.0f
                     currentAlpha = calculateAlphaFromCrossFade(animationCrossFadeProgress)
                 } else {
                     // If we're not crossfading, let's interpolate from the start alpha to 1.0f
-                    currentAlpha = MathUtils.lerp(animationStartAlpha, 1.0f, animatedFraction)
+                    currentAlpha = MathUtils.lerp(animationStartAlpha, 1.0f, fraction)
                 }
                 interpolateBounds(
                     animationStartBounds,
@@ -199,6 +205,11 @@ constructor(
                 )
                 resolveClipping(currentClipping)
                 applyState(currentBounds, currentAlpha, clipBounds = currentClipping)
+                applyGravityBounce(
+                    fraction,
+                    isDroppingIntoQs && !isCrossFadeAnimatorRunning &&
+                        PetalConfig.isQsSkinEnabled(context) && ValueAnimator.areAnimatorsEnabled(),
+                )
             }
             addListener(
                 object : AnimatorListenerAdapter() {
@@ -209,10 +220,12 @@ constructor(
                         animationPending = false
                         rootView?.removeCallbacks(startAnimation)
                         isCrossFadeAnimatorRunning = false
+                        resetGravityBounce()
                     }
 
                     override fun onAnimationEnd(animation: Animator) {
                         isCrossFadeAnimatorRunning = false
+                        resetGravityBounce()
                         if (!cancelled) {
                             applyTargetStateIfNotAnimating()
                         }
@@ -233,6 +246,9 @@ constructor(
     }
 
     private val mediaHosts = arrayOfNulls<MediaHost>(LOCATION_STATUS_BAR_POPUP + 1)
+
+    private val isDroppingIntoQs: Boolean
+        get() = previousLocation == LOCATION_QQS && desiredLocation == LOCATION_QS
 
     /**
      * The last location where this view was at before going to the desired location. This is useful
@@ -497,6 +513,7 @@ constructor(
 
     fun onQsHeightUpdated() {
         updateTargetState()
+        applyTargetStateIfNotAnimating()
     }
 
     init {
@@ -795,8 +812,9 @@ constructor(
                 val isNewView = this.desiredLocation == LOCATION_UNKNOWN
                 this.desiredLocation = desiredLocation
                 // Let's perform a transition
-                val animate =
-                    !forceNoAnimation && shouldAnimateTransition(desiredLocation, previousLocation)
+                val ribbonBoundary = crossesLockscreenBoundary()
+                val animate = !ribbonBoundary && !forceNoAnimation &&
+                    shouldAnimateTransition(desiredLocation, previousLocation)
                 val (animDuration, delay) = getAnimationParams(previousLocation, desiredLocation)
                 val host = getHost(desiredLocation)
                 val willFade = calculateTransformationType() == TRANSFORMATION_TYPE_FADE
@@ -812,7 +830,12 @@ constructor(
                         delay,
                     )
                 }
-                performTransitionToNewLocation(isNewView, animate)
+                if (ribbonBoundary) {
+                    // Both ways need the right host now, not half a bloody fade later.
+                    cancelAnimationAndApplyDesiredState()
+                } else {
+                    performTransitionToNewLocation(isNewView, animate)
+                }
             }
         }
 
@@ -989,11 +1012,21 @@ constructor(
     }
 
     private fun applyTargetStateIfNotAnimating() {
+        val guided = isCurrentlyInGuidedTransformation()
+        if (guided && (animator.isStarted || animationPending)) {
+            // finger owns this now
+            cancelAnimation()
+        }
         if (!animator.isRunning) {
             // Let's immediately apply the target state (which is interpolated) if there is
             // no animation running. Otherwise the animation update will already update
             // the location
-            applyState(targetBounds, carouselAlpha, clipBounds = targetClipping)
+            applyState(
+                targetBounds,
+                carouselAlpha,
+                immediately = guided,
+                clipBounds = targetClipping,
+            )
         }
     }
 
@@ -1049,7 +1082,7 @@ constructor(
 
     /** @return true if this transformation is guided by an external progress like a finger */
     fun isCurrentlyInGuidedTransformation(): Boolean {
-        return hasValidStartAndEndLocations() &&
+        return !crossesLockscreenBoundary() && hasValidStartAndEndLocations() &&
             getTransformationProgress() >= 0 &&
             (areGuidedTransitionHostsVisible() || !hasActiveMedia)
     }
@@ -1057,6 +1090,12 @@ constructor(
     private fun hasValidStartAndEndLocations(): Boolean {
         return previousLocation != LOCATION_UNKNOWN && desiredLocation != LOCATION_UNKNOWN
     }
+
+    private fun crossesLockscreenBoundary(): Boolean =
+        (previousLocation == LOCATION_LOCKSCREEN &&
+            (desiredLocation == LOCATION_QQS || desiredLocation == LOCATION_QS)) ||
+            (desiredLocation == LOCATION_LOCKSCREEN &&
+                (previousLocation == LOCATION_QQS || previousLocation == LOCATION_QS))
 
     /** Calculate the transformation type for the current animation */
     @VisibleForTesting
@@ -1128,10 +1167,41 @@ constructor(
         return mediaHosts[location]
     }
 
-    private fun cancelAnimationAndApplyDesiredState() {
+    // little thump on the way into the full shade, not a bouncy castle
+    private fun applyGravityBounce(fraction: Float, enabled: Boolean) {
+        if (!enabled) {
+            resetGravityBounce()
+            return
+        }
+        val settle = ((fraction - GRAVITY_SETTLE_START) / (1f - GRAVITY_SETTLE_START))
+            .coerceIn(0f, 1f)
+        val wave = if (settle == 0f) 0f
+            else Math.sin(settle * Math.PI * 2.0).toFloat() * (1f - settle)
+        mediaFrame.translationY = mediaFrame.height * GRAVITY_DROP * wave
+        val scale = 1f + GRAVITY_SQUISH * wave
+        mediaFrame.scaleX = scale
+        mediaFrame.scaleY = scale
+    }
+
+    private fun resetGravityBounce() {
+        mediaFrame.translationY = 0f
+        mediaFrame.scaleX = 1f
+        mediaFrame.scaleY = 1f
+    }
+
+    private fun cancelAnimation() {
+        rootView?.removeCallbacks(startAnimation)
+        animationPending = false
         animator.cancel()
+        resetGravityBounce()
+        isCrossFadeAnimatorRunning = false
+    }
+
+    private fun cancelAnimationAndApplyDesiredState() {
+        cancelAnimation()
         getHost(desiredLocation)?.let {
-            applyState(it.currentBounds, alpha = 1.0f, immediately = true)
+            applyState(it.currentBounds, alpha = 1.0f, immediately = true,
+                clipBounds = it.currentClipping)
         }
     }
 
@@ -1273,7 +1343,7 @@ constructor(
                 dreamOverlayActive && dreamMediaComplicationActive -> LOCATION_DREAM_OVERLAY
                 onCommunal -> LOCATION_COMMUNAL_HUB
                 (qsExpansion > 0.0f || inSplitShade) && !onLockscreen -> LOCATION_QS
-                qsExpansion > EXPANSION_THRESHOLD && onLockscreen -> LOCATION_QS
+                qsExpansion > 0.0f && onLockscreen -> LOCATION_QS
                 onLockscreen && isSplitShadeExpanding() -> LOCATION_QS
                 onLockscreen && isTransformingToFullShadeAndInQQS() -> LOCATION_QQS
 
@@ -1331,11 +1401,13 @@ constructor(
             // Split shade doesn't use QQS.
             return false
         }
-        return fullShadeTransitionProgress > 0.5f
+        return fullShadeTransitionProgress > 0f
     }
 
     /** Is the current transformationType fading */
     private fun isCurrentlyFading(): Boolean {
+        // The ribbon already switched hosts. An old full-shade fade mustn't hide the new card.
+        if (crossesLockscreenBoundary()) return false
         if (isSplitShadeExpanding()) {
             // Split shade always uses transition instead of fade.
             return false

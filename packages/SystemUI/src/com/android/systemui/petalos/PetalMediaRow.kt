@@ -21,44 +21,59 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.media.AudioManager
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.LayoutDirection
 import com.android.settingslib.display.BrightnessUtils
 import com.android.systemui.brightness.shared.model.GammaBrightness
 import com.android.systemui.brightness.ui.viewmodel.BrightnessSliderViewModel
 import com.android.systemui.brightness.ui.viewmodel.Drag
 import com.android.systemui.res.R
 import kotlinx.coroutines.launch
+import org.petalos.config.PetalConfig
 
-// media card with the two sliders underneath
+// The sliders are back on the sides where they belong.
 @Composable
 fun PetalMediaRow(
     brightnessViewModel: BrightnessSliderViewModel,
     media: @Composable () -> Unit,
     mediaVisible: Boolean,
     modifier: Modifier = Modifier,
+    compact: Boolean = false,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val sliderHeight = 56.dp
+    val reveal = rememberPetalQsReveal()
+    var dragging by remember { mutableStateOf(emptySet<String>()) }
+    val preferences = petalQsPreferences()
+    var reach by remember { mutableStateOf(preferences.reach) }
+    LaunchedEffect(preferences.reach, dragging) {
+        if (dragging.isEmpty()) reach = preferences.reach
+    }
 
     val minGamma = BrightnessUtils.GAMMA_SPACE_MIN.toFloat()
     val maxGamma = BrightnessUtils.GAMMA_SPACE_MAX.toFloat()
@@ -111,29 +126,24 @@ fun PetalMediaRow(
         }
     }
 
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp), modifier = modifier.fillMaxWidth()) {
-        val dark = PetalQsSkin.dark()
-        val mediaShape =
-            androidx.compose.foundation.shape.RoundedCornerShape(PetalQsSkin.TileCardCornerRadius)
-        if (mediaVisible) {
-            Box(
-                modifier = Modifier.fillMaxWidth()
-                    .clip(mediaShape)
-                    .background(PetalQsSkin.tileGlass(dark))
-                    .border(1.dp, PetalQsSkin.tileGlassBorderBrush(dark), mediaShape)
-            ) {
-                media()
-            }
-        }
-        // sliders sit in their own row
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            modifier = Modifier.fillMaxWidth(),
-        ) {
+    val density = LocalDensity.current
+    val fontScale = LocalConfiguration.current.fontScale
+    val layoutDirection = LocalLayoutDirection.current
+    var mediaHeight by remember(density, fontScale) { mutableStateOf(272.dp) }
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        val sideSliders = mediaVisible && maxWidth >= 320.dp && fontScale <= 1.3f
+        val sliderHeight = if (sideSliders) mediaHeight else 48.dp
+        val orientation = if (sideSliders) Orientation.Vertical else Orientation.Horizontal
+        val brightness: @Composable (Modifier) -> Unit = { sliderModifier ->
             PetalVerticalSliderPill(
                 value = brightnessFraction,
                 height = sliderHeight,
-                orientation = Orientation.Horizontal,
+                width = 40.dp,
+                orientation = orientation,
+                onDraggingChanged = {
+                    dragging = if (it) dragging + "brightness" else dragging - "brightness"
+                },
+                reveal = reveal,
                 iconRes =
                     if (brightnessViewModel.autoMode) {
                         R.drawable.ic_qs_brightness_auto_on
@@ -149,12 +159,19 @@ fun PetalMediaRow(
                         if (brightnessViewModel.autoMode) R.string.petal_qs_disable_auto_brightness
                         else R.string.petal_qs_enable_auto_brightness
                     ),
-                modifier = Modifier.weight(1f),
+                modifier = sliderModifier,
             )
+        }
+        val volumeSlider: @Composable (Modifier) -> Unit = { sliderModifier ->
             PetalVerticalSliderPill(
                 value = volumeFraction,
                 height = sliderHeight,
-                orientation = Orientation.Horizontal,
+                width = 40.dp,
+                orientation = orientation,
+                onDraggingChanged = {
+                    dragging = if (it) dragging + "volume" else dragging - "volume"
+                },
+                reveal = reveal,
                 iconRes = if (volume <= 0) R.drawable.ic_speaker_mute else R.drawable.ic_speaker_on,
                 contentDescriptionText = stringResource(R.string.petal_qs_media_volume),
                 onValueChange = ::updateVolume,
@@ -169,6 +186,7 @@ fun PetalMediaRow(
                             volumeBeforeMute.coerceIn(0, maxVolume)
                         }
                     audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, next, 0)
+                    volume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
                 },
                 iconActionDescription =
                     stringResource(
@@ -176,8 +194,47 @@ fun PetalMediaRow(
                         else R.string.volume_panel_hint_unmute,
                         stringResource(R.string.petal_qs_media_volume),
                     ),
-                modifier = Modifier.weight(1f),
+                modifier = sliderModifier,
             )
+        }
+        val mediaCard: @Composable (Modifier) -> Unit = { cardModifier ->
+            val shape = androidx.compose.foundation.shape.RoundedCornerShape(24.dp)
+            Box(
+                cardModifier.clip(shape)
+                    .petalQsSurfaceReveal(reveal)
+                    .onSizeChanged { mediaHeight = with(density) { it.height.toDp() } }
+            ) {
+                CompositionLocalProvider(
+                    LocalPetalNarrowMedia provides sideSliders,
+                    LocalPetalMediaGlass provides true,
+                     LocalPetalMediaReveal provides reveal,
+                    LocalPetalMediaStyle provides
+                        if (compact) PetalMediaStyle.Mini else PetalMediaStyle.LargeProgress,
+                ) { media() }
+            }
+        }
+        if (sideSliders) {
+            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.fillMaxWidth()) {
+                    if (reach != PetalConfig.QS_REACH_RIGHT) brightness(Modifier)
+                    if (reach == PetalConfig.QS_REACH_LEFT) volumeSlider(Modifier)
+                    CompositionLocalProvider(LocalLayoutDirection provides layoutDirection) {
+                        mediaCard(Modifier.weight(1f))
+                    }
+                    if (reach == PetalConfig.QS_REACH_RIGHT) brightness(Modifier)
+                    if (reach != PetalConfig.QS_REACH_LEFT) volumeSlider(Modifier)
+                }
+            }
+        } else {
+            androidx.compose.foundation.layout.Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (mediaVisible) mediaCard(Modifier.fillMaxWidth())
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    brightness(Modifier.weight(1f))
+                    volumeSlider(Modifier.weight(1f))
+                }
+            }
         }
     }
 }

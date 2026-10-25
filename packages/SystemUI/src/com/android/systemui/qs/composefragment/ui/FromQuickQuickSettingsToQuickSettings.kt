@@ -16,27 +16,38 @@
 
 package com.android.systemui.qs.composefragment.ui
 
+import androidx.compose.animation.core.LinearEasing
 import com.android.compose.animation.scene.TransitionBuilder
+import com.android.systemui.media.remedia.ui.compose.Media
 import com.android.systemui.qs.composefragment.SceneKeys
 import com.android.systemui.qs.shared.ui.QuickSettings.Elements
+import com.android.systemui.petalos.PetalQsFadeInEasing
 
 fun TransitionBuilder.quickQuickSettingsToQuickSettings(
+    petalEnabled: Boolean = false,
     animateTilesExpansion: () -> Boolean = { true }
 ) {
+    val enteringQs = petalEnabled && transition.toContent == SceneKeys.QuickSettings
+    val enteringQqs = petalEnabled && transition.toContent == SceneKeys.QuickQuickSettings
+    fractionRange(start = 0.43f, easing = if (enteringQs) PetalQsFadeInEasing else LinearEasing) {
+        fade(Elements.QuickSettingsContent)
+    }
 
-    fractionRange(start = 0.43f) { fade(Elements.QuickSettingsContent) }
-
-    fractionRange(start = 0.9f) { fade(Elements.FooterActions) }
+    fractionRange(start = 0.9f, easing = if (enteringQs) PetalQsFadeInEasing else LinearEasing) {
+        fade(Elements.FooterActions)
+    }
 
     anchoredTranslate(Elements.QuickSettingsContent, Elements.GridAnchor)
 
     sharedElement(Elements.TileElementMatcher, enabled = animateTilesExpansion())
     sharedElement(Elements.BrightnessSlider)
 
-    // This will animate between 0f (QQS) and 0.5, fading in the QQS tiles when coming back
-    // from non first page QS. The QS content ends fading out at 0.43f, so there's a brief
-    // overlap, but because they are really faint, it looks better than complete black without
-    // overlap.
-    fractionRange(end = 0.5f) { fade(SceneKeys.QqsTileElementMatcher) }
+    // Media bounds differ between hosts; sharing made the bloody player fly about.
+    sharedElement(Media.Elements.mediaCarousel, enabled = false)
+
+    // Keep the faint overlap instead of flashing an empty shade.
+    fractionRange(end = 0.5f, easing = if (enteringQqs) PetalQsFadeInEasing else LinearEasing) {
+        fade(SceneKeys.QqsTileElementMatcher)
+    }
     anchoredTranslate(SceneKeys.QqsTileElementMatcher, Elements.GridAnchor)
 }

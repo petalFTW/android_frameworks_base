@@ -20,8 +20,6 @@ import android.content.Context;
 import android.content.pm.ActivityInfo;
 import android.content.res.Configuration;
 import android.graphics.Canvas;
-import android.graphics.Color;
-import android.graphics.Paint;
 import android.graphics.PorterDuff;
 import android.graphics.PorterDuffColorFilter;
 import android.util.AttributeSet;
@@ -30,15 +28,14 @@ import android.widget.ImageView;
 
 import androidx.annotation.DimenRes;
 
+import com.android.internal.graphics.drawable.PetalGlassDrawable;
 import com.android.systemui.shared.navigationbar.KeyButtonRipple;
 
 public class FloatingRotationButtonView extends ImageView {
 
-    private static final float BACKGROUND_ALPHA = 0.92f;
-
     private KeyButtonRipple mRipple;
     private int mDiameter;
-    private final Paint mOvalBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG);
+    private final PetalGlassDrawable mGlass;
 
     private final Configuration mLastConfiguration;
 
@@ -49,6 +46,7 @@ public class FloatingRotationButtonView extends ImageView {
     public FloatingRotationButtonView(Context context, AttributeSet attrs, int defStyle) {
         super(context, attrs, defStyle);
         mLastConfiguration = getResources().getConfiguration();
+        mGlass = new PetalGlassDrawable(this, 100f, 0f);
 
         setClickable(true);
 
@@ -83,10 +81,7 @@ public class FloatingRotationButtonView extends ImageView {
     public void setColors(int lightColor, int darkColor) {
         getDrawable().setColorFilter(new PorterDuffColorFilter(lightColor, PorterDuff.Mode.SRC_IN));
 
-        final int ovalBackgroundColor = Color.valueOf(Color.red(darkColor),
-                Color.green(darkColor), Color.blue(darkColor), BACKGROUND_ALPHA).toArgb();
-
-        mOvalBgPaint.setColor(ovalBackgroundColor);
+        mGlass.setColor((darkColor & 0x00FFFFFF) | 0xA8000000);
         mRipple.setType(KeyButtonRipple.Type.OVAL);
     }
 
@@ -94,11 +89,7 @@ public class FloatingRotationButtonView extends ImageView {
         mRipple.setDarkIntensity(darkIntensity);
     }
 
-    /**
-     * Sets the view's diameter.
-     *
-     * @param diameter the diameter value for the view
-     */
+    // keep this thing square
     void setDiameter(int diameter) {
         mDiameter = diameter;
     }
@@ -106,8 +97,17 @@ public class FloatingRotationButtonView extends ImageView {
     @Override
     public void draw(Canvas canvas) {
         int d = Math.min(getWidth(), getHeight());
-        canvas.drawOval(0, 0, d, d, mOvalBgPaint);
+        mGlass.setBounds(0, 0, d, d);
+        mGlass.setGlassCorners(d / 2f, d / 2f);
+        mGlass.draw(canvas);
         super.draw(canvas);
+    }
+
+    @Override
+    public void setAlpha(float alpha) {
+        super.setAlpha(alpha);
+        // the backdrop doesn't notice render-node alpha on its own
+        invalidate();
     }
 
     @Override

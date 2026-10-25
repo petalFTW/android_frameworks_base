@@ -43,6 +43,8 @@ class IslandGeometry(context: Context, windowManager: WindowManager) {
     val expandedHeightMediaMax: Int =
         res.getDimensionPixelSize(R.dimen.island_expanded_height_media_max)
     val topOffset: Int = res.getDimensionPixelSize(R.dimen.island_top_offset)
+    // expanded cards sit a touch lower, the punch-hole bites otherwise
+    val expandedTopNudge: Int = res.getDimensionPixelSize(R.dimen.island_expanded_top_nudge)
     val cornerCapsule: Float = res.getDimension(R.dimen.island_corner_capsule)
     val cornerExpanded: Float = res.getDimension(R.dimen.island_corner_expanded)
     val elevation: Float = res.getDimension(R.dimen.island_elevation)
@@ -61,6 +63,7 @@ class IslandGeometry(context: Context, windowManager: WindowManager) {
     val dropletBaseRadius: Int = res.getDimensionPixelSize(R.dimen.island_droplet_base_radius)
 
     val screenWidth: Int = context.resources.displayMetrics.widthPixels
+    val screenHeight: Int = context.resources.displayMetrics.heightPixels
 
     // top inset, cutout or status bar, whichever is taller
     val statusBarTopInset: Int = run {
@@ -81,4 +84,6 @@ class IslandGeometry(context: Context, windowManager: WindowManager) {
         } else {
             statusBarTopInset + topOffset
         }
+
+    val expandedTopY: Int = collapsedTopY + expandedTopNudge
 }

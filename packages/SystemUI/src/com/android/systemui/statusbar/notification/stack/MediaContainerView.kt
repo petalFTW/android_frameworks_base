@@ -46,7 +46,9 @@ class MediaContainerView(context: Context, attrs: AttributeSet?) : ExpandableVie
 
     private fun updateResources() {
         cornerRadius =
-            context.resources.getDimensionPixelSize(R.dimen.notification_corner_radius).toFloat()
+            if (com.android.systemui.media.remedia.shared.flag.MediaControlsInComposeFlag.isEnabled) {
+                context.resources.getDimensionPixelSize(R.dimen.notification_corner_radius).toFloat()
+            } else 0f
     }
 
     public override fun updateClipping() {

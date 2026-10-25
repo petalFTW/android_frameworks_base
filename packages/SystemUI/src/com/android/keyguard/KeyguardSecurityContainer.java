@@ -103,7 +103,6 @@ import com.android.systemui.Flags;
 import com.android.systemui.FontStyles;
 import com.android.systemui.Gefingerpoken;
 import com.android.systemui.bouncer.domain.interactor.BouncerInteractor;
-import com.android.systemui.bouncer.ui.BouncerColors;
 import com.android.systemui.classifier.FalsingA11yDelegate;
 import com.android.systemui.plugins.FalsingManager;
 import com.android.systemui.res.R;
@@ -124,7 +123,6 @@ public class KeyguardSecurityContainer extends ConstraintLayout {
     static final int USER_TYPE_PRIMARY = 1;
     static final int USER_TYPE_WORK_PROFILE = 2;
     static final int USER_TYPE_SECONDARY_USER = 3;
-    private boolean mTransparentModeEnabled = false;
 
     @IntDef({MODE_UNINITIALIZED, MODE_DEFAULT, MODE_ONE_HANDED, MODE_USER_SWITCHER})
     public @interface Mode {}
@@ -841,34 +839,19 @@ public class KeyguardSecurityContainer extends ConstraintLayout {
         mIsAppearAnimationDelayed = false;
     }
 
-    /**
-     * Make the bouncer background transparent
-     */
+    // Auth-context UI wants the backdrop clear too.
     public void enableTransparentMode() {
-        mTransparentModeEnabled = true;
         reloadBackgroundColor();
     }
 
-    /**
-     * Make the bouncer background opaque
-     */
+    // Back from auth-context UI; keep the glass, ditch the muddy tint.
     public void disableTransparentMode() {
-        mTransparentModeEnabled = false;
         reloadBackgroundColor();
     }
 
     private void reloadBackgroundColor() {
-        if (mTransparentModeEnabled) {
-            setBackgroundColor(Color.TRANSPARENT);
-        } else {
-            if (Flags.bouncerUiRevamp2()) {
-                setBackgroundColor(BouncerColors.surfaceColor(mContext, false));
-            } else {
-                setBackgroundColor(
-                        getContext().getColor(
-                                com.android.internal.R.color.materialColorSurfaceDim));
-            }
-        }
+        // The panel does the glass now; this big tint was just muddying it up.
+        setBackgroundColor(Color.TRANSPARENT);
         invalidate();
     }
 

@@ -82,6 +82,7 @@ public class QuickQSPanelController extends QSPanelControllerBase<QuickQSPanel> 
     protected void onInit() {
         super.onInit();
         if (!SceneContainerFlag.isEnabled()) {
+            mMediaHost.setPetalStyle(com.android.systemui.petalos.PetalMediaStyle.LargeProgress);
             updateMediaExpansion();
             mMediaHost.setShowsOnlyActiveMedia(true);
         }

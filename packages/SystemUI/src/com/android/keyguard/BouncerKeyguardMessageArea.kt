@@ -22,10 +22,13 @@ import android.animation.AnimatorSet
 import android.animation.ObjectAnimator
 import android.content.Context
 import android.content.res.ColorStateList
+import android.graphics.Canvas
+import android.text.TextUtils
 import android.util.AttributeSet
 import android.view.View
 import com.android.app.animation.Interpolators
 import com.android.systemui.bouncer.shared.constants.KeyguardBouncerConstants.ColorId.TITLE
+import com.android.systemui.petalos.depth.PetalBouncerClock
 
 /** Displays security messages for the keyguard bouncer. */
 open class BouncerKeyguardMessageArea(context: Context?, attrs: AttributeSet?) :
@@ -35,8 +38,30 @@ open class BouncerKeyguardMessageArea(context: Context?, attrs: AttributeSet?) :
     private var mNextMessageColorState: ColorStateList? = ColorStateList.valueOf(DEFAULT_COLOR)
     private val animatorSet = AnimatorSet()
     private var textAboutToShow: CharSequence? = null
+    private val depthClock = PetalBouncerClock(this)
     protected open val SHOW_DURATION_MILLIS = 150L
     protected open val HIDE_DURATION_MILLIS = 200L
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        depthClock.attach()
+    }
+
+    override fun onDetachedFromWindow() {
+        depthClock.detach()
+        super.onDetachedFromWindow()
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        if (!depthClock.draw(canvas)) super.onDraw(canvas)
+    }
+
+    // update() also runs from the superclass constructor, before depthClock is initialized.
+    override fun shouldShowEmptyMessage(): Boolean = depthClock?.isActive == true
+
+    internal fun onDepthClockChanged() {
+        update()
+    }
 
     override fun onFinishInflate() {
         super.onFinishInflate()
@@ -81,6 +106,15 @@ open class BouncerKeyguardMessageArea(context: Context?, attrs: AttributeSet?) :
 
     override fun setMessage(msg: CharSequence?, animate: Boolean) {
         if ((msg == textAboutToShow && msg != null) || msg == text) {
+            return
+        }
+
+        // typing clears the prompt; don't blink the clock with it
+        if (TextUtils.isEmpty(msg) && depthClock.isActive) {
+            animatorSet.cancel()
+            textAboutToShow = null
+            alpha = 1f
+            super.setMessage(msg, false)
             return
         }
 

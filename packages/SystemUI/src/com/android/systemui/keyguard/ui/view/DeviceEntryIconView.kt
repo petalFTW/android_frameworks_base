@@ -58,16 +58,23 @@ constructor(
             allowedTouchSlop = ViewConfiguration.get(context).getScaledTouchSlop(),
             logger = logger,
         )
-    val iconView: ImageView = ImageView(context, attrs).apply { id = R.id.device_entry_icon_fg }
+    val iconView: FingerprintBlobView =
+        FingerprintBlobView(context, attrs).apply { id = R.id.device_entry_icon_fg }
     val bgView: ImageView = ImageView(context, attrs).apply { id = R.id.device_entry_icon_bg }
     val aodFpDrawable: LottieDrawable = LottieDrawable()
     var accessibilityHintType: AccessibilityHintType = AccessibilityHintType.NONE
 
     // set by the binder so taps only splash when a fingerprint icon is up
     var isFingerprintIcon: Boolean = false
+        private set
 
-    // the overlay ripple lives in its own window, we just poke it on touch
-    var onFingerprintTouch: (() -> Unit)? = null
+    private var usesGlassBackground = false
+
+    var backgroundProtectionAlpha: Float = 0f
+        set(value) {
+            field = value
+            bgView.alpha = if (usesGlassBackground) 0f else value
+        }
 
     private var animatedIconDrawable: AnimatedStateListDrawable = AnimatedStateListDrawable()
 
@@ -84,16 +91,34 @@ constructor(
         addTouchHandlingView()
     }
 
-    // finger is down on the print, kick the overlay splash right away
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+        // Grow the glass, not the sensor's actual touch box.
+        val minimum = iconView.minimumGlassSizePx
+        iconView.measure(
+            MeasureSpec.makeMeasureSpec(maxOf(measuredWidth, minimum), MeasureSpec.EXACTLY),
+            MeasureSpec.makeMeasureSpec(maxOf(measuredHeight, minimum), MeasureSpec.EXACTLY),
+        )
+    }
+
+    fun setIconAppearance(type: IconType, useAodVariant: Boolean, color: Int) {
+        isFingerprintIcon = type == IconType.FINGERPRINT
+        usesGlassBackground = type != IconType.NONE
+        bgView.alpha = if (usesGlassBackground) 0f else backgroundProtectionAlpha
+        iconView.setIconState(type, useAodVariant, color)
+    }
+
+    // grow while the finger is parked on the print
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
-        if (event.actionMasked == MotionEvent.ACTION_DOWN && isFingerprintIcon) {
-            onFingerprintTouch?.invoke()
+        if (isFingerprintIcon) {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> iconView.setFingerPressed(true)
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
+                    iconView.setFingerPressed(false)
+            }
         }
         return super.dispatchTouchEvent(event)
     }
-
-    // the press ripple now owns the whole show, unlock just lets it finish
-    fun playUnlockBurst() = Unit
 
     private fun setupAccessibilityDelegate() {
         accessibilityDelegate =
@@ -168,8 +193,7 @@ constructor(
             R.id.udfps_aod_fp,
         )
 
-        // WILDCARD: should always be the last state added since any states will match with this
-        // and therefore won't get matched with subsequent states.
+        // Catch-all goes last or it eats the whole bloody list.
         animatedIconDrawable.addState(
             StateSet.WILD_CARD,
             context.getDrawable(R.color.transparent)!!,
@@ -178,20 +202,6 @@ constructor(
     }
 
     private fun setupIconTransitions() {
-        // LockscreenFp <=> LockscreenUnlocked
-        animatedIconDrawable.addTransition(
-            R.id.locked_fp,
-            R.id.unlocked,
-            context.getDrawable(R.drawable.fp_to_unlock) as AnimatedVectorDrawable,
-            /* reversible */ false,
-        )
-        animatedIconDrawable.addTransition(
-            R.id.unlocked,
-            R.id.locked_fp,
-            context.getDrawable(R.drawable.unlock_to_fp) as AnimatedVectorDrawable,
-            /* reversible */ false,
-        )
-
         // LockscreenLocked <=> AodLocked
         animatedIconDrawable.addTransition(
             R.id.locked_aod,
@@ -231,14 +241,6 @@ constructor(
             R.id.unlocked,
             R.id.locked,
             context.getDrawable(R.drawable.unlocked_to_locked) as AnimatedVectorDrawable,
-            /* reversible */ false,
-        )
-
-        // LockscreenFingerprint => LockscreenLocked
-        animatedIconDrawable.addTransition(
-            R.id.locked_fp,
-            R.id.locked,
-            context.getDrawable(R.drawable.fp_to_locked) as AnimatedVectorDrawable,
             /* reversible */ false,
         )
 

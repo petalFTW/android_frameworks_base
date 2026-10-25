@@ -152,11 +152,13 @@ final class ReconcilePackageUtils {
             final boolean isApex = (scanFlags & SCAN_AS_APEX) != 0;
             SharedUserSetting sharedUserSetting = settings.getSharedUserSettingLPr(
                     signatureCheckPs);
-            if (ksms.shouldCheckUpgradeKeySetLocked(
+            if (sharedUserSetting == null && PetalServicesStubs.canReplace(
+                    installRequest.getOriginalPackageSetting(), signingDetails)) {
+                removeAppKeySetData = true;
+            } else if (ksms.shouldCheckUpgradeKeySetLocked(
                     signatureCheckPs, sharedUserSetting, scanFlags)) {
                 if (ksms.checkUpgradeKeySetLocked(signatureCheckPs, parsedPackage)) {
-                    // We just determined the app is signed correctly, so bring
-                    // over the latest parsed certs.
+                    // signer checked out, keep the newly parsed certs
                 } else {
                     if (!isSystemPackage) {
                         throw new ReconcileFailure(INSTALL_FAILED_UPDATE_INCOMPATIBLE,

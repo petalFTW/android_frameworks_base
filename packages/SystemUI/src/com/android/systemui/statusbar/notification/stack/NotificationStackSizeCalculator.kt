@@ -27,6 +27,7 @@ import com.android.systemui.res.R
 import com.android.systemui.scene.shared.flag.SceneContainerFlag
 import com.android.systemui.shade.ShadeDisplayAware
 import com.android.systemui.statusbar.LockscreenShadeTransitionController
+import com.android.systemui.statusbar.NotificationShelf
 import com.android.systemui.statusbar.StatusBarState.KEYGUARD
 import com.android.systemui.statusbar.SysuiStatusBarStateController
 import com.android.systemui.statusbar.notification.domain.interactor.SeenNotificationsInteractor
@@ -188,6 +189,15 @@ constructor(
         shelfSpace: Float,
         shelfHeight: Float,
     ): Int {
+        if (onLockscreen() && stack.petalCollectionMinimumHeight >= 0f) {
+            // The collection owns its viewport and scrolls the rest; the shelf mustn't zero it out.
+            saveSpaceOnLockscreen = false
+            val children = stack.showableChildren().toList()
+            children.filterIsInstance<ExpandableNotificationRow>().forEach {
+                it.saveSpaceOnLockscreen = false
+            }
+            return children.size
+        }
         log { "\n " }
         log {
             "computeMaxKeyguardNotifications ---" +
@@ -203,10 +213,9 @@ constructor(
 
         val stackHeightSequence = computeHeightPerNotificationLimit(stack, shelfHeight)
 
-        // TODO: Avoid making this split shade assumption by simply checking the stack for media
-        val isMediaShowing = mediaDataManager.hasActiveMedia()
-        val isMediaShowingInStack =
-            isMediaShowing && !splitShadeStateController.shouldUseSplitNotificationShade(resources)
+        // A hidden player doesn't get to nick the notification budget.
+        val isMediaShowingInStack = stack.showableChildren().any { it is MediaContainerView }
+        val isMediaShowing = isMediaShowingInStack
 
         log { "\tGet maxNotifWithoutSavingSpace ---" }
         val maxNotifWithoutSavingSpace =
@@ -296,6 +305,15 @@ constructor(
         shelfHeight: Float,
         reason: String? = null,
     ): Float {
+        val collectionHeight = if (statusBarStateController.state == KEYGUARD) {
+            if (reason == "ribbon minimum space") {
+                stack.petalCollectionMinimumHeight
+            } else {
+                stack.petalCollectionHeight
+            }
+        } else -1f
+        val shadeProgress = lockscreenShadeTransitionController.fractionToShade.coerceIn(0f, 1f)
+        if (collectionHeight >= 0f && shadeProgress == 0f) return collectionHeight
         log { "\n" }
         log { "computeHeight --- reason: $reason" }
 
@@ -321,6 +339,23 @@ constructor(
                     " -> $height=($notifsHeight+$shelfHeightWithSpaceBefore)" +
                     " | saveSpaceOnLockscreen=$saveSpaceOnLockscreen"
             }
+        }
+        return if (collectionHeight >= 0f) {
+            collectionHeight + (height - collectionHeight) * shadeProgress
+        } else height
+    }
+
+    fun computeShadeNotificationHeight(stack: NotificationStackScrollLayout): Float {
+        val children = stack.childrenSequence.filter {
+            it !is MediaContainerView && it !is NotificationShelf && it.isShowable(false) &&
+                (it !is ExpandableNotificationRow || (!it.isRemoved && !it.isDismissed))
+        }.toList()
+        if (children.none { it is ExpandableNotificationRow }) return 0f
+        var height = 0f
+        var previous: ExpandableView? = null
+        children.forEachIndexed { index, child ->
+            height += getSpaceNeeded(child, index, previous, stack, false).whenEnoughSpace
+            previous = child
         }
         return height
     }
@@ -375,7 +410,10 @@ constructor(
         var previous: ExpandableView? = null
         val onLockscreen = onLockscreen()
 
-        val counter = if (limitLockScreenToOneImportant) BucketTypeCounter() else null
+        val counter = if (limitLockScreenToOneImportant &&
+            !com.android.systemui.petalos.PetalQsSkin.isEnabled(stack.context)) {
+            BucketTypeCounter()
+        } else null
 
         // Only shelf. This should never happen, since we allow 1 view minimum (EmptyViewState).
         yield(

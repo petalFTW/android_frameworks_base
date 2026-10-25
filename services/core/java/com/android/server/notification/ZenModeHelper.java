@@ -1669,6 +1669,12 @@ public class ZenModeHelper {
             long time = mClock.millis();
             if (config.automaticRules != null && config.automaticRules.size() > 0) {
                 for (ZenRule automaticRule : config.automaticRules.values()) {
+                    if (implicitRuleId("org.petalos.petaltuner").equals(automaticRule.id)
+                            && "org.petalos.petaltuner".equals(automaticRule.getPkg())) {
+                        // game focus died with the reboot, don't resurrect the bloody thing
+                        automaticRule.condition = null;
+                        automaticRule.resetConditionOverride();
+                    }
                     if (forRestore) {
                         // don't restore transient state from restored automatic rules
                         automaticRule.condition = null;

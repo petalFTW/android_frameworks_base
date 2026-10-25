@@ -311,13 +311,7 @@ public class QuickSettingsControllerImpl implements QuickSettingsController, Dum
     private FlingQsWithoutClickListener mFlingQsWithoutClickListener;
     private ExpansionHeightSetToMaxListener mExpansionHeightSetToMaxListener;
     private final QS.HeightListener mQsHeightListener = this::onHeightChanged;
-    private final QS.QqsHeightListener mQqsHeightListener = new QS.QqsHeightListener() {
-        @Override
-        public void onQqsHeightChanged() {
-            updateHeightsOnShadeLayoutChange();
-            mPanelViewControllerLazy.get().positionClockAndNotifications();
-        }
-    };
+    private final QS.QqsHeightListener mQqsHeightListener = this::onQqsHeightChanged;
     private final Runnable mQsCollapseExpandAction = this::collapseOrExpandQs;
     private final QS.ScrollListener mQsScrollListener = this::onScroll;
 
@@ -872,12 +866,13 @@ public class QuickSettingsControllerImpl implements QuickSettingsController, Dum
 
     /** update Qs height state */
     void setExpansionHeight(float height) {
-        if (mExpansionHeight == height) {
-            return;
-        }
+        boolean heightUnchanged = mExpansionHeight == height;
         int maxHeight = getMaxExpansionHeight();
         height = Math.min(Math.max(
                 height, getMinExpansionHeight()), maxHeight);
+        if (heightUnchanged && mExpansionHeight == height) {
+            return;
+        }
         mFullyExpanded = height == maxHeight && maxHeight != 0;
         boolean qsAnimatingAway = !mAnimatorExpand && mAnimating;
         if (height > getMinExpansionHeight() && !getExpanded()
@@ -914,6 +909,16 @@ public class QuickSettingsControllerImpl implements QuickSettingsController, Dum
             mMediaHierarchyManager.onQsHeightUpdated();
         }
         return oldMaxHeight;
+    }
+
+    @VisibleForTesting
+    void onQqsHeightChanged() {
+        int oldMaxHeight = updateHeightsOnShadeLayoutChange();
+        handleShadeLayoutChanged(oldMaxHeight);
+        // the bigger card can put the old height below the new minimum
+        setExpansionHeight(mExpansionHeight);
+        updateExpansion();
+        mPanelViewControllerLazy.get().positionClockAndNotifications();
     }
 
     /** Called when Shade view layout changed. Updates QS expansion or
@@ -1183,9 +1188,10 @@ public class QuickSettingsControllerImpl implements QuickSettingsController, Dum
             // be larger than 0 because of the timing, leading to flickers.
             return 0.0f;
         }
-        return Math.min(
-                1f, (mExpansionHeight - mMinExpansionHeight) / (mMaxExpansionHeight
-                        - mMinExpansionHeight));
+        int range = mMaxExpansionHeight - mMinExpansionHeight;
+        return range > 0
+                ? MathUtils.saturate((mExpansionHeight - mMinExpansionHeight) / range)
+                : 0f;
     }
 
     void updateMinHeight() {
@@ -2027,6 +2033,11 @@ public class QuickSettingsControllerImpl implements QuickSettingsController, Dum
         }
         if (oppositeDirection) {
             animator.setDuration(350);
+        }
+        if (expanding && com.android.systemui.petalos.PetalQsSkin.isEnabled(
+                mPanelView.getContext())) {
+            // Bake that 0.75x feel into this bit.
+            animator.setDuration(Math.round(animator.getDuration() * 0.75f));
         }
         animator.addUpdateListener(
                 animation -> setExpansionHeight((Float) animation.getAnimatedValue()));

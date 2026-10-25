@@ -285,36 +285,51 @@ constructor(
 
     @Composable
     private fun Content(modifier: Modifier = Modifier) {
-        PlatformTheme(isDarkTheme = if (notificationShadeBlur()) isSystemInDarkTheme() else true) {
-            ProvideShortcutHelperIndication(interactionsConfig = interactionsConfig()) {
-                Box(
-                    modifier =
-                        modifier
-                            .layout { measurable, constraints ->
-                                measurable.measure(constraints).run {
-                                    layout(width, height) {
-                                        if (viewModel.isQsVisibleAndAnyShadeExpanded) {
-                                            place(0, 0)
+        val entranceState = remember { com.android.systemui.petalos.PetalQsEntranceState() }
+        entranceState.shadeProgress =
+            if (viewModel.isQsVisible) {
+                com.android.systemui.animation.ShadeInterpolation.getContentAlpha(
+                    viewModel.shadeMotionProgress
+                )
+            } else 0f
+        entranceState.qsProgress =
+            if (viewModel.isQsVisible) viewModel.expansionState.progress else 0f
+        CompositionLocalProvider(
+            com.android.systemui.petalos.LocalPetalQsEntranceState provides entranceState,
+            com.android.systemui.petalos.LocalPetalQsPreferences provides
+                com.android.systemui.petalos.rememberPetalQsPreferences(),
+        ) {
+            PlatformTheme(isDarkTheme = if (notificationShadeBlur()) isSystemInDarkTheme() else true) {
+                ProvideShortcutHelperIndication(interactionsConfig = interactionsConfig()) {
+                    Box(
+                        modifier =
+                            modifier
+                                .layout { measurable, constraints ->
+                                    measurable.measure(constraints).run {
+                                        layout(width, height) {
+                                            if (viewModel.isQsVisibleAndAnyShadeExpanded) {
+                                                place(0, 0)
+                                            }
                                         }
                                     }
                                 }
-                            }
-                            .graphicsLayer { alpha = viewModel.viewAlpha }
-                            .thenIf(!Flags.notificationShadeBlur()) {
-                                Modifier.offset {
-                                    IntOffset(
-                                        x = 0,
-                                        y = viewModel.viewTranslationY.fastRoundToInt(),
-                                    )
+                                .graphicsLayer { alpha = viewModel.viewAlpha }
+                                .thenIf(!Flags.notificationShadeBlur()) {
+                                    Modifier.offset {
+                                        IntOffset(
+                                            x = 0,
+                                            y = viewModel.viewTranslationY.fastRoundToInt(),
+                                        )
+                                    }
                                 }
-                            }
-                            // Disable touches in the whole composable while the mirror is
-                            // showing. While the mirror is showing, an ancestor of the
-                            // ComposeView is made alpha 0, but touches are still being captured
-                            // by the composables.
-                            .thenIf(viewModel.showingMirror) { Modifier.gesturesDisabled() }
-                ) {
-                    CollapsableQuickSettingsSTL()
+                                // Disable touches in the whole composable while the mirror is
+                                // showing. While the mirror is showing, an ancestor of the
+                                // ComposeView is made alpha 0, but touches are still being captured
+                                // by the composables.
+                                .thenIf(viewModel.showingMirror) { Modifier.gesturesDisabled() }
+                    ) {
+                        CollapsableQuickSettingsSTL()
+                    }
                 }
             }
         }
@@ -327,6 +342,7 @@ constructor(
      */
     @Composable
     private fun CollapsableQuickSettingsSTL() {
+        val petalEnabled = com.android.systemui.petalos.LocalPetalQsPreferences.current.enabled
         val nextCookie = remember {
             object {
                 var value = 0
@@ -339,11 +355,14 @@ constructor(
                 transitions =
                     transitions {
                         from(QuickQuickSettings, QuickSettings) {
-                            quickQuickSettingsToQuickSettings(viewModel::animateTilesExpansion::get)
+                            quickQuickSettingsToQuickSettings(
+                                petalEnabled = petalEnabled,
+                                animateTilesExpansion = viewModel::animateTilesExpansion::get,
+                            )
                         }
                         to(SceneKeys.EditMode) {
                             spec = tween(durationMillis = EDIT_MODE_TIME_MILLIS)
-                            toEditMode()
+                            toEditMode(petalEnabled = petalEnabled)
                         }
                     },
                 onTransitionStart = { transition ->
@@ -708,6 +727,8 @@ constructor(
     private fun ContentScope.QuickQuickSettingsElement(modifier: Modifier = Modifier) {
         val qqsPadding = viewModel.qqsHeaderHeight
         val bottomPadding = viewModel.qqsBottomPadding
+        val petalMedia = com.android.systemui.petalos.LocalPetalQsPreferences.current.enabled
+        val mediaResources = LocalContext.current.resources
         DisposableEffect(Unit) {
             qqsVisible.value = true
 
@@ -717,7 +738,13 @@ constructor(
             viewModel.quickQuickSettingsViewModel.squishinessViewModel.squishiness
                 .collectAsStateWithLifecycle()
 
-        Column(modifier = modifier.sysuiResTag(ResIdTags.quickQsPanel)) {
+        Column(modifier = modifier.sysuiResTag(ResIdTags.quickQsPanel).graphicsLayer {
+            // A tall player can't sit still while the notification clip eats it.
+            translationY = if (petalMedia && notificationShadeBlur() && !viewModel.isInSplitShade &&
+                viewModel.statusBarState == com.android.systemui.statusbar.StatusBarState.SHADE) {
+                -(1f - viewModel.shadeMotionProgress) * viewModel.qqsHeight
+            } else 0f
+        }) {
             Box(
                 modifier =
                     Modifier.fillMaxWidth()
@@ -731,11 +758,10 @@ constructor(
                             )
                             if (squishiness == 1f) {
                                 viewModel.qqsHeight = coordinates.size.height
+                                viewModel.recordLargeQqsHeight(coordinates.size.height)
                             }
                         }
-                        // Use an approach layout to determien the height without squishiness, as
-                        // that's the value that NPVC and QuickSettingsController care about
-                        // (measured height).
+                        // The panel wants the unsquished height, not an in-flight squeeze.
                         .approachLayout(isMeasurementApproachInProgress = { squishiness < 1f }) {
                             measurable,
                             constraints ->
@@ -773,12 +799,26 @@ constructor(
                 val Media =
                     @Composable {
                         if (viewModel.qqsMediaVisible) {
+                            CompositionLocalProvider(
+                                com.android.systemui.petalos.LocalPetalMediaStyle provides
+                                    if (viewModel.compactMedia) {
+                                        com.android.systemui.petalos.PetalMediaStyle.Mini
+                                    } else com.android.systemui.petalos.PetalMediaStyle.LargeProgress,
+                            ) {
                             MediaObject(
-                                // In order to have stable constraints passed to the AndroidView
-                                // during expansion (available height changing due to squishiness),
-                                // We always allow the media here to be as tall as it wants.
-                                // (b/383085298)
-                                modifier = Modifier.requiredHeightIn(max = Dp.Infinity),
+                                // Don't squash the damn AndroidView mid-expansion.
+                                 modifier = Modifier.requiredHeightIn(max = Dp.Infinity).offset {
+                                     // Balance the tile gap against QQS padding plus the stack gutter.
+                                     val gutter = if (com.android.systemui.scene.shared.flag.SceneContainerFlag.isEnabled) {
+                                         0
+                                     } else mediaResources.getDimensionPixelSize(R.dimen.notification_side_paddings)
+                                     val gap = mediaResources.getDimensionPixelSize(R.dimen.qs_tile_margin_vertical)
+                                     val shift = if (petalMedia && !viewModel.qqsMediaInRow) {
+                                         ((viewModel.qqsBottomPadding + gutter - gap) / 2)
+                                             .coerceIn(0, viewModel.qqsBottomPadding.coerceAtLeast(0))
+                                     } else 0
+                                     IntOffset(0, shift)
+                                 },
                                 mediaHost = viewModel.qqsMediaHost,
                                 mediaLogger = mediaLogger,
                                 mediaPresentationStyle =
@@ -791,6 +831,7 @@ constructor(
                                 mediaViewModelFactory = viewModel.mediaViewModelFactory,
                                 behavior = viewModel.qqsMediaUiBehavior,
                             )
+                            }
                         }
                     }
 
@@ -928,13 +969,9 @@ constructor(
                                         end = qsHorizontalMargin(),
                                     )
                         ) {
-                            // petalOS: with the QS skin on, the media slot + brightness/volume
-                            // pills flow to InfiniteGridLayout through LocalPetalMediaRow so the
-                            // middle row lands between the pills row and the circle tiles, and the
-                            // stock top brightness slider is suppressed.
+                            // Let the Petal grid place media and sliders; stock brightness stays out.
                             val petalSkin =
-                                com.android.systemui.petalos.PetalQsSkin.isEnabled(
-                                    androidx.compose.ui.platform.LocalContext.current)
+                                com.android.systemui.petalos.LocalPetalQsPreferences.current.enabled
                             CompositionLocalProvider(
                                 com.android.systemui.petalos.LocalPetalMediaRow provides
                                     if (petalSkin) {
@@ -944,6 +981,7 @@ constructor(
                                                     containerViewModel.brightnessSliderViewModel,
                                                 media = Media,
                                                 mediaVisible = viewModel.qsMediaVisible,
+                                                compact = viewModel.compactMedia,
                                             )
                                         }
                                     } else {
@@ -1227,6 +1265,8 @@ private class ExpansionTransition(currentProgress: Float) :
 
 private const val EDIT_MODE_TIME_MILLIS = 500
 
+
+
 /**
  * Performs different touch handling based on the state of the ComposeView:
  * * Ignore touches below the value returned by [clipData.second.top], when clipping is enabled, as
@@ -1361,9 +1401,16 @@ private class FrameLayoutTouchPassthrough(
     var downY = 0f
     var downX = 0f
     var preventingIntercept = false
+    private var childOwnsGesture = false
+
+    override fun requestDisallowInterceptTouchEvent(disallowIntercept: Boolean) {
+        childOwnsGesture = disallowIntercept
+        super.requestDisallowInterceptTouchEvent(disallowIntercept)
+    }
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            childOwnsGesture = false
             downX = event.x
             downY = event.y
         }
@@ -1372,7 +1419,7 @@ private class FrameLayoutTouchPassthrough(
             val dx = event.x - downX
             val dy = event.y - downY
             // Hand this damn swipe back when QS runs out of scroll.
-            if (preventingIntercept && event.pointerCount == 1 &&
+            if (preventingIntercept && !childOwnsGesture && event.pointerCount == 1 &&
                 dy < -touchSlop && Math.abs(dy) > Math.abs(dx) && !canScrollQs.forward()) {
                 parent?.requestDisallowInterceptTouchEvent(false)
             }
@@ -1380,6 +1427,7 @@ private class FrameLayoutTouchPassthrough(
             event.actionMasked == MotionEvent.ACTION_CANCEL) {
             parent?.requestDisallowInterceptTouchEvent(false)
             preventingIntercept = false
+            childOwnsGesture = false
         }
         return handled
     }

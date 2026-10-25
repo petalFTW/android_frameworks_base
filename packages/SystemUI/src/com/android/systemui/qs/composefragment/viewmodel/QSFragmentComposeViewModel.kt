@@ -123,6 +123,7 @@ constructor(
     @Assisted private val lifecycleScope: LifecycleCoroutineScope,
     private val mediaCarouselInteractor: MediaCarouselInteractor,
     val mediaViewModelFactory: MediaViewModel.Factory,
+    activeNotificationsInteractor: com.android.systemui.statusbar.notification.domain.interactor.ActiveNotificationsInteractor,
 ) : Dumpable, ExclusiveActivatable() {
 
     val containerViewModel = containerViewModelFactory.create(supportsBrightnessMirroring = true)
@@ -146,6 +147,52 @@ constructor(
         mediaInRowInLandscapeViewModelFactory.create(LOCATION_QS, qsMediaUiBehavior)
 
     private val hydrator = Hydrator("QSFragmentComposeViewModel.hydrator", tableLogBuffer)
+
+    val mediaNotificationCount by hydrator.hydratedStateOf(
+        traceName = "mediaNotificationCount",
+        initialValue = activeNotificationsInteractor.allNotificationsCountValue,
+        source = activeNotificationsInteractor.allNotificationsCount,
+    )
+    private val mediaNotificationHeight by hydrator.hydratedStateOf(
+        traceName = "mediaNotificationHeight",
+        initialValue = com.android.systemui.petalos.PetalMediaSpace.notificationHeight.value,
+        source = com.android.systemui.petalos.PetalMediaSpace.notificationHeight,
+    )
+    private var largeQqsMeasurement by mutableStateOf(Triple(0, 0, 0f))
+    private val availableShadeHeight by hydrator.hydratedStateOf(
+        traceName = "availableShadeHeight",
+        initialValue = com.android.systemui.petalos.PetalMediaSpace.availableShadeHeight.value,
+        source = com.android.systemui.petalos.PetalMediaSpace.availableShadeHeight,
+    )
+    private val requestedCompactMedia by derivedStateOf {
+        val density = resources.displayMetrics.density
+        val (height, width, fontScale) = largeQqsMeasurement
+        val measured = height > 0 && width == resources.displayMetrics.widthPixels &&
+            fontScale == resources.configuration.fontScale
+        val largeHeight = if (measured) height else (440f * density).toInt()
+        val shadeHeight = if (availableShadeHeight > 0) availableShadeHeight else
+            resources.displayMetrics.heightPixels - (96f * density).toInt()
+        val available = shadeHeight - largeHeight
+        // Two tall notifications can crowd this thing just fine.
+        mediaNotificationHeight > available.coerceAtLeast(0)
+    }
+    private var settledCompactMedia by mutableStateOf(false)
+    val compactMedia: Boolean
+        get() = settledCompactMedia
+
+    fun recordLargeQqsHeight(height: Int) {
+        if (compactMedia || !qqsMediaVisible || height <= 0) return
+        if (!MediaControlsInComposeFlag.isEnabled) {
+            val player = qqsMediaHost.hostView
+                .findViewById<com.android.systemui.util.animation.TransitionLayout>(R.id.qs_media_controls)
+                ?: return
+            if (player.getTag(R.id.petal_media_cover) !=
+                com.android.systemui.petalos.PetalMediaStyle.LargeProgress ||
+                player.measuredHeight != player.measureState.measureHeight) return
+        }
+        largeQqsMeasurement = Triple(height, resources.displayMetrics.widthPixels,
+            resources.configuration.fontScale)
+    }
 
     val footerActionsViewModel =
         footerActionsViewModelFactory.create(lifecycleScope).also {
@@ -175,6 +222,10 @@ constructor(
     val isQsFullyCollapsed by derivedStateOf { qsExpansion <= 0f }
 
     var panelExpansionFraction by mutableStateOf(0f)
+
+    val shadeMotionProgress: Float
+        // Second swipe ain't part of the first pull-down.
+        get() = panelExpansionFraction.coerceIn(0f, 1f)
 
     var squishinessFraction by mutableStateOf(1f)
 
@@ -526,13 +577,34 @@ constructor(
     fun onMediaSwipeToDismiss() = mediaCarouselInteractor.onSwipeToDismiss()
 
     override suspend fun onActivated(): Nothing {
+        settledCompactMedia = requestedCompactMedia
         initMediaHosts() // init regardless of using media (same as current QS).
         coroutineScope {
+            launch {
+                // Incoming rows can change height, but not the layout under a moving finger.
+                snapshotFlow {
+                    if (panelExpansionFraction <= 0f || panelExpansionFraction >= 1f) {
+                        requestedCompactMedia
+                    } else null
+                }.collect { requested ->
+                    if (requested != null) settledCompactMedia = requested
+                }
+            }
             launch { hydrateSquishinessInteractor() }
             if (usingMedia && !MediaControlsInComposeFlag.isEnabled) {
                 launch { hydrateQqsMediaExpansion() }
                 launch { hydrateMediaSquishiness() }
                 launch { hydrateMediaDisappearParameters() }
+                launch {
+                    // first pull flips on crowding alone; expanded stays split-artwork
+                    snapshotFlow { compactMedia }.collect {
+                        qqsMediaHost.petalStyle = if (it) {
+                            com.android.systemui.petalos.PetalMediaStyle.Mini
+                        } else {
+                            com.android.systemui.petalos.PetalMediaStyle.LargeProgress
+                        }
+                    }
+                }
             }
             launch { hydrator.activate() }
             launch { containerViewModel.activate() }
@@ -547,11 +619,16 @@ constructor(
         if (MediaControlsInComposeFlag.isEnabled) return
 
         qqsMediaHost.apply {
+            petalStyle = if (compactMedia) {
+                com.android.systemui.petalos.PetalMediaStyle.Mini
+            } else com.android.systemui.petalos.PetalMediaStyle.LargeProgress
             expansion = qqsMediaExpansion
             showsOnlyActiveMedia = true
             init(LOCATION_QQS)
         }
         qsMediaHost.apply {
+            // expanded QS gets the split-artwork concept, always
+            petalStyle = com.android.systemui.petalos.PetalMediaStyle.Split
             expansion = MediaHostState.EXPANDED
             showsOnlyActiveMedia = false
             init(LOCATION_QS)
@@ -673,11 +750,8 @@ private fun mediaHostVisible(
         return combine(
             mediaCarouselInteractor.hasActiveMedia,
             mediaCarouselInteractor.hasAnyMedia,
-            mediaCarouselInteractor.isLockedAndHidden,
-        ) { activeMedia, anyMedia, lockedAndHidden ->
-            if (lockedAndHidden) {
-                false
-            } else if (
+        ) { activeMedia, anyMedia ->
+            if (
                 mediaUiBehavior.carouselVisibility == MediaCarouselVisibility.WhenAnyCardIsActive
             ) {
                 activeMedia
@@ -687,16 +761,12 @@ private fun mediaHostVisible(
         }
     }
     return callbackFlow {
-            val listener: (Boolean) -> Unit = { visible: Boolean -> trySend(visible) }
-            mediaHost.addVisibilityChangeListener(listener)
+        val listener: (Boolean) -> Unit = { visible: Boolean -> trySend(visible) }
+        mediaHost.addVisibilityChangeListener(listener)
+        trySend(mediaHost.visible)
 
-            awaitClose { mediaHost.removeVisibilityChangeListener(listener) }
-        }
-        // Need to use this to set initial state because on creation of the media host, the
-        // view visibility is not in sync with [MediaHost.visible], which is what we track with
-        // the listener. The correct state is set as part of init, so we need to get the state
-        // lazily.
-        .onStart { emit(mediaHost.visible) }
+        awaitClose { mediaHost.removeVisibilityChangeListener(listener) }
+    }
 }
 
 // Taken from QSPanelControllerBase

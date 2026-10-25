@@ -49,13 +49,7 @@ import kotlinx.coroutines.DisposableHandle
 object DeviceEntryIconViewBinder {
     private const val TAG = "DeviceEntryIconViewBinder"
 
-    /**
-     * Updates UI for:
-     * - device entry containing view (parent view for the below views)
-     *     - touch handling view (transparent, no UI)
-     *     - foreground icon view (lock/unlock/fingerprint)
-     *     - background view (optional)
-     */
+    // Hook up the icon, backdrop and invisible tap catcher.
     @SuppressLint("ClickableViewAccessibility")
     @JvmStatic
     fun bind(
@@ -126,16 +120,17 @@ object DeviceEntryIconViewBinder {
                     }
 
                     launch("$TAG#viewModel.deviceEntryViewAlpha") {
-                        viewModel.deviceEntryViewAlpha.collect { alpha -> view.alpha = alpha }
+                        viewModel.deviceEntryViewAlpha.collect { alpha ->
+                            view.alpha = alpha
+                            fgIconView.setContainerAlpha(alpha)
+                        }
                     }
                 }
             }
 
         disposables +=
             view.repeatWhenAttached {
-                // Repeat on CREATED so that the view will always observe the entire
-                // GONE => AOD transition (even though the view may not be visible until the middle
-                // of the transition.
+                // Watch early or the bloody AOD transition starts without us.
                 repeatOnLifecycle(Lifecycle.State.CREATED) {
                     launch("$TAG#viewModel.isVisible") {
                         viewModel.isVisible.collect { isVisible ->
@@ -205,8 +200,7 @@ object DeviceEntryIconViewBinder {
                     if (Flags.msdlFeedback()) {
                         launch("$TAG#viewModel.isPrimaryBouncerShowing") {
                             viewModel.deviceDidNotEnterFromDeviceEntryIcon.collect {
-                                // If we did not enter from the icon, we did not play device entry
-                                // haptics. Therefore, we play the token for long-press instead.
+                                // Didn't enter here, so use the plain long-press buzz.
                                 msdlPlayer.playToken(MSDLToken.LONG_PRESS)
                             }
                         }
@@ -220,17 +214,9 @@ object DeviceEntryIconViewBinder {
                     // Start with an empty state
                     Log.d(TAG, "Initializing device entry fgIconView")
                     fgIconView.setImageState(StateSet.NOTHING, /* merge */ false)
-                    // petal: watch for the fp -> unlocked hop and fire the shockwave
-                    var prevType = DeviceEntryIconView.IconType.NONE
                     launch("$TAG#fpIconView.viewModel") {
                         fgViewModel.viewModel.collect { viewModel ->
                             val type = viewModel.type
-                            if (type == DeviceEntryIconView.IconType.UNLOCK &&
-                                prevType == DeviceEntryIconView.IconType.FINGERPRINT) {
-                                view.playUnlockBurst()
-                            }
-                            prevType = type
-                            view.isFingerprintIcon = type == DeviceEntryIconView.IconType.FINGERPRINT
                             Log.d(TAG, "Updating device entry icon image state $viewModel")
                             if (viewModel.type.contentDescriptionResId != -1) {
                                 fgIconView.contentDescription =
@@ -246,11 +232,15 @@ object DeviceEntryIconViewBinder {
                                 viewModel.padding,
                                 viewModel.padding,
                             )
-                            // Set image state at the end after updating other view state. This
-                            // method forces the ImageView to recompute the bounds of the drawable.
+                            // State goes last; ImageView recalculates its bounds here.
                             fgIconView.setImageState(
                                 view.getIconState(viewModel.type, viewModel.useAodVariant),
                                 /* merge */ false,
+                            )
+                            view.setIconAppearance(
+                                type,
+                                viewModel.useAodVariant,
+                                overrideColor?.toArgb() ?: viewModel.tint,
                             )
                             // Invalidate, just in case the padding changes just after icon changes
                             fgIconView.invalidate()
@@ -263,7 +253,7 @@ object DeviceEntryIconViewBinder {
             bgView.repeatWhenAttached(mainImmediateDispatcher) {
                 repeatOnLifecycle(Lifecycle.State.CREATED) {
                     launch("$TAG#bgViewModel.alpha") {
-                        bgViewModel.alpha.collect { alpha -> bgView.alpha = alpha }
+                        bgViewModel.alpha.collect { alpha -> view.backgroundProtectionAlpha = alpha }
                     }
                     launch("$TAG#bgViewModel.color") {
                         bgViewModel.color.collect { color ->

@@ -23,6 +23,7 @@ import com.android.systemui.communal.domain.interactor.CommunalSceneInteractor
 import com.android.systemui.keyguard.domain.interactor.KeyguardInteractor
 import com.android.systemui.keyguard.ui.transitions.GlanceableHubTransition
 import com.android.systemui.keyguard.ui.transitions.PrimaryBouncerTransition
+import com.android.systemui.petalos.PetalPatternStyle
 import com.android.systemui.shade.domain.interactor.ShadeInteractor
 import com.android.systemui.window.domain.interactor.WindowRootViewBlurInteractor
 import dagger.assisted.AssistedFactory
@@ -53,7 +54,11 @@ constructor(
 
     private val bouncerBlurRadiusFlows =
         if (Flags.bouncerUiRevamp())
-            primaryBouncerTransitions.map { it.windowBlurRadius.logIfPossible(it.javaClass.name) }
+            primaryBouncerTransitions.map { transition ->
+                transition.windowBlurRadius
+                    .map { it * PetalPatternStyle.BACKGROUND_BLUR_FRACTION }
+                    .logIfPossible(transition.javaClass.name)
+            }
         else emptyList()
 
     private val glanceableHubBlurRadiusFlows =

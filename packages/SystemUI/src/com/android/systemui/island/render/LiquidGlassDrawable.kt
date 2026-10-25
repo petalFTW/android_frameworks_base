@@ -30,6 +30,7 @@ import android.graphics.Path
 import android.graphics.PathMeasure
 import android.graphics.PixelFormat
 import android.graphics.RectF
+import android.graphics.RuntimeShader
 import android.graphics.Shader
 import android.graphics.drawable.Drawable
 import androidx.annotation.ColorInt
@@ -41,6 +42,10 @@ class LiquidGlassDrawable : Drawable() {
     private val grainPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val rimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val sheenPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val slabShader = runCatching { RuntimeShader(SLAB_AGSL) }.getOrNull()
+    private var slabBand = 0f
+    private var slabStrength = 0f
+    private var slabUniformsDirty = true
     private val path = Path()
     private val rect = RectF()
     private val rimRect = RectF()
@@ -111,6 +116,19 @@ class LiquidGlassDrawable : Drawable() {
     fun setTintColor(@ColorInt color: Int) {
         if (tint != color) {
             tint = color
+            slabUniformsDirty = true
+            invalidateSelf()
+        }
+    }
+
+    // shoulder tracks the backdrop lens
+    fun setSlab(band: Float, strength: Float) {
+        val boundedBand = band.coerceAtLeast(0f)
+        val boundedStrength = strength.coerceIn(0f, 1.5f)
+        if (slabBand != boundedBand || slabStrength != boundedStrength) {
+            slabBand = boundedBand
+            slabStrength = boundedStrength
+            slabUniformsDirty = true
             invalidateSelf()
         }
     }
@@ -192,6 +210,10 @@ class LiquidGlassDrawable : Drawable() {
         }
     }
 
+    private fun relativeLuminance(@ColorInt color: Int): Float =
+        (0.2126f * Color.red(color) + 0.7152f * Color.green(color)
+            + 0.0722f * Color.blue(color)) / 255f
+
     override fun draw(canvas: Canvas) {
         val bounds = bounds
         if (bounds.isEmpty) return
@@ -201,10 +223,28 @@ class LiquidGlassDrawable : Drawable() {
         paint.color = tint
         paint.style = Paint.Style.FILL
         paint.shader = null
+        if (slabBand > 0f && slabStrength > 0f && slabShader != null) {
+            if (slabUniformsDirty) {
+                slabShader.setFloatUniform("center", rect.centerX(), rect.centerY())
+                slabShader.setFloatUniform("halfSize", rect.width() * .5f, rect.height() * .5f)
+                slabShader.setFloatUniform("radius", cornerRadius.coerceIn(
+                    0f, minOf(rect.width(), rect.height()) * .5f))
+                slabShader.setFloatUniform("bandWidth", slabBand)
+                slabShader.setFloatUniform("gain", slabStrength)
+                // light tint wants less grubby shading
+                slabShader.setFloatUniform("surface", relativeLuminance(tint))
+                slabShader.setColorUniform("tint", tint)
+                slabUniformsDirty = false
+            }
+            // Paint's colour alpha would otherwise modulate the premultiplied shader again.
+            paint.color = Color.WHITE
+            paint.shader = slabShader
+        }
         canvas.drawPath(path, paint)
+        paint.shader = null
 
         // grain
-        canvas.drawPath(path, grainPaint)
+        if (grainAlpha > 0) canvas.drawPath(path, grainPaint)
 
         if (rimShaderDirty) {
             rimPaint.shader = LinearGradient(
@@ -305,11 +345,7 @@ class LiquidGlassDrawable : Drawable() {
         return fadeIn * fadeOut
     }
 
-    /**
-     * A blurred chromatic fringe hugging the blob's rim: three offset RGB
-     * strokes of the outline, screened together so the edges split into a
-     * prismatic halo while the two records trade.
-     */
+    // three RGB fringes hug the rim while the records trade
     private fun drawChromaAura(canvas: Canvas) {
         val a = auraAlpha(auraProgress)
         if (a <= 0.01f) return
@@ -346,6 +382,11 @@ class LiquidGlassDrawable : Drawable() {
         val travel = w + bandW
         val x = rect.left - bandW + specularProgress * travel
 
+        // fade before the tilted band hits the bloody edge
+        val fadeOut = ((1f - specularProgress) / 0.25f).coerceIn(0f, 1f)
+        if (fadeOut <= 0f) return
+        sheenPaint.alpha = (sheenStrength * fadeOut).toInt()
+
         sheenMatrix.setTranslate(x, 0f)
         sheenShader?.setLocalMatrix(sheenMatrix)
 
@@ -366,6 +407,7 @@ class LiquidGlassDrawable : Drawable() {
 
     private fun updateGeometry() {
         if (!geometryDirty) return
+        slabUniformsDirty = true
         rect.set(bounds)
         path.reset()
         path.addRoundRect(rect, cornerRadius, cornerRadius, Path.Direction.CW)
@@ -426,6 +468,53 @@ class LiquidGlassDrawable : Drawable() {
     override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
 
     companion object {
+        private const val SLAB_AGSL = """
+uniform float2 center;
+uniform float2 halfSize;
+uniform float radius;
+uniform float bandWidth;
+uniform float gain;
+uniform float surface;
+layout(color) uniform half4 tint;
+
+half4 main(float2 xy) {
+    float2 p = xy - center;
+    float2 inner = halfSize - max(radius, bandWidth);
+    if (abs(p.x) <= inner.x && abs(p.y) <= inner.y) return half4(tint.rgb * tint.a, tint.a);
+    float2 q = abs(p) - halfSize + radius;
+    float2 outside = max(q, 0.0);
+    float outsideLength = length(outside);
+    float d = outsideLength + min(max(q.x, q.y), 0.0) - radius;
+    float u = clamp(1.0 + d / bandWidth, 0.0, 1.0);
+    float shoulder = smoothstep(0.0, 1.0, u);
+    if (shoulder == 0.0) return half4(tint.rgb * tint.a, tint.a);
+    float2 edgeNormal = outsideLength > 0.001 ? outside / outsideLength
+            : (q.x > q.y ? float2(1.0, 0.0) : float2(0.0, 1.0));
+    edgeNormal *= sign(p);
+    float3 n = float3(edgeNormal * u, sqrt(max(1.0 - u * u, 0.0)));
+
+    // quiet face, shiny shoulder
+    float3 lightDir = normalize(float3(-0.45, -0.60, 0.80));
+    float3 halfway = normalize(lightDir + float3(0.0, 0.0, 1.0));
+    float reflection = pow(max(dot(n, halfway), 0.0), 18.0);
+    float facing = dot(edgeNormal, normalize(float2(-0.45, -0.60)));
+    float fresnel = u * u * u * u;
+    float darkMode = 1.0 - surface;
+    float highlight = gain * shoulder * (mix(0.12, 0.20, darkMode) * reflection
+            + mix(0.06, 0.10, darkMode) * fresnel * max(facing, 0.0));
+    float shade = gain * shoulder * mix(0.045, 0.13, darkMode) * max(-facing, 0.0);
+
+    // light glass needs tint or dark wallpaper eats it
+    float clearK = mix(0.18, 0.55, darkMode);
+    half a = tint.a * half(1.0 - clearK * shoulder * min(gain, 1.0));
+    half4 col = half4(tint.rgb * a, a);
+    half darkAlpha = half(clamp(shade, 0.0, 0.22));
+    col = half4(col.rgb * (1.0 - darkAlpha), darkAlpha + col.a * (1.0 - darkAlpha));
+    half lightAlpha = half(clamp(highlight, 0.0, 0.32));
+    return half4(half3(lightAlpha) + col.rgb * (1.0 - lightAlpha),
+                 lightAlpha + col.a * (1.0 - lightAlpha));
+}
+"""
         private const val DEFAULT_GRAIN_ALPHA = 0x12
         private const val NOISE_SIZE = 96
 

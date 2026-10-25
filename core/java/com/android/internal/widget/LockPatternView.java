@@ -106,6 +106,8 @@ public class LockPatternView extends View {
     private final Paint mPaint = new Paint();
     @UnsupportedAppUsage
     private final Paint mPathPaint = new Paint();
+    private boolean mLiquidPatternEnabled;
+    private LiquidPatternRenderer mLiquidPattern;
 
     /**
      * How many milliseconds we spend animating each circle of a lock pattern
@@ -823,6 +825,7 @@ public class LockPatternView extends View {
      * Reset all pattern state.
      */
     private void resetPattern() {
+        if (mLiquidPattern != null) mLiquidPattern.reset();
         if (mKeepDotActivated && !mPattern.isEmpty()) {
             resetPatternCellSize();
         }
@@ -1550,11 +1553,7 @@ public class LockPatternView extends View {
         mKeepDotActivated = keepDotActivated;
     }
 
-    /**
-     * Set dot sizes. Also resets the radius of every cell state to the new default dot
-     * size so idle dots are drawn at the updated size; otherwise the cell radii are
-     * only refreshed by the dot activation/deactivation animations.
-     */
+    // Reset idle radii too, or the old dot size hangs around like a bad smell.
     public void setDotSizes(int dotSizeDp, int dotSizeActivatedDp) {
         mDotSize = dotSizeDp;
         mDotSizeActivated = dotSizeActivatedDp;
@@ -1568,6 +1567,16 @@ public class LockPatternView extends View {
     public void setPathWidth(int pathWidthDp) {
         mPathWidth = pathWidthDp;
         mPathPaint.setStrokeWidth(mPathWidth);
+    }
+
+    // Opt-in, so Settings and app-owned pattern widgets don't get surprise goo.
+    public void setLiquidPatternEnabled(boolean enabled) {
+        mLiquidPatternEnabled = enabled;
+        if (enabled && mLiquidPattern == null) {
+            mLiquidPattern = new LiquidPatternRenderer(getResources().getDisplayMetrics().density);
+        }
+        if (mLiquidPattern != null) mLiquidPattern.reset();
+        invalidate();
     }
 
     private float getCenterXForColumn(int column) {
@@ -1629,15 +1638,18 @@ public class LockPatternView extends View {
         final Path currentPath = mCurrentPath;
         currentPath.rewind();
 
-        // TODO: the path should be created and cached every time we hit-detect a cell
-        // only the last segment of the path should be computed here
-        // draw the path of the pattern (unless we are in stealth mode)
+        // Stealth still means no line, liquid or otherwise.
         final boolean drawWrongPath = mPatternDisplayMode == DisplayMode.Wrong && mShowErrorPath;
         final boolean drawPath = (!mInStealthMode && mPatternDisplayMode != DisplayMode.Wrong)
                 || drawWrongPath;
 
         if (drawPath && !mFadeClear) {
             mPathPaint.setColor(getCurrentColor(true /* partOfPattern */));
+            mPatternPath.rewind();
+            if (mLiquidPatternEnabled) {
+                mLiquidPattern.update(mInProgressX, mInProgressY,
+                        SystemClock.elapsedRealtime(), mPatternInProgress);
+            }
 
             boolean anyCircles = false;
             float lastX = 0f;
@@ -1646,9 +1658,7 @@ public class LockPatternView extends View {
             for (int i = 0; i < count; i++) {
                 Cell cell = pattern.get(i);
 
-                // only draw the part of the pattern stored in
-                // the lookup table (this is only different in the case
-                // of animation).
+                // Playback only draws the dots it has reached.
                 if (!drawLookup[cell.row][cell.column]) {
                     break;
                 }
@@ -1675,10 +1685,8 @@ public class LockPatternView extends View {
                     drawLineSegment(canvas, /* startX = */ lastX, /* startY = */ lastY, endX, endY,
                             mLineFadeStart[i], elapsedRealtime);
 
-                    Path tempPath = new Path();
-                    tempPath.moveTo(lastX, lastY);
-                    tempPath.lineTo(centerX, centerY);
-                    mPatternPath.addPath(tempPath);
+                    mPatternPath.moveTo(lastX, lastY);
+                    mPatternPath.lineTo(centerX, centerY);
                 }
                 lastX = centerX;
                 lastY = centerY;
@@ -1687,13 +1695,19 @@ public class LockPatternView extends View {
             // draw last in progress section
             if ((mPatternInProgress || mPatternDisplayMode == DisplayMode.Animate)
                     && anyCircles) {
-                currentPath.rewind();
-                currentPath.moveTo(lastX, lastY);
-                currentPath.lineTo(mInProgressX, mInProgressY);
-
                 mPathPaint.setAlpha((int) (calculateLastSegmentAlpha(
                         mInProgressX, mInProgressY, lastX, lastY) * 255f));
-                canvas.drawPath(currentPath, mPathPaint);
+                if (mLiquidPatternEnabled) {
+                    if (mLiquidPattern.draw(canvas, mPathPaint, lastX, lastY,
+                            mInProgressX, mInProgressY, 0, true)) {
+                        postInvalidateOnAnimation();
+                    }
+                } else {
+                    currentPath.rewind();
+                    currentPath.moveTo(lastX, lastY);
+                    currentPath.lineTo(mInProgressX, mInProgressY);
+                    canvas.drawPath(currentPath, mPathPaint);
+                }
             }
         }
 
@@ -1731,6 +1745,18 @@ public class LockPatternView extends View {
 
     private void drawLineSegment(Canvas canvas, float startX, float startY, float endX, float endY,
             long lineFadeStart, long elapsedRealtime) {
+        if (mLiquidPatternEnabled) {
+            long age = Math.max(0, elapsedRealtime - lineFadeStart);
+            boolean fading = mFadePattern && mPatternDisplayMode != DisplayMode.Wrong;
+            float fade = fading ? Math.max(0f, Math.min(1f,
+                    (float) (age - mLineFadeOutAnimationDelayMs) /
+                            Math.max(1, mLineFadeOutAnimationDurationMs))) : 0f;
+            mPathPaint.setAlpha(Math.round(255f * (1f - fade)));
+            boolean settling = mLiquidPattern.draw(canvas, mPathPaint,
+                    startX, startY, endX, endY, age, false);
+            if (settling || (fading && fade < 1f)) postInvalidateOnAnimation();
+            return;
+        }
         float fadeAwayProgress;
         final boolean drawWrongPath = mPatternDisplayMode == DisplayMode.Wrong && mShowErrorPath;
         if (mFadePattern && !drawWrongPath) {

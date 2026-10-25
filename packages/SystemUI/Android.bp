@@ -724,6 +724,7 @@ android_library {
     ],
     static_libs: [
         "SystemUI-res",
+        "petalos-config",
         "WifiTrackerLib",
         "PlatformAnimationLib",
         "PlatformMotionTestingCompose",

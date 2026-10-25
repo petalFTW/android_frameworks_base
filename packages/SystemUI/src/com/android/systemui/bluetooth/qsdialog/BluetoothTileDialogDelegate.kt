@@ -19,6 +19,7 @@ package com.android.systemui.bluetooth.qsdialog
 import android.os.Bundle
 import android.view.LayoutInflater
 import com.android.internal.logging.UiEventLogger
+import com.android.internal.graphics.drawable.PetalGlassDrawable
 import com.android.systemui.bluetooth.ui.viewModel.BluetoothDetailsContentViewModel
 import com.android.systemui.qs.flags.QsDetailedView
 import com.android.systemui.res.R
@@ -73,6 +74,7 @@ constructor(
             accessibilityPaneTitle = context.getText(R.string.accessibility_desc_quick_settings)
             dialog.setContentView(this)
         }
+        dialog.window?.let { PetalGlassDrawable.applyToWindow(it) }
 
         contentManager =
             bluetoothDetailsContentManagerFactory.create(

@@ -22,6 +22,7 @@ import com.android.systemui.keyguard.CustomizationProvider;
 import com.android.systemui.petalos.dagger.PetalCdPlayerModule;
 import com.android.systemui.petalos.dagger.PetalClockStyleModule;
 import com.android.systemui.petalos.dagger.PetalScreenDitheringModule;
+import com.android.systemui.petalos.dagger.PetalServiceProviderModule;
 import com.android.systemui.petalos.dagger.PetalDepthModule;
 import com.android.systemui.petalos.dagger.PetalMediaCoverModule;
 import com.android.systemui.settings.MultiUserUtilsModule;
@@ -46,6 +47,7 @@ import dagger.Subcomponent;
         PetalCdPlayerModule.class,
         PetalClockStyleModule.class,
         PetalScreenDitheringModule.class,
+        PetalServiceProviderModule.class,
         PetalDepthModule.class,
         PetalMediaCoverModule.class,
         QsFrameTranslateModule.class,
@@ -72,4 +74,3 @@ public interface ReferenceSysUIComponent extends SysUIComponent {
      */
     void inject(CustomizationProvider customizationProvider);
 }
-

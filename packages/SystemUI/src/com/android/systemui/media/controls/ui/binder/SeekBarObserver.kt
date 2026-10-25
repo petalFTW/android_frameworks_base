@@ -96,7 +96,20 @@ open class SeekBarObserver(private val holder: MediaViewHolder) :
     /** Updates seek bar views when the data model changes. */
     @UiThread
     override fun onChanged(data: SeekBarViewModel.Progress) {
+        holder.petalEqualizer.active = data.playing
         val progressDrawable = holder.seekBar.progressDrawable as? SquigglyProgress
+        val lock = holder.player.getTag(R.id.petal_media_cover) ==
+            com.android.systemui.petalos.PetalMediaStyle.Lockscreen
+        val mini = holder.player.getTag(R.id.petal_media_cover) ==
+            com.android.systemui.petalos.PetalMediaStyle.Mini &&
+            com.android.systemui.petalos.PetalQsSkin.isEnabled(holder.player.context)
+        val petal = com.android.systemui.petalos.PetalQsSkin.isEnabled(holder.player.context) || lock
+        if (petal) {
+            progressDrawable?.lineAmplitude = 0f
+            progressDrawable?.strokeWidth = (if (mini) 2f else 6f) * holder.player.resources.displayMetrics.density
+        }
+        holder.petalElapsed.text = if (data.enabled) formatTimeLabel(data.elapsedTime ?: 0) else ""
+        holder.petalDuration.text = if (data.enabled) formatTimeLabel(data.duration) else ""
         if (!data.enabled) {
             if (holder.seekBar.maxHeight != seekBarDisabledHeight) {
                 holder.seekBar.maxHeight = seekBarDisabledHeight
@@ -115,10 +128,10 @@ open class SeekBarObserver(private val holder: MediaViewHolder) :
         playingStateLogger.log("${data.playing}")
         listeningStateLogger.log("${data.listening}")
 
-        holder.seekBar.thumb.alpha = if (data.seekAvailable) 255 else 0
-        holder.seekBar.isEnabled = data.seekAvailable
+        holder.seekBar.thumb.alpha = if (data.seekAvailable && !mini) 255 else 0
+        holder.seekBar.isEnabled = data.seekAvailable && !mini
         progressDrawable?.animate =
-            data.playing && !data.scrubbing && animationEnabled && data.listening
+            data.playing && !data.scrubbing && animationEnabled && data.listening && !petal
         progressDrawable?.transitionEnabled = !data.seekAvailable
 
         if (holder.seekBar.maxHeight != seekBarEnabledMaxHeight) {
@@ -190,6 +203,9 @@ open class SeekBarObserver(private val holder: MediaViewHolder) :
         val leftPadding = holder.seekBar.paddingLeft
         val rightPadding = holder.seekBar.paddingRight
         val bottomPadding = holder.seekBar.paddingBottom
-        holder.seekBar.setPadding(leftPadding, padding, rightPadding, bottomPadding)
+        val ribbon = holder.player.getTag(R.id.petal_media_cover) ==
+            com.android.systemui.petalos.PetalMediaStyle.Lockscreen
+        holder.seekBar.setPadding(leftPadding, if (ribbon) 0 else padding, rightPadding,
+            if (ribbon) 0 else bottomPadding)
     }
 }

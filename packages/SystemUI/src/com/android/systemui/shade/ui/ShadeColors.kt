@@ -28,8 +28,8 @@ object ShadeColors {
     }
 
     private fun neutralPanelBase(context: Context): Int =
-        if (com.android.systemui.petalos.PetalQsSkin.isDark(context)) 0xFF181818.toInt()
-        else 0xFFF5F5F5.toInt()
+        if (com.android.systemui.petalos.PetalQsSkin.isDark(context)) 0xFF0A0B10.toInt()
+        else 0xFFF6F6FA.toInt()
 
     /** A single achromatic veil over the shared QS and notification blur. */
     @JvmStatic

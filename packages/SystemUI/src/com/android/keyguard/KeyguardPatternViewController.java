@@ -42,6 +42,7 @@ import com.android.systemui.bouncer.ui.helper.BouncerHapticPlayer;
 import com.android.systemui.classifier.FalsingClassifier;
 import com.android.systemui.classifier.FalsingCollector;
 import com.android.systemui.flags.FeatureFlags;
+import com.android.systemui.petalos.PetalPatternStyle;
 import com.android.systemui.res.R;
 import com.android.systemui.statusbar.policy.DevicePostureController;
 import com.android.systemui.user.domain.interactor.SelectedUserInteractor;
@@ -180,6 +181,7 @@ public class KeyguardPatternViewController
                 getKeyguardSecurityCallback().reportUnlockAttempt(userId, true, 0);
                 if (dismissKeyguard) {
                     mLockPatternView.setDisplayMode(LockPatternView.DisplayMode.Correct);
+                    PetalPatternStyle.fadeOutGlass(mLockPatternView);
                     mLatencyTracker.onActionStart(LatencyTracker.ACTION_LOCKSCREEN_UNLOCK);
                     Log.i(TAG,
                             "StartUnlock. "
@@ -298,6 +300,7 @@ public class KeyguardPatternViewController
 
     @Override
     public void reset() {
+        PetalPatternStyle.resetGlass(mLockPatternView);
         // reset lock pattern
         mLockPatternView.setInStealthMode(!mLockPatternUtils.isVisiblePatternEnabled(
                 mSelectedUserInteractor.getSelectedUserId()));

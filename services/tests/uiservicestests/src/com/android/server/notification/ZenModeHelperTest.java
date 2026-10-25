@@ -7054,6 +7054,28 @@ public class ZenModeHelperTest extends UiServiceTestCase {
     }
 
     @Test
+    public void readXml_petalTunerSessionDoesNotReactivateAfterReboot() throws Exception {
+        ZenRule tuner = newImplicitZenRule("org.petalos.petaltuner", Instant.now(), null);
+        tuner.zenMode = ZEN_MODE_ALARMS;
+        tuner.condition = new Condition(tuner.conditionId, "Playing", STATE_TRUE);
+        ZenRule other = newImplicitZenRule(CUSTOM_PKG_NAME, Instant.now(), null);
+        other.zenMode = ZEN_MODE_ALARMS;
+        other.condition = new Condition(other.conditionId, "Active", STATE_TRUE);
+        mZenModeHelper.mConfig.automaticRules.put(tuner.id, tuner);
+        mZenModeHelper.mConfig.automaticRules.put(other.id, other);
+
+        ByteArrayOutputStream xmlBytes = writeXmlAndPurge(ZenModeConfig.XML_VERSION_MODES_UI);
+        mZenModeHelper.readXml(getParserForByteStream(xmlBytes), false, UserHandle.USER_ALL, null);
+
+        ZenRule restored = mZenModeHelper.mConfig.automaticRules.get(tuner.id);
+        assertThat(restored).isNotNull();
+        assertThat(restored.enabled).isTrue();
+        assertThat(restored.condition).isNull();
+        assertThat(restored.isActive()).isFalse();
+        assertThat(mZenModeHelper.mConfig.automaticRules.get(other.id).isActive()).isTrue();
+    }
+
+    @Test
     public void readXml_withEnabledEventsRule_keepsIt() throws Exception {
         ZenRule rule = new ZenRule();
         rule.id = ZenModeConfig.EVENTS_OBSOLETE_RULE_ID;

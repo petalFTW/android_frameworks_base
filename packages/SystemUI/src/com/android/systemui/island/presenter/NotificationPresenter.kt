@@ -18,6 +18,7 @@ package com.android.systemui.island.presenter
 
 import android.app.PendingIntent
 import android.app.RemoteInput
+import android.app.Notification
 import android.content.Context
 import android.content.Intent
 import android.content.res.Configuration
@@ -28,6 +29,7 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.Icon
 import android.os.Bundle
+import android.service.notification.StatusBarNotification
 import android.text.TextUtils
 import android.util.Log
 import android.view.Gravity
@@ -45,6 +47,7 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import com.android.systemui.island.IslandGeometry
+import org.petalos.config.PetalConfig
 
 // an action rendered as a pill
 data class IslandNotifAction(
@@ -79,6 +82,7 @@ data class NotificationPayload(
     val whenMillis: Long,
     // otp pulled from the text, gets a copy button
     val otpCode: String? = null,
+    val sourceNotification: StatusBarNotification? = null,
 )
 
 // notif card: icon when collapsed, full card when open
@@ -96,6 +100,8 @@ class NotificationPresenter(
     private var replyAction: IslandNotifAction? = null
     private var replyInput: EditText? = null
     private var actionsRow: View? = null
+    private val redaction = IslandRedactionBinder(context, payload.packageName,
+        payload.sourceNotification) { updateReplyHint() }
 
     override fun setHost(host: IslandPresenter.Host?) {
         this.host = host
@@ -151,6 +157,7 @@ class NotificationPresenter(
 
         val label = TextView(context).apply {
             text = payload.appLabel
+            keepIdentityWhenContentRedacted()
             setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 12f)
             typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD)
             maxLines = 1
@@ -161,6 +168,7 @@ class NotificationPresenter(
             ViewGroup.LayoutParams.WRAP_CONTENT,
         ).apply { marginStart = geometry.capsuleGap }
         row.addView(label, textLp)
+        redaction.bind(row)
         container.addView(row)
 
         val labelWidth = label.paint.measureText(payload.appLabel.toString()).toInt()
@@ -220,6 +228,7 @@ class NotificationPresenter(
         header.addView(
             TextView(context).apply {
                 text = payload.appLabel
+                keepIdentityWhenContentRedacted()
                 setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 12f)
                 typeface = Typeface.create("sans-serif", Typeface.BOLD)
                 setTextColor(secondary)
@@ -235,6 +244,7 @@ class NotificationPresenter(
             header.addView(
                 TextView(context).apply {
                     text = "·  $timeStr"
+                    keepIdentityWhenContentRedacted()
                     setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 11f)
                     typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
                     setTextColor(secondary)
@@ -264,6 +274,10 @@ class NotificationPresenter(
         // sender or title
         val headline = TextView(context).apply {
             text = payload.sender ?: payload.title ?: payload.appLabel
+            if (payload.sender != null || payload.title == null ||
+                payload.sourceNotification?.notification?.isStyle(Notification.MessagingStyle::class.java) == true) {
+                keepIdentityWhenContentRedacted()
+            }
             setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15f)
             typeface = Typeface.create("sans-serif", Typeface.BOLD)
             setTextColor(primary)
@@ -396,18 +410,7 @@ class NotificationPresenter(
                     setOnClickListener { onActionClicked(action) }
                 }
 
-                // icon is optional
-                val actionIcon = action.icon?.loadDrawable(context)
-                if (actionIcon != null) {
-                    val iv = ImageView(context).apply {
-                        setImageDrawable(actionIcon)
-                        setColorFilter(accent)
-                    }
-                    chip.addView(iv, LinearLayout.LayoutParams(
-                        geometry.dp(14f), geometry.dp(14f),
-                    ).apply { marginEnd = geometry.dp(5f) })
-                }
-
+                // apps ship whatever icon in actions, half of them make no sense. text only
                 chip.addView(
                     TextView(context).apply {
                         text = action.title
@@ -441,6 +444,7 @@ class NotificationPresenter(
         }
 
         expandedRoot = root
+        redaction.bind(root)
         container.addView(
             root,
             FrameLayout.LayoutParams(
@@ -583,7 +587,7 @@ class NotificationPresenter(
         }
     }
 
-    // --- Inline reply -------------------------------------------------------------------------
+    // Inline reply.
 
     /** Swap the action row for a reply text field. */
     private fun enterReplyMode(action: IslandNotifAction) {
@@ -646,6 +650,7 @@ class NotificationPresenter(
             }
         }
         replyInput = input
+        updateReplyHint()
         row.addView(
             input,
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
@@ -748,10 +753,17 @@ class NotificationPresenter(
     }
 
     override fun onDestroy() {
+        redaction.destroy()
         exitReplyMode()
         textView = null
         expandedRoot = null
         actionsRow = null
+    }
+
+    private fun updateReplyHint() {
+        replyInput?.hint = if (redaction.mode != PetalConfig.WORK_MODE_OFF) {
+            context.getString(com.android.systemui.res.R.string.petal_work_mode_reply_hint)
+        } else replyAction?.title
     }
 
     private fun isDarkTheme(): Boolean =

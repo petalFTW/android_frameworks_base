@@ -109,6 +109,31 @@ public class BlurAggregatorTest {
     }
 
     @Test
+    public void testRefractionWithoutBlurPropagatesAndClears() {
+        mDrawable.setBlurRadius(0);
+        mAggregator.getBlurRegionsCopyForRT();
+        mDrawable.setRefraction(16f, 6f);
+        assertTrue(mAggregator.hasRegions());
+        final BlurRegion[] regions = mAggregator.getBlurRegionsCopyForRT();
+        mDrawable.mPositionUpdateListener.positionChanged(TEST_FRAME_NUMBER, 10, 20, 110, 60);
+        final float[][] dispatched = mAggregator.getBlurRegionsForFrameLocked(
+                TEST_FRAME_NUMBER, regions, true);
+        assertEquals(0f, dispatched[0][0]);
+        assertEquals(10f, dispatched[0][2]);
+        assertEquals(16f, dispatched[0][10]);
+        assertEquals(6f, dispatched[0][11]);
+
+        mDrawable.setRefraction(16f, 6f);
+        assertFalse(mAggregator.hasUpdates());
+        mDrawable.setRefraction(0f, 0f);
+        assertTrue(mAggregator.hasUpdates());
+        assertFalse(mAggregator.hasRegions());
+        // UI changes must not mutate the parameters queued for an earlier render frame.
+        assertEquals(16f, regions[0].refractionStrength);
+        assertEquals(6f, regions[0].refractionBand);
+    }
+
+    @Test
     public void testCornerRadiusUpdatePropagatesToRenderThreadIfNeeded() {
         mDrawable.setCornerRadius(1f, 2f, 3f, 4f);
         assertTrue(mAggregator.hasUpdates());

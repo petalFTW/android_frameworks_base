@@ -230,6 +230,10 @@ public class CollapsedStatusBarFragment extends Fragment implements CommandQueue
      * otherwise.
      */
     private boolean mHasPrimaryOngoingActivity;
+    // petalOS: shade settle latch for shouldHideStatusBar, see down there
+    private boolean mShadeRecentlyOpen;
+    private long mShadeLastOpenElapsed;
+    private boolean mPetalSettlePosted;
 
     /**
      * True if there's a secondary active ongoing activity that should be showing a chip and false
@@ -753,7 +757,33 @@ public class CollapsedStatusBarFragment extends Fragment implements CommandQueue
         boolean isDefaultDisplay = getContext().getDisplayId() == Display.DEFAULT_DISPLAY;
         boolean shouldHideForCurrentDisplay =
                 !StatusBarConnectedDisplays.isEnabled() || isDefaultDisplay;
-        if (!mShadeExpansionStateManager.isClosed()
+        // petalOS: the expansion fraction can kiss zero for a frame while QS settles, which
+        // flashes the bar back over the panel. once hidden, stay hidden till it settles shut
+        boolean closedNow = mShadeExpansionStateManager.isClosed();
+        if (!closedNow) {
+            mShadeLastOpenElapsed = android.os.SystemClock.elapsedRealtime();
+            if (!mShadeRecentlyOpen) {
+                mShadeRecentlyOpen = true;
+                mPetalSettlePosted = false;
+            }
+        } else if (mShadeRecentlyOpen) {
+            if (android.os.SystemClock.elapsedRealtime() - mShadeLastOpenElapsed > 250) {
+                mShadeRecentlyOpen = false;
+            } else if (!mPetalSettlePosted) {
+                // nobody may recompute once things settle, book a re-check ourselves
+                View petalView = getView();
+                if (petalView == null) {
+                    mPetalSettlePosted = false;
+                } else {
+                    mPetalSettlePosted = true;
+                    petalView.postDelayed(() -> {
+                        mPetalSettlePosted = false;
+                        mCommandQueue.recomputeDisableFlags(getContext().getDisplayId(), false);
+                    }, 300);
+                }
+            }
+        }
+        if ((!closedNow || mShadeRecentlyOpen)
                 && mPanelExpansionInteractor.shouldHideStatusBarIconsWhenExpanded()
                 //TODO(b/373310629): for now the shade only shows on the main display.
                 // Remove this once there is a display aware API for the shade.

@@ -1,0 +1,13 @@
+package: "android.app"
+container: "system"
+
+flag {
+    namespace: "petal_os"
+    name: "petal_reported_state_overrides"
+    is_exported: true
+    description: "Expose the caller-scoped presentation-only state override bridge to framework modules."
+    bug: "0"
+    metadata {
+        purpose: PURPOSE_FEATURE
+    }
+}

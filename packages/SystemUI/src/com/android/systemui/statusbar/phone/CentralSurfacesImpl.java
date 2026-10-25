@@ -1476,6 +1476,8 @@ public class CentralSurfacesImpl implements CoreStartable, CentralSurfaces {
         IntentFilter filter = new IntentFilter();
         filter.addAction(Intent.ACTION_CLOSE_SYSTEM_DIALOGS);
         filter.addAction(Intent.ACTION_SCREEN_OFF);
+        filter.addAction(Intent.ACTION_SCREEN_ON);
+        filter.addAction(android.os.PowerManager.ACTION_POWER_SAVE_WHITELIST_CHANGED);
         filter.addAction(lineageos.content.Intent.ACTION_SCREEN_CAMERA_GESTURE);
         mBroadcastDispatcher.registerReceiver(mBroadcastReceiver, filter, null, UserHandle.ALL);
     }
@@ -1939,6 +1941,7 @@ public class CentralSurfacesImpl implements CoreStartable, CentralSurfaces {
             Trace.beginSection("CentralSurfaces#onReceive");
             if (DEBUG) Log.v(TAG, "onReceive: " + intent);
             String action = intent.getAction();
+            relayIdlePowerEvent(action);
             String reason = intent.getStringExtra(SYSTEM_DIALOG_REASON_KEY);
             if (Intent.ACTION_CLOSE_SYSTEM_DIALOGS.equals(action)) {
                 if (!keyboardShortcutHelperRewrite()) {
@@ -1992,6 +1995,26 @@ public class CentralSurfacesImpl implements CoreStartable, CentralSurfaces {
             Trace.endSection();
         }
     };
+
+    private void relayIdlePowerEvent(String action) {
+        final String target;
+        if (Intent.ACTION_SCREEN_OFF.equals(action)) {
+            target = "org.petalos.power.action.SCREEN_OFF";
+        } else if (Intent.ACTION_SCREEN_ON.equals(action)) {
+            target = "org.petalos.power.action.SCREEN_ON";
+        } else if (android.os.PowerManager.ACTION_POWER_SAVE_WHITELIST_CHANGED.equals(action)) {
+            target = "org.petalos.power.action.RECONCILE_IDLE_POLICY";
+        } else {
+            return;
+        }
+        // Framework screen broadcasts are registered-only; wake the manifest helper explicitly.
+        try {
+            mContext.sendBroadcastAsUser(new Intent(target).setClassName(
+                    "org.petalos.power", "org.petalos.power.IdlePowerReceiver"), UserHandle.ALL);
+        } catch (RuntimeException failure) {
+            Log.w(TAG, "Unable to deliver idle power event", failure);
+        }
+    }
 
     /**
      * Reload some of our resources when the configuration changes.
@@ -2506,6 +2529,7 @@ public class CentralSurfacesImpl implements CoreStartable, CentralSurfaces {
     @Override
     public void setBouncerShowing(boolean bouncerShowing) {
         mBouncerShowing = bouncerShowing;
+        mNotificationShadeDepthControllerLazy.get().setPrimaryBouncerShowing(bouncerShowing);
         mKeyguardBypassController.setBouncerShowing(bouncerShowing);
         mPulseExpansionHandler.setBouncerShowing(bouncerShowing);
         setBouncerShowingForStatusBarComponents(bouncerShowing);

@@ -16,12 +16,18 @@
 
 package com.android.systemui.qs.composefragment.ui
 
+import androidx.compose.animation.core.LinearEasing
 import com.android.compose.animation.scene.TransitionBuilder
 import com.android.systemui.qs.composefragment.SceneKeys
+import com.android.systemui.petalos.PetalQsFadeInEasing
 
-fun TransitionBuilder.toEditMode() {
-    fractionRange(start = 0.5f) { fade(SceneKeys.EditMode.rootElementKey) }
-    fractionRange(end = 0.5f) {
+fun TransitionBuilder.toEditMode(petalEnabled: Boolean = false) {
+    val entering = petalEnabled && transition.toContent == SceneKeys.EditMode
+    fractionRange(start = 0.5f, easing = if (entering) PetalQsFadeInEasing else LinearEasing) {
+        fade(SceneKeys.EditMode.rootElementKey)
+    }
+    fractionRange(end = 0.5f,
+        easing = if (petalEnabled && !entering) PetalQsFadeInEasing else LinearEasing) {
         fade(SceneKeys.QuickQuickSettings.rootElementKey)
         fade(SceneKeys.QuickSettings.rootElementKey)
     }

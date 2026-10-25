@@ -6850,6 +6850,11 @@ public final class Settings {
             PUBLIC_SETTINGS.add(USER_ROTATION);
             PUBLIC_SETTINGS.add(DTMF_TONE_WHEN_DIALING);
             PUBLIC_SETTINGS.add(SOUND_EFFECTS_ENABLED);
+            PUBLIC_SETTINGS.add("petal_tap_sound");
+            PUBLIC_SETTINGS.add("petal_lock_sound");
+            PUBLIC_SETTINGS.add("petal_unlock_sound");
+            PUBLIC_SETTINGS.add("petal_dialpad_sound");
+            PUBLIC_SETTINGS.add("petal_charging_stopped_sound");
             PUBLIC_SETTINGS.add(HAPTIC_FEEDBACK_ENABLED);
             PUBLIC_SETTINGS.add(SHOW_WEB_SUGGESTIONS);
             PUBLIC_SETTINGS.add(VIBRATE_WHEN_RINGING);
@@ -7291,6 +7296,16 @@ public final class Settings {
      * or by calling the "put" methods that this class contains.
      */
     public static final class Secure extends NameValueTable {
+
+        /** Versioned, identity-pinned per-user presentation policy. Not readable by ordinary apps.
+         * @hide
+         */
+        public static final String PETAL_SPOOFED_PACKAGES = "petal_spoofed_packages";
+
+        /** Packages whose PetalPower restoration needs retry. Restricted diagnostic state.
+         * @hide
+         */
+        public static final String PETAL_SPOOF_POWER_ERRORS = "petal_spoof_power_errors";
         // NOTE: If you add new settings here, be sure to add them to
         // com.android.providers.settings.SettingsProtoDumpUtil#dumpProtoSecureSettingsLocked.
 

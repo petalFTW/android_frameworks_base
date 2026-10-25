@@ -32,7 +32,7 @@ import com.android.systemui.statusbar.notification.collection.NotificationEntry
 import com.android.systemui.statusbar.notification.collection.notifcollection.NotifCollectionListener
 import javax.inject.Inject
 
-// watches call state and the dialer notif, feeds caller info and the answer buttons
+// Call apps all post this stuff differently, because of course they do.
 class CallSignalSource @Inject constructor(
     @Application private val context: Context,
     private val notifPipeline: NotifPipeline,
@@ -41,11 +41,7 @@ class CallSignalSource @Inject constructor(
     private val telephonyManager = context.getSystemService(TelephonyManager::class.java)
     private var started = false
     private var callState = TelephonyManager.CALL_STATE_IDLE
-    private var callStyle: Notification? = null
-    private var callStyleKey: String? = null
-    // the dialer posts a plain call notif with no CallStyle, so watch that too
-    private var dialerNotif: Notification? = null
-    private var dialerKey: String? = null
+    private val callNotifications = linkedMapOf<String, NotificationEntry>()
 
     private val telephonyCallback =
         object : TelephonyCallback(), TelephonyCallback.CallStateListener {
@@ -58,24 +54,13 @@ class CallSignalSource @Inject constructor(
     private val collectionListener =
         object : NotifCollectionListener {
             override fun onEntryAdded(entry: NotificationEntry) {
-                onCallStyle(entry)
-                onDialerNotif(entry)
+                onCallNotification(entry)
             }
             override fun onEntryUpdated(entry: NotificationEntry) {
-                onCallStyle(entry)
-                onDialerNotif(entry)
+                onCallNotification(entry)
             }
             override fun onEntryRemoved(entry: NotificationEntry, reason: Int) {
-                if (entry.key == callStyleKey) {
-                    callStyle = null
-                    callStyleKey = null
-                    update()
-                }
-                if (entry.key == dialerKey) {
-                    dialerNotif = null
-                    dialerKey = null
-                    update()
-                }
+                if (callNotifications.remove(entry.key) != null) update()
             }
         }
 
@@ -83,52 +68,54 @@ class CallSignalSource @Inject constructor(
         if (started) return
         started = true
         notifPipeline.addCollectionListener(collectionListener)
-        notifPipeline.allNotifs.forEach {
-            onCallStyle(it)
-            onDialerNotif(it)
-        }
+        notifPipeline.allNotifs.forEach(::onCallNotification)
         runCatching {
             telephonyManager.registerTelephonyCallback(context.mainExecutor, telephonyCallback)
         }
     }
 
-    private fun onCallStyle(entry: NotificationEntry) {
+    private fun onCallNotification(entry: NotificationEntry) {
         val n = entry.sbn.notification
-        if (!n.isStyle(Notification.CallStyle::class.java)) {
-            if (entry.key == callStyleKey) {
-                callStyle = null
-                callStyleKey = null
-                update()
-            }
+        val isActiveCall = n.isStyle(Notification.CallStyle::class.java) ||
+            (n.category == Notification.CATEGORY_CALL &&
+                (n.flags and Notification.FLAG_ONGOING_EVENT != 0 || n.fullScreenIntent != null))
+        if (!isActiveCall || n.isGroupSummary) {
+            if (callNotifications.remove(entry.key) != null) update()
             return
         }
-        callStyle = n
-        callStyleKey = entry.key
-        update()
-    }
-
-    private fun onDialerNotif(entry: NotificationEntry) {
-        val sbn = entry.sbn
-        val defaultDialer = context.getSystemService(android.telecom.TelecomManager::class.java)
-            ?.defaultDialerPackage
-        if (sbn.packageName != defaultDialer && sbn.packageName != DIALER_PKG) return
-        if (sbn.notification.category != Notification.CATEGORY_CALL) return
-        dialerNotif = sbn.notification
-        dialerKey = entry.key
+        callNotifications.remove(entry.key)
+        callNotifications[entry.key] = entry
         update()
     }
 
     private fun update() {
         val id = "call:telecom"
-        val styleState = when (callStyle?.extras?.getInt(Notification.EXTRA_CALL_TYPE)) {
+        val defaultDialer = context.getSystemService(android.telecom.TelecomManager::class.java)
+            ?.defaultDialerPackage
+        val dialerEntry = callNotifications.values.lastOrNull {
+            it.sbn.packageName == defaultDialer || it.sbn.packageName == DIALER_PKG
+        }
+        val entry = if (callState != TelephonyManager.CALL_STATE_IDLE) {
+            dialerEntry
+        } else {
+            callNotifications.values.lastOrNull()
+        }
+        val n = entry?.sbn?.notification
+        val styleState = when (n?.extras?.getInt(Notification.EXTRA_CALL_TYPE)) {
             Notification.CallStyle.CALL_TYPE_INCOMING -> TelephonyManager.CALL_STATE_RINGING
             Notification.CallStyle.CALL_TYPE_ONGOING -> TelephonyManager.CALL_STATE_OFFHOOK
-            else -> TelephonyManager.CALL_STATE_IDLE
+            else -> when {
+                n == null -> TelephonyManager.CALL_STATE_IDLE
+                n.fullScreenIntent != null &&
+                    !n.extras.getBoolean(Notification.EXTRA_SHOW_CHRONOMETER) ->
+                    TelephonyManager.CALL_STATE_RINGING
+                else -> TelephonyManager.CALL_STATE_OFFHOOK
+            }
         }
         val effectiveState = if (callState != TelephonyManager.CALL_STATE_IDLE) callState else styleState
         when (effectiveState) {
             TelephonyManager.CALL_STATE_RINGING -> {
-                val payload = buildPayload(incoming = true)
+                val payload = buildPayload(entry, incoming = true)
                 router.emit(
                     IslandSignal(
                         id = id,
@@ -142,7 +129,7 @@ class CallSignalSource @Inject constructor(
                 )
             }
             TelephonyManager.CALL_STATE_OFFHOOK -> {
-                val payload = buildPayload(incoming = false)
+                val payload = buildPayload(entry, incoming = false)
                 router.emit(
                     IslandSignal(
                         id = id,
@@ -159,17 +146,28 @@ class CallSignalSource @Inject constructor(
         }
     }
 
-    private fun buildPayload(incoming: Boolean): CallPayload {
-        val n = callStyle ?: dialerNotif
+    private fun buildPayload(entry: NotificationEntry?, incoming: Boolean): CallPayload {
+        val n = entry?.sbn?.notification
         val extras = n?.extras
-        val person = callStyle?.extras?.getParcelable(Notification.EXTRA_CALL_PERSON, Person::class.java)
-        val name = resolveCallerName(extras, person)
+        val person = extras?.getParcelable(Notification.EXTRA_CALL_PERSON, Person::class.java)
+        val packageName = entry?.sbn?.packageName
+        val appLabel = packageName?.let {
+            runCatching {
+                val pm = context.packageManager
+                pm.getApplicationLabel(pm.getApplicationInfo(it, 0)).toString()
+            }.getOrNull()
+        }
+        val name = resolveCallerName(extras, person, appLabel)
         val subtitle = if (incoming) "Incoming call" else "Ongoing call"
         return CallPayload(
+            sourceNotification = entry?.sbn,
             contentIntent = n?.contentIntent,
             name = name,
             subtitle = subtitle,
             isIncoming = incoming,
+            allowTelecomFallback = packageName == null || packageName == DIALER_PKG ||
+                packageName == context.getSystemService(android.telecom.TelecomManager::class.java)
+                    ?.defaultDialerPackage,
             answerIntent = extras?.getParcelable(
                 Notification.EXTRA_ANSWER_INTENT, android.app.PendingIntent::class.java
             ),
@@ -182,18 +180,48 @@ class CallSignalSource @Inject constructor(
         )
     }
 
-    // try the person first, then the title, then the contacts db
-    private fun resolveCallerName(extras: android.os.Bundle?, person: Person?): String {
-        person?.name?.toString()?.takeIf { it.isNotBlank() }?.let { return it }
-        val title = extras?.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim().orEmpty()
-        if (title.isNotEmpty() && !looksLikeNumber(title)) return title
-        val number = title.ifEmpty { person?.uri?.removePrefix("tel:") ?: "" }
-        lookupContactName(number)?.let { return it }
-        return number.ifEmpty { "Call" }
+    // "Unknown" isn't a bloody contact name; keep digging.
+    private fun resolveCallerName(
+        extras: android.os.Bundle?,
+        person: Person?,
+        appLabel: String?,
+    ): String {
+        val people = extras?.getParcelableArrayList(
+            Notification.EXTRA_PEOPLE_LIST, Person::class.java
+        ) ?: emptyList()
+        val callers = listOfNotNull(person) + people
+        val names = callers.mapNotNull { it.name?.toString()?.trim() }
+        names.firstOrNull { isCallerLabel(it) && !looksLikeNumber(it) }?.let { return it }
+
+        val labels = listOfNotNull(
+            extras?.getCharSequence(Notification.EXTRA_TITLE)?.toString()?.trim(),
+            extras?.getCharSequence(Notification.EXTRA_TITLE_BIG)?.toString()?.trim(),
+            extras?.getCharSequence(Notification.EXTRA_TEXT)?.toString()?.trim(),
+            extras?.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()?.trim(),
+        ) + (extras?.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)
+            ?.map { it.toString().trim() } ?: emptyList())
+        labels.firstOrNull {
+            isCallerLabel(it) && !it.equals(appLabel, ignoreCase = true) && !looksLikeNumber(it)
+        }?.let { return it }
+        val numbers = callers.mapNotNull { it.uri } + names + labels +
+            (extras?.getStringArray(Notification.EXTRA_PEOPLE)?.toList() ?: emptyList())
+        val number = numbers.asSequence()
+            .map { android.net.Uri.decode(it.removePrefix("tel:")).trim() }
+            .firstOrNull(::looksLikeNumber)
+        if (number != null) {
+            lookupContactName(number)?.takeIf { it.isNotBlank() }?.let { return it }
+        }
+        return number ?: "Unknown"
     }
 
-    private fun looksLikeNumber(s: String): Boolean =
-        s.isNotEmpty() && s.all { it.isDigit() || " +()-#*.N".contains(it) }
+    private fun isCallerLabel(value: String): Boolean = value.isNotBlank() &&
+        value.lowercase(java.util.Locale.ROOT) !in NON_CALLER_LABELS
+
+    private fun looksLikeNumber(s: String): Boolean {
+        val number = android.net.Uri.decode(s.removePrefix("tel:")).trim()
+        return number.any { it.isDigit() } &&
+            number.all { it.isDigit() || " +()-#*.N".contains(it) }
+    }
 
     private fun lookupContactName(number: String): String? {
         if (number.isEmpty() || number.none { it.isDigit() }) return null
@@ -210,5 +238,11 @@ class CallSignalSource @Inject constructor(
 
     private companion object {
         const val DIALER_PKG = "com.android.dialer"
+        val NON_CALLER_LABELS = setOf(
+            "unknown", "unknown caller", "unknown number", "incoming call", "ongoing call",
+            "outgoing call", "calling", "calling…", "calling...", "call in progress",
+            "tap to return to call", "incoming voice call", "incoming video call",
+            "voice call", "video call",
+        )
     }
 }

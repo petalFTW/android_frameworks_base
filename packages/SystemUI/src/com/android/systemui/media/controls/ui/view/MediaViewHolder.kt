@@ -47,6 +47,34 @@ class MediaViewHolder constructor(itemView: View) {
 
     // Player information
     val albumView = itemView.requireViewById<ImageView>(R.id.album_art)
+    val petalCover: ImageView = com.android.systemui.petalos.PetalMediaArtworkView(itemView.context).apply {
+        id = R.id.petal_media_cover
+        scaleType = ImageView.ScaleType.CENTER_CROP
+        setBackgroundColor(0x33292932)
+        clipToOutline = true
+        // Faint lift so the tile reads as sitting on the glass, not painted onto it.
+        elevation = 6f * itemView.resources.displayMetrics.density
+        outlineProvider = object : android.view.ViewOutlineProvider() {
+            override fun getOutline(view: View, outline: android.graphics.Outline) {
+                outline.setRoundRect(0, 0, view.width, view.height,
+                    16f * view.resources.displayMetrics.density)
+            }
+        }
+        visibility = View.GONE
+        player.addView(this, 1)
+    }
+    val petalElapsed = petalTimeLabel(R.id.petal_media_elapsed)
+    val petalDuration = petalTimeLabel(R.id.petal_media_duration)
+
+    private fun petalTimeLabel(viewId: Int) = TextView(player.context).apply {
+        id = viewId
+        setTextColor(0xBFFFFFFF.toInt())
+        textSize = 11f
+        gravity = android.view.Gravity.CENTER_VERTICAL or
+            if (viewId == R.id.petal_media_duration) android.view.Gravity.RIGHT else android.view.Gravity.LEFT
+        visibility = View.GONE
+        player.addView(this)
+    }
     val multiRippleView = itemView.requireViewById<MultiRippleView>(R.id.touch_ripple_view)
     val turbulenceNoiseView =
         itemView.requireViewById<TurbulenceNoiseView>(R.id.turbulence_noise_view)
@@ -61,6 +89,60 @@ class MediaViewHolder constructor(itemView: View) {
     val seamlessIcon = itemView.requireViewById<ImageView>(R.id.media_seamless_image)
     val seamlessText = itemView.requireViewById<TextView>(R.id.media_seamless_text)
     val seamlessButton = itemView.requireViewById<View>(R.id.media_seamless_button)
+    val petalEqualizer = com.android.systemui.island.render.EqualizerView(itemView.context).apply {
+        val density = resources.displayMetrics.density
+        id = R.id.petal_media_equalizer
+        barCount = 4
+        setMetrics(2f * density, 2f * density, 16f * density)
+        setBarColor(android.graphics.Color.WHITE)
+        active = false
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        visibility = View.GONE
+        (seamlessButton as? ViewGroup)?.addView(this,
+            android.widget.LinearLayout.LayoutParams((16 * density).toInt(), (16 * density).toInt()))
+    }
+    val petalOutput = android.widget.LinearLayout(itemView.context).apply {
+        val density = resources.displayMetrics.density
+        fun px(dp: Int) = (dp * density).toInt()
+        id = R.id.petal_media_output
+        orientation = android.widget.LinearLayout.HORIZONTAL
+        gravity = android.view.Gravity.CENTER
+        setPadding(px(6), 0, px(6), 0)
+        background = android.graphics.drawable.GradientDrawable().apply {
+            cornerRadius = px(20).toFloat()
+            setColor(0x22FFFFFF)
+            setStroke(px(1), 0x33FFFFFF)
+        }
+        val icon = ImageView(context).apply {
+            setImageResource(com.android.internal.R.drawable.ic_media_seamless)
+            imageTintList = android.content.res.ColorStateList.valueOf(android.graphics.Color.WHITE)
+        }
+        addView(icon, android.widget.LinearLayout.LayoutParams(px(16), px(16)))
+        val label = TextView(context).apply {
+            text = context.getString(R.string.petal_media_output)
+            textSize = 11f
+            setTextColor(android.graphics.Color.WHITE)
+            setSingleLine()
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        addView(label, android.widget.LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+            marginStart = px(4)
+        })
+        contentDescription = context.getString(R.string.petal_media_output)
+        isFocusable = true
+        setOnClickListener { seamless.performClick() }
+        visibility = View.GONE
+        player.addView(this)
+    }
+
+    val petalRibbonWaveform = com.android.systemui.petalos.PetalMediaRibbonWaveform(itemView.context).apply {
+        id = R.id.petal_media_ribbon_waveform
+        contentDescription = context.getString(R.string.petal_media_output)
+        isFocusable = true
+        setOnClickListener { seamless.performClick() }
+        visibility = View.GONE
+        player.addView(this)
+    }
 
     // Suggestions
     val deviceSuggestionContainer =
@@ -144,6 +226,10 @@ class MediaViewHolder constructor(itemView: View) {
 
         val controlsIds: Set<Int> =
             mutableSetOf(
+                    R.id.petal_media_cover,
+                    R.id.petal_media_elapsed,
+                    R.id.petal_media_duration,
+                    R.id.petal_media_output,
                     R.id.icon,
                     R.id.app_name,
                     R.id.header_title,
@@ -164,6 +250,7 @@ class MediaViewHolder constructor(itemView: View) {
                     R.id.media_scrubbing_total_time,
                     R.id.page_left,
                     R.id.page_right,
+                    R.id.petal_media_ribbon_waveform,
                 )
                 .apply {
                     if (enableSuggestedDeviceUi()) {

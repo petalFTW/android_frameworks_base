@@ -42,7 +42,6 @@ import com.android.systemui.log.TouchHandlingViewLogger
 import com.android.systemui.log.core.Logger
 import com.android.systemui.log.dagger.KeyguardBlueprintLog
 import com.android.systemui.log.dagger.LongPressTouchLog
-import com.android.systemui.petalos.PetalUdfpsRippleController
 import com.android.systemui.plugins.FalsingManager
 import com.android.systemui.res.R
 import com.android.systemui.shade.NotificationPanelView
@@ -74,7 +73,6 @@ constructor(
     private val msdlPlayer: Lazy<MSDLPlayer>,
     @LongPressTouchLog private val logBuffer: LogBuffer,
     @KeyguardBlueprintLog blueprintLogBuffer: LogBuffer,
-    private val udfpsRipple: PetalUdfpsRippleController,
 ) : KeyguardSection() {
     private val blueprintLogger = Logger(blueprintLogBuffer, TAG)
     private val deviceEntryIconViewId = R.id.device_entry_icon_view
@@ -87,11 +85,7 @@ constructor(
                     null,
                     logger = TouchHandlingViewLogger(logBuffer = logBuffer, TAG),
                 )
-                .apply {
-                    id = deviceEntryIconViewId
-                    // fingerprint press throws the ripple into its own window
-                    onFingerprintTouch = { udfpsRipple.splash(this) }
-                }
+                .apply { id = deviceEntryIconViewId }
 
         constraintLayout.addView(view)
     }

@@ -51,6 +51,7 @@ import com.android.systemui.qs.panels.ui.viewmodel.InfiniteGridViewModel
 import com.android.systemui.qs.panels.ui.viewmodel.detailsViewModel
 import com.android.systemui.qs.panels.ui.viewmodel.editModeViewModel
 import com.android.systemui.qs.panels.ui.viewmodel.iconTilesViewModel
+import com.android.systemui.qs.panels.ui.viewmodel.inFirstPageViewModel
 import com.android.systemui.qs.panels.ui.viewmodel.infiniteGridViewModelFactory
 import com.android.systemui.qs.panels.ui.viewmodel.textFeedbackContentViewModelFactory
 import com.android.systemui.qs.pipeline.domain.interactor.currentTilesInteractor
@@ -86,6 +87,7 @@ class InfiniteGridLayoutEditTileGridTest : SysuiTestCase() {
                     },
                 textFeedbackContentViewModelFactory,
                 tileHapticsViewModelFactoryProvider,
+                inFirstPageViewModel,
             )
         }
 

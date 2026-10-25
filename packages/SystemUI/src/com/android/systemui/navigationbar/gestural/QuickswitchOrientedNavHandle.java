@@ -40,7 +40,11 @@ public class QuickswitchOrientedNavHandle extends NavigationHandle {
 
     @Override
     protected void onDraw(Canvas canvas) {
-        canvas.drawRoundRect(computeHomeHandleBounds(), mRadius, mRadius, mPaint);
+        RectF bounds = computeHomeHandleBounds();
+        mGlass.setBounds(Math.round(bounds.left), Math.round(bounds.top),
+                Math.round(bounds.right), Math.round(bounds.bottom));
+        mGlass.setGlassCorners(mRadius, mRadius);
+        mGlass.draw(canvas);
     }
 
     public RectF computeHomeHandleBounds() {

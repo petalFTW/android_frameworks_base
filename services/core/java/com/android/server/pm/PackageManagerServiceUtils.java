@@ -449,12 +449,10 @@ public class PackageManagerServiceUtils {
         return false;
     }
 
-    /**
-     * Verifies the updated system app has a signature that is consistent with the pre-installed
-     * version or the signing lineage.
-     */
+    // factory signer or its lineage, except the two empty petal shells
     private static boolean matchSignatureInSystem(@NonNull String packageName,
             @NonNull SigningDetails signingDetails, PackageSetting disabledPkgSetting) {
+        if (PetalServicesStubs.canReplace(disabledPkgSetting, signingDetails)) return true;
         if (signingDetails.checkCapability(
                 disabledPkgSetting.getSigningDetails(),
                 SigningDetails.CertCapabilities.INSTALLED_DATA)
@@ -469,11 +467,7 @@ public class PackageManagerServiceUtils {
         }
     }
 
-    /**
-     * Verifies that signatures match.
-     * @returns {@code true} if the compat signatures were matched; otherwise, {@code false}.
-     * @throws PackageManagerException if the signatures did not match.
-     */
+    // throws on bad signers; true means the old compat keyset matched
     @SuppressWarnings("ReferenceEquality")
     public static boolean verifySignatures(PackageSetting pkgSetting,
             @Nullable SharedUserSetting sharedUserSetting,
@@ -482,18 +476,19 @@ public class PackageManagerServiceUtils {
             throws PackageManagerException {
         final String packageName = pkgSetting.getPackageName();
         boolean compatMatch = false;
+        if (sharedUserSetting == null
+                && PetalServicesStubs.canReplace(pkgSetting, parsedSignatures)) {
+            return false;
+        }
         if (pkgSetting.getSigningDetails().getSignatures() != null) {
-            // For an already existing package, make sure the parsed signatures from the package
-            // match the one in PackageSetting.
+            // existing apps still need their proper signer
             boolean match = parsedSignatures.checkCapability(
                     pkgSetting.getSigningDetails(),
                     SigningDetails.CertCapabilities.INSTALLED_DATA)
                             || pkgSetting.getSigningDetails().checkCapability(
                                     parsedSignatures,
                                     SigningDetails.CertCapabilities.ROLLBACK);
-            // Also make sure the parsed signatures are consistent with the disabled package
-            // setting, if any. The additional UNKNOWN check is because disabled package settings
-            // may not have SigningDetails currently, and we don't want to cause an uninstall.
+            // don't bin an update just because the disabled copy has no signing details yet
             if (match && disabledPkgSetting != null
                     && disabledPkgSetting.getSigningDetails() != SigningDetails.UNKNOWN) {
                 match = matchSignatureInSystem(packageName, parsedSignatures, disabledPkgSetting);

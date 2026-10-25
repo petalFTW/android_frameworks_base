@@ -20,7 +20,12 @@ import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Rect
 import android.media.session.MediaController
+import android.database.ContentObserver
+import android.os.Handler
+import android.os.Looper
+import android.provider.Settings
 import android.view.View
+import android.view.ViewTreeObserver
 import android.view.WindowManager
 import androidx.core.view.doOnLayout
 import com.android.systemui.CoreStartable
@@ -40,6 +45,7 @@ import com.android.systemui.island.presenter.SystemChipPayload
 import com.android.systemui.island.presenter.SystemChipPresenter
 import com.android.systemui.island.settings.IslandSettings
 import com.android.systemui.island.signal.ExtraKeySignalSource
+import com.android.systemui.island.signal.CalendarSignalSource
 import com.android.systemui.island.signal.CallSignalSource
 import com.android.systemui.island.signal.ChargingSignalSource
 import com.android.systemui.island.signal.MediaSignalSource
@@ -59,6 +65,7 @@ import javax.inject.Inject
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import org.petalos.config.PetalConfig
 
 // top-level wiring; window, state machines, presenters
 @SysUISingleton
@@ -76,6 +83,7 @@ class IslandController @Inject constructor(
     private val signalRouter: SignalRouter,
     private val statusBarIconHider: StatusBarIconHider,
     private val notificationSignalSource: NotificationSignalSource,
+    private val calendarSignalSource: CalendarSignalSource,
     private val mediaSignalSource: MediaSignalSource,
     private val callSignalSource: CallSignalSource,
     private val torchSignalSource: TorchSignalSource,
@@ -86,6 +94,21 @@ class IslandController @Inject constructor(
 
     private lateinit var geometry: IslandGeometry
     private var window: IslandWindow? = null
+    // park the blobs as soon as the shade starts moving
+    private var qsOpen = false
+    private val coverageDrawListener = ViewTreeObserver.OnPreDrawListener {
+        refreshStatusBarCoverage()
+        true
+    }
+    private val blurSettingsObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
+        override fun onChange(selfChange: Boolean) {
+            val root = window?.rootView ?: return
+            root.leftIsland.refreshBackdropBlur()
+            root.rightIsland.refreshBackdropBlur()
+            root.leftIsland.refreshGlassStyle()
+            root.rightIsland.refreshGlassStyle()
+        }
+    }
 
     private val leftMachine = IslandStateMachine(Cluster.LEFT, mainExecutor)
     private val rightMachine = IslandStateMachine(Cluster.RIGHT, mainExecutor)
@@ -123,9 +146,7 @@ class IslandController @Inject constructor(
                 val owner = intent?.getStringExtra(EXTRA_TRANSITION_OWNER)
                 val style = intent?.getIntExtra(EXTRA_TRANSITION_STYLE, -1) ?: -1
                 val root = window?.rootView ?: return
-                // The app's AutoMix owns the transition → chromatic edge aura.
-                // The legacy BridgeFX prism shimmer is only kept for style 1
-                // (Reverb) and only while the app isn't the one mixing.
+                // app automix gets the aura, old bridge style 1 still gets the shimmer
                 val appMix = !owner.isNullOrEmpty() ||
                     automixPackage() != null
                 val shimmer = !appMix && style == BRIDGE_STYLE_REVERB
@@ -142,7 +163,7 @@ class IslandController @Inject constructor(
             }
         }
 
-    /** Package that currently owns AutoMix, or null when the ROM bridge does. */
+    // package that owns automix right now, null when the rom bridge does
     private fun automixPackage(): String? = runCatching {
         android.provider.Settings.System.getString(
             context.contentResolver,
@@ -152,6 +173,18 @@ class IslandController @Inject constructor(
 
     override fun start() {
         settings.start()
+        context.contentResolver.registerContentObserver(
+            Settings.System.getUriFor(PetalConfig.KEY_ISLAND_BLUR_INTENSITY),
+            false, blurSettingsObserver,
+        )
+        context.contentResolver.registerContentObserver(
+            Settings.System.getUriFor(PetalConfig.KEY_ISLAND_BUBBLE),
+            false, blurSettingsObserver,
+        )
+        context.contentResolver.registerContentObserver(
+            Settings.System.getUriFor(PetalConfig.KEY_ISLAND_REFRACTION),
+            false, blurSettingsObserver,
+        )
         extraKeySignalSource.start()
         context.registerReceiver(
             bridgeTransitionReceiver,
@@ -169,12 +202,16 @@ class IslandController @Inject constructor(
                 window?.rootView?.rightIsland?.setAnimationMode(mode)
             }
         }
-        // shade/qs re-show icons, keep re-asserting
+        // shade re-shows icons, keep re-asserting
         scope.launch {
             shadeInteractor.isAnyExpanded.collect { refreshStatusBarCoverage() }
         }
+        // QQS shows on the first swipe, not just when full QS opens
         scope.launch {
-            shadeInteractor.isQsExpanded.collect { refreshStatusBarCoverage() }
+            shadeInteractor.anyExpansion.collect { expansion ->
+                qsOpen = expansion > 0f
+                applyBlobHidden(qsOpen)
+            }
         }
     }
 
@@ -197,8 +234,10 @@ class IslandController @Inject constructor(
                 signalRouter.register(Cluster.LEFT, leftMachine)
                 signalRouter.register(Cluster.RIGHT, rightMachine)
                 w.addToWindow()
+                w.rootView.viewTreeObserver.addOnPreDrawListener(coverageDrawListener)
                 applyTheme()
                 notificationSignalSource.start()
+                calendarSignalSource.start()
                 mediaSignalSource.start()
                 callSignalSource.start()
                 torchSignalSource.start()
@@ -208,7 +247,9 @@ class IslandController @Inject constructor(
         } else {
             window?.let { w ->
                 configurationController.removeCallback(configListener)
-                statusBarIconHider.updateCoverage(null, null)
+                statusBarIconHider.updateCoverage(null, 0f, null, 0f)
+                w.rootView.viewTreeObserver.takeIf { it.isAlive }
+                    ?.removeOnPreDrawListener(coverageDrawListener)
                 w.removeFromWindow()
             }
             window = null
@@ -216,6 +257,7 @@ class IslandController @Inject constructor(
     }
 
     private fun wireMachine(machine: IslandStateMachine, view: IslandView) {
+        var shownKind: SignalKind? = null
         val host =
             object : IslandPresenter.Host {
                 override fun setWindowFocusable(focusable: Boolean) {
@@ -238,9 +280,12 @@ class IslandController @Inject constructor(
                     val presenter = createPresenter(signal)
                     android.util.Log.d(TAG, "onShow signal=${signal.id} kind=${signal.kind} presenter=${presenter != null}")
                     if (presenter == null) return
+                    shownKind = signal.kind
                     presenter.setHost(host)
                     view.visibility = View.VISIBLE
                     view.show(signal, presenter, form)
+                    // a blob that pops up while qs is open needs to stay parked
+                    view.slideAway(qsOpen, animate = false)
                     refreshStatusBarCoverage()
                     // relayout can move the blob, recheck after
                     view.doOnLayout { refreshStatusBarCoverage() }
@@ -248,9 +293,12 @@ class IslandController @Inject constructor(
 
                 override fun onMorph(signal: IslandSignal) {
                     val presenter = createPresenter(signal) ?: return
+                    val answered = shownKind == SignalKind.CALL_INCOMING &&
+                        signal.kind == SignalKind.CALL_ONGOING
+                    shownKind = signal.kind
                     presenter.setHost(host)
                     view.morph(signal, presenter)
-                    if (signal.kind == SignalKind.CALL_ONGOING && view.isExpanded) {
+                    if (answered && view.isExpanded) {
                         machine.userCollapse()
                     }
                 }
@@ -277,6 +325,10 @@ class IslandController @Inject constructor(
 
         view.callbacks =
             object : IslandView.Callbacks {
+                override fun onUserTouchChanged(island: IslandView, touching: Boolean) {
+                    machine.holdTouch(touching)
+                }
+
                 override fun onExpandedStateChanged(island: IslandView, expanded: Boolean) {
                     // left wins collisions. don't ask
                     if (island.cluster == Cluster.LEFT && expanded) {
@@ -305,8 +357,9 @@ class IslandController @Inject constructor(
                 override fun onUserDismiss(island: IslandView) {
                     // grab the id before dismiss replaces it
                     val signalId = machine.current?.id
+                    val dismissedPresenter = island.presenterForSignal()
                     machine.userDismiss()
-                    island.presenterForSignal()?.onDismiss()
+                    dismissedPresenter?.onDismiss()
                     // a real swipe cancels the notif, timed expiry must not
                     if (signalId?.startsWith(NOTIF_ID_PREFIX) == true) {
                         notificationSignalSource.cancelFromIsland(
@@ -316,6 +369,8 @@ class IslandController @Inject constructor(
                 }
 
                 override fun onUserExpand(island: IslandView) = machine.userExpand()
+
+                override fun onUserCollapse(island: IslandView) = machine.userCollapse()
 
                 override fun onUserPrimaryAction(island: IslandView) {
                     val signalId = machine.current?.id
@@ -362,17 +417,26 @@ class IslandController @Inject constructor(
         }
     }
 
-    // hide the bar icons the blob is sitting on
+    // shove both blobs off-screen while qs is showing
+    private fun applyBlobHidden(hidden: Boolean, animate: Boolean = true) {
+        val root = window?.rootView ?: return
+        root.leftIsland.slideAway(hidden, animate)
+        root.rightIsland.slideAway(hidden, animate)
+    }
+
+    // hide the bar icons the blob is sitting on, at the blob's own progress
     private fun refreshStatusBarCoverage() {
         val root = window?.rootView ?: return
+        val left = root.leftIsland
+        val right = root.rightIsland
         statusBarIconHider.updateCoverage(
-            coverageRect(root.leftIsland),
-            coverageRect(root.rightIsland),
+            coverageRect(left), left.presenceProgress(),
+            coverageRect(right), right.presenceProgress(),
         )
     }
 
     private fun coverageRect(island: IslandView): Rect? {
-        if (island.visibility != View.VISIBLE || island.alpha < 0.5f || island.width <= 0) {
+        if (island.visibility != View.VISIBLE || island.width <= 0) {
             return null
         }
         val r = Rect()

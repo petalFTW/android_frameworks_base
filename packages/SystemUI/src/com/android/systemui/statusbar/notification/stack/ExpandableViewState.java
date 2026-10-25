@@ -423,6 +423,7 @@ public class ExpandableViewState extends ViewState {
         super.cancelAnimations(view);
         abortAnimation(view, TAG_ANIMATOR_HEIGHT);
         abortAnimation(view, TAG_ANIMATOR_TOP_INSET);
+        abortAnimation(view, TAG_ANIMATOR_BOTTOM_INSET);
     }
 
     @Override
@@ -430,5 +431,6 @@ public class ExpandableViewState extends ViewState {
         super.finishAnimations(view);
         skipAnimationToEnd(view, TAG_ANIMATOR_HEIGHT);
         skipAnimationToEnd(view, TAG_ANIMATOR_TOP_INSET);
+        skipAnimationToEnd(view, TAG_ANIMATOR_BOTTOM_INSET);
     }
 }

@@ -2304,7 +2304,7 @@
     <dimen name="island_capsule_height">30dp</dimen>
     <dimen name="island_capsule_min_width">64dp</dimen>
     <dimen name="island_capsule_max_width">176dp</dimen>
-    <dimen name="island_call_capsule_width">96dp</dimen>
+    <dimen name="island_call_capsule_width">128dp</dimen>
     <dimen name="island_expanded_max_width">420dp</dimen>
     <dimen name="island_expanded_side_margin">12dp</dimen>
     <dimen name="island_expanded_height_notif">92dp</dimen>
@@ -2312,6 +2312,8 @@
     <dimen name="island_expanded_height_media">160dp</dimen>
     <dimen name="island_expanded_height_media_max">192dp</dimen>
     <dimen name="island_top_offset">4dp</dimen>
+    <!-- just a tiny nudge, not a whole status-bar jump -->
+    <dimen name="island_expanded_top_nudge">10px</dimen>
     <dimen name="island_corner_capsule">15dp</dimen>
     <dimen name="island_corner_expanded">28dp</dimen>
     <dimen name="island_elevation">10dp</dimen>

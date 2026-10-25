@@ -41,6 +41,7 @@ import androidx.constraintlayout.widget.ConstraintSet;
 
 import com.android.app.animation.Interpolators;
 import com.android.settingslib.animation.DisappearAnimationUtils;
+import com.android.systemui.petalos.PetalPatternStyle;
 import com.android.systemui.res.R;
 import com.android.systemui.statusbar.policy.DevicePostureController.DevicePostureInt;
 
@@ -251,6 +252,7 @@ public class KeyguardPINView extends KeyguardPinBasedInputView {
     @Override
     protected void onFinishInflate() {
         super.onFinishInflate();
+        PetalPatternStyle.applyGlass(findViewById(R.id.pin_container));
 
         mBouncerMessageArea = findViewById(R.id.bouncer_message_area);
         mViews = new View[][]{
@@ -315,6 +317,7 @@ public class KeyguardPINView extends KeyguardPinBasedInputView {
 
     @Override
     public void startAppearAnimation() {
+        PetalPatternStyle.resetGlass(this);
         setAlpha(1f);
         setTranslationY(0);
         if (mAppearAnimator.isRunning()) {
@@ -328,6 +331,7 @@ public class KeyguardPINView extends KeyguardPinBasedInputView {
 
     public boolean startDisappearAnimation(boolean needsSlowUnlockTransition,
             final Runnable finishRunnable) {
+        PetalPatternStyle.fadeOutGlass(this);
         if (mAppearAnimator.isRunning()) {
             mAppearAnimator.cancel();
         }

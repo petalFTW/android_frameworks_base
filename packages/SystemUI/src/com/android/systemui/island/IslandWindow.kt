@@ -98,7 +98,6 @@ class IslandWindow(
             setTrustedOverlay()
             title = "IslandWindow"
             packageName = context.packageName
-            // no blur: the window is full width, it would frost everything
         }
     }
 

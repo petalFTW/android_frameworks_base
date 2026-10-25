@@ -11,3 +11,4 @@ gen/
 # to configure filepaths + project settings
 .classpath
 .settings/
+*.md

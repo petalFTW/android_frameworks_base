@@ -165,6 +165,7 @@ constructor(
     private val powerManager: PowerManager,
     private val wallpaperManager: WallpaperManager,
     private val petalSeamlessUnlockController: PetalSeamlessUnlockController,
+    private val petalHomeUnlockOrigin: PetalHomeUnlockOrigin,
 ) : KeyguardStateController.Callback, ISysuiUnlockAnimationController.Stub() {
 
     interface KeyguardUnlockAnimationListener {
@@ -383,18 +384,27 @@ constructor(
             }
             addListener(
                 object : AnimatorListenerAdapter() {
+                    private var cancelled = false
+
+                    override fun onAnimationCancel(animation: Animator) {
+                        cancelled = true
+                    }
+
                     override fun onAnimationStart(animation: Animator) {
+                        cancelled = false
                         super.onAnimationStart(animation)
                         Trace.asyncTraceBegin(Trace.TRACE_TAG_APP, "WallpaperAlphaAnimation", 0)
                     }
 
                     override fun onAnimationEnd(animation: Animator) {
                         Log.d(TAG, "wallpaperCannedUnlockAnimator#onAnimationEnd")
-                        keyguardViewMediator
-                            .get()
-                            .exitKeyguardAndFinishSurfaceBehindRemoteAnimation(
-                                false /* cancelled */
-                            )
+                        if (!cancelled) {
+                            keyguardViewMediator
+                                .get()
+                                .exitKeyguardAndFinishSurfaceBehindRemoteAnimation(
+                                    false /* cancelled */
+                                )
+                        }
                         Trace.asyncTraceEnd(Trace.TRACE_TAG_APP, "WallpaperAlphaAnimation", 0)
                     }
                 }
@@ -423,14 +433,26 @@ constructor(
             }
             addListener(
                 object : AnimatorListenerAdapter() {
+                    private var cancelled = false
+
+                    override fun onAnimationStart(animation: Animator) {
+                        cancelled = false
+                    }
+
+                    override fun onAnimationCancel(animation: Animator) {
+                        cancelled = true
+                    }
+
                     override fun onAnimationEnd(animation: Animator) {
                         Log.d(TAG, "surfaceBehindEntryAnimator#onAnimationEnd")
                         playingCannedUnlockAnimation = false
-                        keyguardViewMediator
-                            .get()
-                            .exitKeyguardAndFinishSurfaceBehindRemoteAnimation(
-                                false /* cancelled */
-                            )
+                        if (!cancelled) {
+                            keyguardViewMediator
+                                .get()
+                                .exitKeyguardAndFinishSurfaceBehindRemoteAnimation(
+                                    false /* cancelled */
+                                )
+                        }
                     }
                 }
             )
@@ -635,6 +657,7 @@ constructor(
                 setSurfaceBehindAppearAmount(1f)
 
                 try {
+                    launcherUnlockController?.let { petalHomeUnlockOrigin.sendTo(it) }
                     launcherUnlockController?.playUnlockAnimation(
                         true,
                         UNLOCK_ANIMATION_DURATION_MS + CANNED_UNLOCK_START_DELAY_MS,
@@ -705,40 +728,67 @@ constructor(
         }
 
         when {
-            // petalOS: seamless ColorOS-style reveal, lock ui dissolves while wallpaper and
-            // home punch out from the sensor point and settle
+            // Lock fades, home blooms out and settles.
             petalSeamlessUnlockController.isEnabled() &&
                 !biometricUnlockControllerLazy.get().isWakeAndUnlock -> {
                 Log.d(TAG, "playCannedUnlockAnimation, petalSeamlessUnlock")
+                var launcherContentPrepared = false
+                if (isSupportedLauncherUnderneath()) {
+                    try {
+                        launcherUnlockController?.prepareForUnlock(false, Rect(), -1)
+                        launcherContentPrepared = launcherUnlockController != null
+                    } catch (e: RemoteException) {
+                        Log.e(TAG, "Could not prepare Launcher for seamless unlock", e)
+                    }
+                }
                 petalSeamlessUnlockController.playCannedAnimation(
                     surfaceBehindRemoteAnimationTargets ?: emptyArray(),
                     openingWallpaperTargets,
                     closingWallpaperTargets,
                     ::exitAndFinish,
                 )
+                if (launcherContentPrepared) {
+                    try {
+                        launcherUnlockController?.let { petalHomeUnlockOrigin.sendTo(it) }
+                        launcherUnlockController?.playUnlockAnimation(
+                            true,
+                            PetalSeamlessUnlockController.MASTER_DURATION_MS,
+                            0,
+                        )
+                    } catch (e: RemoteException) {
+                        Log.e(TAG, "Could not play Launcher seamless unlock", e)
+                    }
+                }
             }
 
-            // If we're set up for in-window launcher animations, ask Launcher to play its in-window
-            // canned animation.
+            // Launcher can handle its own little entrance here.
             willUnlockWithInWindowLauncherAnimations -> {
                 Log.d(TAG, "playCannedUnlockAnimation, unlockToLauncherWithInWindowAnimations")
                 unlockToLauncherWithInWindowAnimations()
             }
 
-            // If we're waking and unlocking to a non-Launcher app surface (or Launcher in-window
-            // animations are not available), show it immediately and end the remote animation. The
-            // circular light reveal will show the app surface, and it looks weird if it's moving
-            // around behind that.
+            // AOD reveals the window; home still needs its icons brought back.
             biometricUnlockControllerLazy.get().isWakeAndUnlock -> {
                 Log.d(TAG, "playCannedUnlockAnimation, isWakeAndUnlock")
+                if (isSupportedLauncherUnderneath()) {
+                    try {
+                        launcherUnlockController?.let { launcher ->
+                            launcher.prepareForUnlock(false, Rect(), -1)
+                            petalHomeUnlockOrigin.sendTo(launcher)
+                            launcher.playUnlockAnimation(
+                                true, LAUNCHER_ICONS_ANIMATION_DURATION_MS, 0)
+                        }
+                    } catch (e: RemoteException) {
+                        Log.e(TAG, "Could not animate Launcher wake-and-unlock", e)
+                    }
+                }
                 setSurfaceBehindAppearAmount(1f)
                 keyguardViewMediator
                     .get()
                     .exitKeyguardAndFinishSurfaceBehindRemoteAnimation(false /* cancelled */)
             }
 
-            // Otherwise, we're doing a normal full-window unlock. Start this animator, which will
-            // scale/translate the window underneath the lockscreen.
+            // Whole-window entrance for everything else.
             else -> {
                 Log.d(TAG, "playCannedUnlockAnimation, surfaceBehindEntryAnimator#start")
                 surfaceBehindEntryAnimator.start()
@@ -755,28 +805,22 @@ constructor(
         }
     }
 
-    /**
-     * Unlock to the launcher, using in-window animations, and the smartspace shared element
-     * transition if possible.
-     */
+    // Bring home back, smartspace tags along if it can.
     @VisibleForTesting
     fun unlockToLauncherWithInWindowAnimations() {
         surfaceBehindAlpha = 1f
         setSurfaceBehindAppearAmount(1f, wallpapers = false)
 
         try {
-            // Begin the animation, waiting for the shade to animate out.
+            // Give the shade a moment to get out of the damn way.
+            launcherUnlockController?.let { petalHomeUnlockOrigin.sendTo(it) }
             launcherUnlockController?.playUnlockAnimation(
                 true /* unlocked */,
                 LAUNCHER_ICONS_ANIMATION_DURATION_MS /* duration */,
                 CANNED_UNLOCK_START_DELAY_MS, /* startDelay */
             )
         } catch (e: DeadObjectException) {
-            // Hello! If you are here investigating a bug where Launcher is blank (no icons)
-            // then the below assumption about Launcher's destruction was incorrect. This
-            // would mean prepareToUnlock was called (blanking Launcher in preparation for
-            // the beginning of the unlock animation), but then somehow we were unable to
-            // call playUnlockAnimation to animate the icons back in.
+            // Launcher died between hiding the icons and bringing them back. Lovely.
             Log.e(
                 TAG,
                 "launcherUnlockAnimationController was dead, but non-null. " +
@@ -1112,7 +1156,8 @@ constructor(
             // be fully visible. The exit animation is finished, and we should not hold the leash
             // anymore, so forcing it to 1f.
             surfaceBehindAlpha = 1f
-            setSurfaceBehindAppearAmount(1f)
+            // wallpaper cleanup below uses this unlock's targets
+            setSurfaceBehindAppearAmount(1f, wallpapers = !petalSeamlessUnlockController.isEnabled())
 
             try {
                 launcherUnlockController?.setUnlockAmount(1f, false /* forceIfAnimating */)
@@ -1128,6 +1173,14 @@ constructor(
         surfaceBehindEntryAnimator.cancel()
         wallpaperCannedUnlockAnimator.cancel()
         wallpaperFadeOutUnlockAnimator.cancel()
+
+        if (!showKeyguard && petalSeamlessUnlockController.isEnabled()) {
+            // fast unlocks can finish before the wallpaper animator ever starts
+            petalSeamlessUnlockController.finishWallpaperTransition(
+                openingWallpaperTargets,
+                closingWallpaperTargets,
+            )
+        }
 
         // That target is no longer valid since the animation finished, null it out.
         surfaceBehindRemoteAnimationTargets = null

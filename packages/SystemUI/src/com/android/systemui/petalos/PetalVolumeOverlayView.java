@@ -125,6 +125,7 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
     private float mShakeDp = 0f;
 
     private final Paint mBodyPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final PetalDialogGlass mDialogGlass = new PetalDialogGlass(this);
     private final Paint mFillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint mGlyphPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
@@ -337,7 +338,10 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
         mBodyPaint.setShadowLayer(24f * mDensity, 0f, 10f * mDensity, 0x6B000000);
         Path body = PetalUtils.jointPath(edgeLeft, cy, w * sx, h * sy,
                 Math.min(rad, w * sx / 2f), jointDepth, xTail, edgeX);
-        canvas.drawPath(body, mBodyPaint);
+        if (!mDialogGlass.draw(canvas, body, edgeLeft, edgeX, cy,
+                w * sx, h * sy, Math.min(rad, w * sx / 2f), opacity)) {
+            canvas.drawPath(body, mBodyPaint);
+        }
         mBodyPaint.clearShadowLayer();
 
         // slide fill and glyph in, no squashing

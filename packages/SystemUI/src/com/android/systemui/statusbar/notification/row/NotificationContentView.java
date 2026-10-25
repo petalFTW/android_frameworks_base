@@ -630,6 +630,8 @@ public class NotificationContentView extends FrameLayout implements Notification
         }
         addView(child);
         mSingleLineView = child;
+        com.android.systemui.petalos.PetalWorkRedaction.track(mContainingNotification);
+        com.android.systemui.petalos.PetalWorkRedaction.apply(getContext(), this, getContainingRowSbn());
     }
 
     @Override
@@ -1408,6 +1410,9 @@ public class NotificationContentView extends FrameLayout implements Notification
         mPreviousHeadsUpRemoteInputIntent = null;
         applySystemActions(mExpandedChild, entry);
         applySystemActions(mHeadsUpChild, entry);
+        // Replies get added late; mask those too, not just the app's RemoteViews.
+        com.android.systemui.petalos.PetalWorkRedaction.track(mContainingNotification);
+        com.android.systemui.petalos.PetalWorkRedaction.apply(getContext(), this, mSbn);
     }
 
     /**

@@ -32,7 +32,9 @@ import android.view.ViewRootImpl
 import android.view.WindowInsets
 import android.view.WindowManager
 import android.view.WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+import android.widget.FrameLayout
 import com.android.app.animation.Interpolators
+import com.android.internal.graphics.drawable.PetalGlassDrawable
 import com.android.internal.jank.Cuj.CujType
 import com.android.internal.jank.InteractionJankMonitor
 import com.android.systemui.Flags
@@ -573,6 +575,7 @@ private class AnimatedDialog(
      */
     private var decorViewLayoutListener: View.OnLayoutChangeListener? = null
     private var dialogTouchInterceptorView: ViewGroup? = null
+    private var glassTransition: QsGlassDialogTransition? = null
 
     private var hasInstrumentedJank = false
 
@@ -630,13 +633,16 @@ private class AnimatedDialog(
                 ?.color
                 ?.defaultColor ?: Color.BLACK
 
-        // Make the background view invisible until we start the animation. We use the transition
-        // visibility like GhostView does so that we don't mess up with the accessibility tree (see
-        // b/204944038#comment17). Given that this background implements LaunchableView, we call
-        // setShouldBlockVisibilityChanges() early so that the current visibility (VISIBLE) is
-        // restored at the end of the animation.
-        dialogContentWithBackground.setShouldBlockVisibilityChanges(true)
-        dialogContentWithBackground.setTransitionVisibility(View.INVISIBLE)
+        val glass = background?.let {
+            GhostedViewTransitionAnimatorController.findGradientDrawable(it) as? PetalGlassDrawable
+        }
+        val useGlassBloom = !isWindowFullScreen && glass != null &&
+            controller.cuj?.tag in setOf("internet", "bluetooth_tile_dialog")
+        if (!useGlassBloom) {
+            // hide it until the ghost has somewhere to draw
+            dialogContentWithBackground.setShouldBlockVisibilityChanges(true)
+            dialogContentWithBackground.setTransitionVisibility(View.INVISIBLE)
+        }
 
         // Make sure the dialog is visible instantly and does not do any window animation.
         val attributes = window.attributes
@@ -670,6 +676,11 @@ private class AnimatedDialog(
             val insets = windowInsets.getInsets(type)
             view.setPadding(insets.left, insets.top, insets.right, insets.bottom)
             WindowInsets.CONSUMED
+        }
+
+        if (useGlassBloom) {
+            startGlassBloom(dialogContentWithBackground as FrameLayout, glass!!)
+            return
         }
 
         // Start the animation once the background view is properly laid out.
@@ -706,6 +717,65 @@ private class AnimatedDialog(
         // Show the dialog.
         dialog.show()
         moveSourceDrawingToDialog()
+    }
+
+    private fun startGlassBloom(panel: FrameLayout, template: PetalGlassDrawable) {
+        val window = dialog.window!!
+        val dim = if (window.attributes.flags and WindowManager.LayoutParams.FLAG_DIM_BEHIND != 0) {
+            window.attributes.dimAmount.coerceIn(0f, 1f)
+        } else 0f
+        window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND or
+            WindowManager.LayoutParams.FLAG_BLUR_BEHIND)
+        window.setBackgroundBlurRadius(0)
+        dialogTouchInterceptorView?.visibility = View.GONE
+        val sourceView = controller.sourceIdentity as? View
+        val source = if (sourceView != null) {
+            val bounds = Rect()
+            if (!sourceView.getGlobalVisibleRect(bounds)) bounds.setEmpty()
+            TransitionAnimator.State(
+                top = bounds.top, bottom = bounds.bottom,
+                left = bounds.left, right = bounds.right,
+            )
+        } else {
+            controller.createTransitionController().createAnimatorState()
+        }
+        glassTransition = QsGlassDialogTransition(
+            panel, template, source, dim,
+            onReady = {
+                controller.cuj?.let { cuj ->
+                    val config = InteractionJankMonitor.Configuration.Builder
+                        .withView(cuj.cujType, decorView)
+                    cuj.tag?.let { config.setTag(it) }
+                    hasInstrumentedJank = interactionJankMonitor.begin(config)
+                }
+            },
+            onOpened = {
+                isLaunching = false
+                if (hasInstrumentedJank) {
+                    interactionJankMonitor.end(controller.cuj!!.cujType)
+                    hasInstrumentedJank = false
+                }
+                backgroundLayoutListener?.let { panel.addOnLayoutChangeListener(it) }
+            },
+            onClosed = {
+                isLaunching = false
+                isDismissing = true
+                if (hasInstrumentedJank) {
+                    interactionJankMonitor.end(controller.cuj!!.cujType)
+                    hasInstrumentedJank = false
+                }
+                decorViewLayoutListener?.let { decorView.removeOnLayoutChangeListener(it) }
+                backgroundLayoutListener?.let { panel.removeOnLayoutChangeListener(it) }
+                dialog.hide()
+                dialog.setDismissOverride(null)
+                dialog.dismiss()
+                onDialogDismissed(this@AnimatedDialog)
+            },
+        )
+        dialog.setDismissOverride(this::onDialogDismissed)
+        dialog.registerAnimationOnBackInvoked(targetView = panel)
+        dialog.show()
+        glassTransition!!.start()
     }
 
     private fun moveSourceDrawingToDialog() {
@@ -818,6 +888,11 @@ private class AnimatedDialog(
             return
         }
 
+        glassTransition?.let {
+            it.dismiss(animate = !exitAnimationDisabled && dialog.isShowing && !callback.isDreaming())
+            return
+        }
+
         // TODO(b/193634619): Support interrupting the launch animation in the middle.
         if (isLaunching) {
             dismissRequested = true
@@ -911,7 +986,6 @@ private class AnimatedDialog(
             }
         startController.transitionContainer = decorView
         endController.transitionContainer = decorView
-
         val endState = endController.createAnimatorState()
         val controller =
             object : TransitionAnimator.Controller {
@@ -922,10 +996,7 @@ private class AnimatedDialog(
                         endController.transitionContainer = value
                     }
 
-                // We tell TransitionController that this is always a launch, and handle the launch
-                // vs return logic internally.
-                // TODO(b/323863002): maybe move the launch vs return logic out of this class and
-                //     delegate it to TransitionController?
+                // the outer controller handles return, this one just runs forward
                 override val isLaunching: Boolean = true
 
                 override fun createAnimatorState(): TransitionAnimator.State {
@@ -933,9 +1004,7 @@ private class AnimatedDialog(
                 }
 
                 override fun onTransitionAnimationStart(isExpandingFullyAbove: Boolean) {
-                    // During launch, onLaunchAnimationStart will be used to remove the temporary
-                    // touch surface ghost so it is important to call this before calling
-                    // onLaunchAnimationStart on the controller (which will create its own ghost).
+                    // remove the old touch ghost before making another
                     onLaunchAnimationStart()
 
                     startController.onTransitionAnimationStart(isExpandingFullyAbove)
@@ -951,19 +1020,7 @@ private class AnimatedDialog(
                     if (Flags.sceneContainer()) {
                         onEnd()
                     } else {
-                        // onLaunchAnimationEnd is called by an Animator at the end of the
-                        // animation, on a Choreographer animation tick. The following calls will
-                        // move the animated content from the dialog overlay back to its original
-                        // position, and this change must be reflected in the next frame given that
-                        // we then sync the next frame of both the content and dialog ViewRoots.
-                        // However, in case that content is rendered by Compose, whose compositions
-                        // are also scheduled on a Choreographer frame, any state change made *right
-                        // now* won't be reflected in the next frame given that a Choreographer
-                        // frame can't schedule another and have it happen in the same frame. So we
-                        // post the forwarded calls to [Controller.onLaunchAnimationEnd], leaving
-                        // this Choreographer frame, ensuring that the move of the content back to
-                        // its original window will be reflected in the next frame right after
-                        // [onLaunchAnimationEnd] is called.
+                        // leave this frame first so Compose can move its content before the sync
                         dialog.context.mainExecutor.execute { onEnd() }
                     }
                 }

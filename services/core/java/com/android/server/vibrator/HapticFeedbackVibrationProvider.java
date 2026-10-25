@@ -177,7 +177,7 @@ public final class HapticFeedbackVibrationProvider {
 
     @Nullable
     private VibrationEffect getVibrationForHapticFeedback(int effectId) {
-        VibrationEffect petalEffect = PetalHapticsEngine.feedback(effectId);
+        VibrationEffect petalEffect = PetalHapticsEngine.feedback(effectId, mVibratorInfo);
         if (petalEffect != null) {
             return petalEffect;
         }
@@ -284,7 +284,7 @@ public final class HapticFeedbackVibrationProvider {
     private VibrationEffect getKeyboardVibration(int effectId) {
         if (effectId == HapticFeedbackConstants.KEYBOARD_TAP
                 && mKeyboardVibrationFixedAmplitude <= 0) {
-            return PetalHapticsEngine.defaultTap();
+            return PetalHapticsEngine.defaultTap(mVibratorInfo);
         }
         int primitiveId;
         int predefinedEffectId;

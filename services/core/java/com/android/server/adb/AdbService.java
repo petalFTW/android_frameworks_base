@@ -21,6 +21,9 @@ import android.annotation.NonNull;
 import android.annotation.UserIdInt;
 import android.content.ContentResolver;
 import android.content.Context;
+import android.content.BroadcastReceiver;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.database.ContentObserver;
 import android.debug.AdbManagerInternal;
@@ -31,9 +34,12 @@ import android.debug.IAdbManager;
 import android.debug.IAdbTransport;
 import android.debug.PairDevice;
 import android.hardware.usb.UsbManager;
+import android.hardware.usb.UsbPort;
+import android.hardware.usb.UsbPortStatus;
 import android.net.Uri;
 import android.net.wifi.WifiManager;
 import android.os.Binder;
+import android.os.BatteryManager;
 import android.os.IBinder;
 import android.os.ParcelFileDescriptor;
 import android.os.RemoteCallbackList;
@@ -214,9 +220,86 @@ public class AdbService extends IAdbManager.Stub {
 
     private boolean mIsAdbUsbEnabled;
     private boolean mIsAdbWifiEnabled;
+    private boolean mUsbDebuggingSession;
+    private boolean mUsbConnected;
+    private boolean mSawUsbPower;
+    private boolean mUsbPowerDisconnected;
+    private boolean mAdbdStoppedForUnplug;
     private final AdbDebuggingManager mDebuggingManager;
 
     private ContentObserver mObserver;
+
+    private final Runnable mUsbUnplugCheck = this::handleUsbDebuggingUnplug;
+
+    private void handleUsbDebuggingUnplug() {
+        if (!mUsbDebuggingSession || !isUsbPhysicallyDetached()) return;
+        mUsbDebuggingSession = false;
+        mSawUsbPower = false;
+        Settings.Global.putInt(mContentResolver, Settings.Global.ADB_WIFI_ENABLED, 0);
+        setAdbEnabledDoNotCallDirectly(false, AdbTransportType.WIFI);
+        disableADBdWifi();
+        mDebuggingManager.disablePairing();
+        // tcpip 5555 isn't the wireless toggle, kill that listener too
+        SystemProperties.set("service.adb.tcp.port", "-1");
+        SystemProperties.set(CTL_STOP, ADBD);
+        mAdbdStoppedForUnplug = true;
+        Slog.i(TAG, "USB debugging unplugged; wireless ADB stopped");
+    }
+
+    private final BroadcastReceiver mUsbUnplugReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            String action = intent.getAction();
+            if (UsbManager.ACTION_USB_STATE.equals(action)) {
+                mUsbConnected = intent.getBooleanExtra(UsbManager.USB_CONNECTED, false);
+                if (mUsbConnected && mIsAdbUsbEnabled) {
+                    mUsbDebuggingSession = true;
+                    restartUsbAdbdAfterUnplug();
+                }
+            } else if (Intent.ACTION_BATTERY_CHANGED.equals(action)) {
+                boolean usbPowered = (intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0)
+                        & BatteryManager.BATTERY_PLUGGED_USB) != 0;
+                int status = intent.getIntExtra(BatteryManager.EXTRA_STATUS,
+                        BatteryManager.BATTERY_STATUS_UNKNOWN);
+                boolean lostSupply = status == BatteryManager.BATTERY_STATUS_DISCHARGING
+                        && intent.getIntExtra(BatteryManager.EXTRA_MAX_CHARGING_CURRENT, -1) == 0
+                        && intent.getIntExtra(BatteryManager.EXTRA_MAX_CHARGING_VOLTAGE, -1) == 0;
+                // stale USB flags need the health report's dead supply as a fallback
+                mUsbPowerDisconnected = mSawUsbPower && (!usbPowered || lostSupply);
+                if (usbPowered && !lostSupply) {
+                    mSawUsbPower = true;
+                    restartUsbAdbdAfterUnplug();
+                }
+            }
+            if (mUsbDebuggingSession && !FgThread.getHandler().hasCallbacks(mUsbUnplugCheck)) {
+                FgThread.getHandler().postDelayed(mUsbUnplugCheck, 1000);
+            }
+        }
+    };
+
+    private boolean isUsbPhysicallyDetached() {
+        if (mUsbPowerDisconnected) return true;
+        UsbManager manager = mContext.getSystemService(UsbManager.class);
+        if (manager == null) return false;
+        boolean hasPorts = false;
+        for (UsbPort port : manager.getPorts()) {
+            UsbPortStatus status = port.getStatus();
+            if (status == null) return false;
+            hasPorts = true;
+            if (status.isConnected()
+                    && status.getCurrentDataRole() == UsbPortStatus.DATA_ROLE_DEVICE) {
+                return false;
+            }
+        }
+        return hasPorts;
+    }
+
+    private void restartUsbAdbdAfterUnplug() {
+        if (mAdbdStoppedForUnplug && mIsAdbUsbEnabled) {
+            mAdbdStoppedForUnplug = false;
+            startAdbd();
+        }
+    }
 
     private AdbService(Context context) {
         mContext = context;
@@ -258,6 +341,12 @@ public class AdbService extends IAdbManager.Stub {
             // If UserManager.DISALLOW_DEBUGGING_FEATURES is on, that this setting can't be changed.
             Slog.d(TAG, "ADB_ENABLED is restricted.");
         }
+
+        IntentFilter unplugFilter = new IntentFilter(UsbManager.ACTION_USB_STATE);
+        unplugFilter.addAction(UsbManager.ACTION_USB_PORT_CHANGED);
+        unplugFilter.addAction(Intent.ACTION_BATTERY_CHANGED);
+        mContext.registerReceiver(mUsbUnplugReceiver, unplugFilter, null,
+                FgThread.getHandler(), Context.RECEIVER_NOT_EXPORTED);
     }
 
     /**
@@ -481,6 +570,7 @@ public class AdbService extends IAdbManager.Stub {
         }
 
         if (enable) {
+            mAdbdStoppedForUnplug = false;
             startAdbd();
         } else {
             stopAdbd();

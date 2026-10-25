@@ -54,6 +54,8 @@ class IslandStateMachine(
 
     // held while the user is typing a reply, no dwell timer runs then
     private var dismissalHeld = false
+    private var touchHeld = false
+    private var userCollapsed = false
 
     // flag so a transient only auto-hides once
     private var transientDismiss = false
@@ -68,6 +70,16 @@ class IslandStateMachine(
         if (held) {
             cancelDwell()
         } else {
+            current?.let { armDwell(it) }
+        }
+    }
+
+    fun holdTouch(held: Boolean) {
+        if (touchHeld == held) return
+        touchHeld = held
+        if (held) {
+            cancelDwell()
+        } else if (state != IslandState.HIDDEN && state != IslandState.DISSOLVING) {
             current?.let { armDwell(it) }
         }
     }
@@ -88,6 +100,13 @@ class IslandStateMachine(
                     (cur.payload as? android.media.session.MediaController)?.sessionToken
             if (!sameMediaSession) listener?.onMorph(signal)
             armDwell(signal)
+            return true
+        }
+        if (cur.id.startsWith("calendar:") && !dismissalHeld) {
+            queue.removeAll { it.id == cur.id || it.id == signal.id }
+            if (queue.size >= 3) queue.removeLast()
+            queue.addFirst(cur)
+            show(signal)
             return true
         }
         // let the key chip show, then put the sticky one back on top
@@ -133,6 +152,7 @@ class IslandStateMachine(
 
     private fun show(signal: IslandSignal) {
         cancelDwell()
+        userCollapsed = false
         current = signal
         state = IslandState.EMERGING
         val form = if (signal.initialForm == Form.EXPANDED) Form.EXPANDED else Form.CAPSULE
@@ -156,8 +176,11 @@ class IslandStateMachine(
     // tap outside or back gesture
     fun userCollapse() {
         if (state != IslandState.EXPANDED && state != IslandState.EXPANDING) return
+        cancelDwell()
+        userCollapsed = true
         state = IslandState.COLLAPSING
         listener?.onCollapse()
+        current?.let { armDwell(it) }
     }
 
     // swiped off screen
@@ -168,16 +191,13 @@ class IslandStateMachine(
 
     fun dismiss() {
         dismissalHeld = false
+        touchHeld = false
         cancelDwell()
         state = IslandState.DISSOLVING
         listener?.onDismiss()
         // show whatever was waiting behind it
         if (queue.isNotEmpty()) {
-            val next = queue.removeFirst()
-            current = next
-            state = IslandState.EMERGING
-            listener?.onShow(next, if (next.initialForm == Form.EXPANDED) Form.EXPANDED else Form.CAPSULE)
-            armDwell(next)
+            show(queue.removeFirst())
         } else {
             current = null
             // the dissolve never calls back, so just mark it hidden
@@ -186,12 +206,20 @@ class IslandStateMachine(
     }
 
     fun notifyTransitionComplete(targetState: IslandState) {
-        state = targetState
+        if (current == null) return
+        val expected = when (state) {
+            IslandState.EMERGING -> targetState == IslandState.EXPANDED ||
+                targetState == IslandState.COLLAPSED
+            IslandState.EXPANDING -> targetState == IslandState.EXPANDED
+            IslandState.COLLAPSING -> targetState == IslandState.COLLAPSED
+            else -> false
+        }
+        if (expected) state = targetState
     }
 
     private fun armDwell(signal: IslandSignal) {
         cancelDwell()
-        if (dismissalHeld) return
+        if (dismissalHeld || touchHeld) return
         if (signal.isSticky) return
         when (signal.kind) {
             SignalKind.NOTIFICATION -> {
@@ -207,7 +235,7 @@ class IslandStateMachine(
                     // still downloading, leave it up
                     return
                 }
-                armNotificationDwell(signal)
+                armNotificationDwell()
             }
             SignalKind.CHARGING -> {
                 // expanded for a bit, then collapsed, then gone
@@ -234,20 +262,35 @@ class IslandStateMachine(
         }
     }
 
-    private fun armNotificationDwell(signal: IslandSignal) {
-        // the whole notif routine in nested timers
+    private fun armNotificationDwell() {
+        // It's already open, don't replay the damn expand timer.
+        if (state == IslandState.EXPANDED || state == IslandState.EXPANDING) {
+            armNotificationCollapse()
+            return
+        }
+        if (userCollapsed) {
+            dwellTimer = mainExecutor.executeDelayed(
+                { dismiss() },
+                IslandConstants.DWELL_NOTIF_COLLAPSED,
+            )
+            return
+        }
         dwellTimer = mainExecutor.executeDelayed({
             state = IslandState.EXPANDING
             listener?.onExpand()
-            dwellTimer = mainExecutor.executeDelayed({
-                state = IslandState.COLLAPSING
-                listener?.onCollapse()
-                dwellTimer = mainExecutor.executeDelayed(
-                    { dismiss() },
-                    IslandConstants.DWELL_NOTIF_COLLAPSED,
-                )
-            }, IslandConstants.DWELL_NOTIF_EXPANDED)
+            armNotificationCollapse()
         }, IslandConstants.DWELL_NOTIF_AUTO_EXPAND)
+    }
+
+    private fun armNotificationCollapse() {
+        dwellTimer = mainExecutor.executeDelayed({
+            state = IslandState.COLLAPSING
+            listener?.onCollapse()
+            dwellTimer = mainExecutor.executeDelayed(
+                { dismiss() },
+                IslandConstants.DWELL_NOTIF_COLLAPSED,
+            )
+        }, IslandConstants.DWELL_NOTIF_EXPANDED)
     }
 
     private fun cancelDwell() {

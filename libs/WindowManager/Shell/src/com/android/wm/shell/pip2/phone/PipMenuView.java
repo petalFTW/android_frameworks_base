@@ -62,6 +62,7 @@ import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 
 import com.android.internal.protolog.ProtoLog;
+import com.android.internal.graphics.drawable.PetalGlassDrawable;
 import com.android.wm.shell.R;
 import com.android.wm.shell.common.ShellExecutor;
 import com.android.wm.shell.common.pip.PipUiEventLogger;
@@ -75,9 +76,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
-/**
- * Translucent window that gets started on top of a task in PIP to allow the user to control it.
- */
+// buttons floating over PiP
 public class PipMenuView extends FrameLayout {
 
     private static final String TAG = "PipMenuView";
@@ -136,10 +135,7 @@ public class PipMenuView extends FrameLayout {
     private ShellExecutor mMainExecutor;
     private Handler mMainHandler;
 
-    /**
-     * Whether the most recent showing of the menu caused a PIP resize, such as when PIP is too
-     * small and it is resized on menu show to fit the actions.
-     */
+    // did this menu make the tiny window grow?
     private boolean mDidLastShowMenuResize;
     private final Runnable mHideMenuRunnable = this::hideMenu;
 
@@ -185,6 +181,9 @@ public class PipMenuView extends FrameLayout {
             }
         });
         mDismissButton = findViewById(R.id.dismiss);
+        Drawable dismissRipple = mDismissButton.getBackground();
+        mDismissButton.setBackground(new android.graphics.drawable.LayerDrawable(new Drawable[]{
+                new PetalGlassDrawable(mDismissButton, 100f, 8f), dismissRipple}));
         mDismissButton.setAlpha(0);
         mDismissButton.setOnClickListener(v -> dismissPip());
         findViewById(R.id.expand_button).setOnClickListener(v -> {
@@ -327,11 +326,7 @@ public class PipMenuView extends FrameLayout {
         }
     }
 
-    /**
-     * Different from {@link #hideMenu()}, this function does not try to finish this menu activity
-     * and instead, it fades out the controls by setting the alpha to 0 directly without menu
-     * visibility callbacks invoked.
-     */
+    // just fade, leave the activity and callbacks alone
     void fadeOutMenu() {
         mMenuContainer.setAlpha(0f);
         mSettingsButton.setAlpha(0f);
@@ -390,10 +385,7 @@ public class PipMenuView extends FrameLayout {
         }
     }
 
-    /**
-     * @return Estimated minimum {@link Size} to hold the actions.
-     * See also {@link #updateActionViews(int, Rect)}
-     */
+    // smallest window these actions can squeeze into
     Size getEstimatedMinMenuSize() {
         final int pipActionSize = getResources().getDimensionPixelSize(R.dimen.pip_action_size);
         // the minimum width would be (2 * pipActionSize) since we have settings and dismiss button
@@ -507,10 +499,7 @@ public class PipMenuView extends FrameLayout {
         expandContainer.requestLayout();
     }
 
-    /**
-     * Sets the Context for the current user. If the user is the same as systemui, then simply
-     * use systemui Context.
-     */
+    // another user needs their own context
     private void setContextForUser() {
         int userId = ActivityManager.getCurrentUser();
 
@@ -562,12 +551,7 @@ public class PipMenuView extends FrameLayout {
         }
     }
 
-    /**
-     * Execute the {@link PendingIntent} attached to the {@link PipMenuActionView}.
-     * If the given {@link PendingIntent} matches {@link #mCloseAction}, we need to make sure
-     * the PiP is removed after a certain timeout in case the app does not respond in a
-     * timely manner.
-     */
+    // poke the app, then kill PiP if close goes nowhere
     private void onActionViewClicked(@NonNull PendingIntent intent, boolean isCloseAction) {
         try {
             intent.send();

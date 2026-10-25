@@ -164,12 +164,17 @@ class Dimmer {
 
         @NonNull
         private SurfaceControl makeDimLayer() {
-            return mHost.makeChildSurface(null)
+            final SurfaceControl dimLayer = mHost.makeChildSurface(null)
                     .setParent(mHost.getSurfaceControl())
                     .setColorLayer()
                     .setName("Dim Layer for - " + mHost.getName())
                     .setCallsite("DimLayer.makeDimLayer")
                     .build();
+            // Dim and blur layers are created by WindowManager, not third-party overlays.
+            // Without this flag, their full-screen input snapshot can block touches to
+            // windows below them even when the dim alpha is zero (blur-only dim).
+            mHost.getPendingTransaction().setTrustedOverlay(dimLayer, true);
+            return dimLayer;
         }
     }
 

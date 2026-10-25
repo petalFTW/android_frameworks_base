@@ -24,6 +24,7 @@ import static com.android.systemui.media.controls.domain.pipeline.MediaActionsKt
 import android.animation.Animator;
 import android.animation.AnimatorInflater;
 import android.animation.AnimatorSet;
+import android.animation.ValueAnimator;
 import android.app.ActivityOptions;
 import android.app.BroadcastOptions;
 import android.app.PendingIntent;
@@ -31,7 +32,9 @@ import android.app.WallpaperColors;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.content.res.ColorStateList;
 import android.content.theming.ThemeStyle;
+import android.database.ContentObserver;
 import android.graphics.Bitmap;
 import android.graphics.BlendMode;
 import android.graphics.Color;
@@ -49,6 +52,8 @@ import android.graphics.drawable.TransitionDrawable;
 import android.media.session.MediaController;
 import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.Process;
 import android.os.Trace;
 import android.os.UserHandle;
@@ -106,6 +111,10 @@ import com.android.systemui.monet.ColorScheme;
 import com.android.systemui.plugins.ActivityStarter;
 import com.android.systemui.plugins.FalsingManager;
 import com.android.systemui.res.R;
+import com.android.systemui.petalos.PetalMediaBubbleDrawable;
+import com.android.systemui.petalos.PetalQsSkin;
+import com.android.systemui.island.render.RefractionShader;
+import org.petalos.config.PetalConfig;
 import com.android.systemui.scene.shared.flag.SceneContainerFlag;
 import com.android.systemui.shade.ShadeDisplayAware;
 import com.android.systemui.statusbar.NotificationLockscreenUserManager;
@@ -202,6 +211,22 @@ public class MediaControlPanel {
     private MetadataAnimationHandler mMetadataAnimationHandler;
     private ColorSchemeTransition mColorSchemeTransition;
     private Drawable mPrevArtwork = null;
+    private ValueAnimator mPetalPlaySheen;
+    private final RefractionShader mPetalArtLens = new RefractionShader();
+    private final View.OnLayoutChangeListener mPetalArtSizeListener =
+            (view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+                if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) {
+                    updatePetalArtBlur();
+                }
+            };
+    private final ContentObserver mPetalArtBlurObserver =
+            new ContentObserver(new Handler(Looper.getMainLooper())) {
+                @Override
+                public void onChange(boolean selfChange) {
+                    updatePetalArtBlur();
+                    if (mMediaViewHolder != null) mMediaViewController.refreshState();
+                }
+            };
     private boolean mIsArtworkBound = false;
     private int mArtworkBoundId = 0;
     private int mArtworkNextBindRequestId = 0;
@@ -288,6 +313,15 @@ public class MediaControlPanel {
             GlobalSettings globalSettings
     ) {
         mContext = context;
+        mContext.getContentResolver().registerContentObserver(
+                Settings.System.getUriFor(PetalConfig.KEY_QS_MEDIA_ART_BLUR), false,
+                mPetalArtBlurObserver);
+        mContext.getContentResolver().registerContentObserver(
+                Settings.System.getUriFor(PetalConfig.KEY_QS_MEDIA_REFRACTION), false,
+                mPetalArtBlurObserver);
+        mContext.getContentResolver().registerContentObserver(
+                Settings.System.getUriFor(PetalConfig.KEY_QS_SKIN_ENABLED), false,
+                mPetalArtBlurObserver);
         mBackgroundExecutor = backgroundExecutor;
         mMainExecutor = mainExecutor;
         mActivityStarter = activityStarter;
@@ -315,10 +349,13 @@ public class MediaControlPanel {
         updateAnimatorDurationScale();
     }
 
-    /**
-     * Clean up seekbar and controller when panel is destroyed
-     */
+    // Don't leave the seekbar or lens listening after this player's gone.
     public void onDestroy() {
+        mContext.getContentResolver().unregisterContentObserver(mPetalArtBlurObserver);
+        if (mMediaViewHolder != null) {
+            mMediaViewHolder.getAlbumView().removeOnLayoutChangeListener(mPetalArtSizeListener);
+        }
+        if (mPetalPlaySheen != null) mPetalPlaySheen.cancel();
         if (mSeekBarObserver != null) {
             mSeekBarViewModel.getProgress().removeObserver(mSeekBarObserver);
         }
@@ -420,6 +457,9 @@ public class MediaControlPanel {
 
     /** Attaches the player to the player view holder. */
     public void attachPlayer(MediaViewHolder vh) {
+        if (mMediaViewHolder != null) {
+            mMediaViewHolder.getAlbumView().removeOnLayoutChangeListener(mPetalArtSizeListener);
+        }
         mMediaViewHolder = vh;
         TransitionLayout player = vh.getPlayer();
 
@@ -442,9 +482,10 @@ public class MediaControlPanel {
             }
         });
 
-        // AlbumView uses a hardware layer so that clipping of the foreground is handled
-        // with clipping the album art. Otherwise album art shows through at the edges.
+        // Hardware clipping keeps album art from poking through the corners.
         mMediaViewHolder.getAlbumView().setLayerType(View.LAYER_TYPE_HARDWARE, null);
+        mMediaViewHolder.getAlbumView().addOnLayoutChangeListener(mPetalArtSizeListener);
+        updatePetalArtBlur();
 
         TextView titleText = mMediaViewHolder.getTitleText();
         TextView artistText = mMediaViewHolder.getArtistText();
@@ -643,7 +684,7 @@ public class MediaControlPanel {
                     && isValidSuggestion(suggestionDeviceData)
                     && !data.getResumption()) {
                 // Don't show the OSw device text if we have a suggestion: just show the icon
-                deviceText.setVisibility(View.GONE);
+                deviceText.setVisibility(mMediaViewController.deviceNameVisibility(false));
                 setSuggestionClickListener(suggestionDeviceData);
                 setSuggestionText(suggestionDeviceData);
                 setSuggestionIcon(suggestionDeviceData);
@@ -658,7 +699,7 @@ public class MediaControlPanel {
         // is manipulated by the TransitionLayout and the Guts animation logic.
         deviceSuggestionContainer.setImportantForAccessibility(
                 View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
-        deviceText.setVisibility(View.VISIBLE);
+        deviceText.setVisibility(mMediaViewController.deviceNameVisibility(true));
         return;
     }
 
@@ -892,6 +933,9 @@ public class MediaControlPanel {
             Drawable artwork;
             boolean isArtworkBound;
             Icon artworkIcon = data.getArtwork();
+            final Drawable petalCover = artworkIcon != null
+                    ? artworkIcon.loadDrawable(mContext) : null;
+            final Bitmap petalPaint = com.android.systemui.petalos.PetalMediaPaintDrawable.prepareArtwork(petalCover);
             WallpaperColors wallpaperColors = getWallpaperColor(artworkIcon);
             boolean darkTheme = false;
             if (wallpaperColors != null) {
@@ -922,6 +966,8 @@ public class MediaControlPanel {
                     return;
                 }
                 mArtworkBoundId = reqId;
+                mMediaViewHolder.getPetalCover().setImageDrawable(petalCover);
+                mMediaViewController.setPetalPaintArtwork(petalPaint);
 
                 // Transition Colors to current color scheme
                 boolean colorSchemeChanged;
@@ -929,6 +975,7 @@ public class MediaControlPanel {
 
                 // Bind the album view to the artwork or a transition drawable
                 ImageView albumView = mMediaViewHolder.getAlbumView();
+                updatePetalArtBlur();
                 albumView.setPadding(0, 0, 0, 0);
                 if (updateBackground || colorSchemeChanged
                         || (!mIsArtworkBound && isArtworkBound)) {
@@ -1211,13 +1258,33 @@ public class MediaControlPanel {
             button.setImageDrawable(icon);
             button.setContentDescription(mediaAction.getContentDescription());
             final Drawable bgDrawable;
-            if (button.getId() == R.id.actionPlayPause
-                    && com.android.systemui.petalos.PetalQsSkin.isEnabled(mContext)) {
-                android.graphics.drawable.GradientDrawable shape =
-                        new android.graphics.drawable.GradientDrawable();
-                shape.setColor(0xffe1e5ed);
-                shape.setCornerRadius(24 * mContext.getResources().getDisplayMetrics().density);
-                bgDrawable = shape;
+            if (PetalQsSkin.isEnabled(mContext)
+                    || mMediaViewController.getCurrentEndLocation()
+                            == MediaHierarchyManager.LOCATION_LOCKSCREEN) {
+                boolean petalPrimary = button.getId() == R.id.actionPlayPause;
+                boolean ribbon = mMediaViewController.getCurrentEndLocation()
+                        == MediaHierarchyManager.LOCATION_LOCKSCREEN;
+                boolean petalDark = ribbon || PetalQsSkin.isDark(mContext);
+                int petalAccent = ribbon ? com.android.systemui.petalos.PetalMediaRibbonDrawable.ACCENT
+                        : mContext.getColor(android.R.color.system_accent1_500);
+                bgDrawable = new PetalMediaBubbleDrawable(petalPrimary, petalDark,
+                        mContext.getResources().getDisplayMetrics().density, petalAccent);
+                button.setBackgroundTintList(null);
+                button.setImageTintList(ColorStateList.valueOf(
+                        ribbon ? 0xffffffff : petalPrimary
+                                ? PetalQsSkin.glyphOnBackground(petalAccent)
+                                : (petalDark ? 0xfff5f5f8 : 0xff202127)));
+                // skip buttons use solid glyphs, not the outline ones the session supplies
+                if (!petalPrimary) {
+                    int solid = 0;
+                    if (button.getId() == R.id.actionPrev) {
+                        solid = R.drawable.ic_media_prev;
+                    } else if (button.getId() == R.id.actionNext) {
+                        solid = R.drawable.ic_media_next;
+                    }
+                    Drawable solidIcon = solid != 0 ? mContext.getDrawable(solid) : null;
+                    if (solidIcon != null) button.setImageDrawable(solidIcon);
+                }
             } else {
                 bgDrawable = mediaAction.getBackground();
             }
@@ -1245,12 +1312,35 @@ public class MediaControlPanel {
                         if (bgDrawable instanceof Animatable) {
                             ((Animatable) bgDrawable).start();
                         }
+                        if (bgDrawable instanceof PetalMediaBubbleDrawable
+                                && button.getId() == R.id.actionPlayPause) {
+                            if (mPetalPlaySheen != null) mPetalPlaySheen.cancel();
+                            PetalMediaBubbleDrawable bubble = (PetalMediaBubbleDrawable) bgDrawable;
+                            mPetalPlaySheen = ValueAnimator.ofFloat(0f, 1f);
+                            mPetalPlaySheen.setDuration(480);
+                            mPetalPlaySheen.addUpdateListener(a ->
+                                    bubble.setSheenProgress((float) a.getAnimatedValue()));
+                            mPetalPlaySheen.start();
+                        }
                     }
                 });
             }
         } else {
             clearButton(button);
         }
+    }
+
+    private void updatePetalArtBlur() {
+        if (mMediaViewHolder == null) return;
+        ImageView art = mMediaViewHolder.getAlbumView();
+        float density = mContext.getResources().getDisplayMetrics().density;
+        art.setRenderEffect(PetalQsSkin.isEnabled(mContext)
+                ? mPetalArtLens.artworkEffect(art.getWidth(), art.getHeight(), density,
+                        mContext.getResources().getDimension(R.dimen.notification_corner_radius),
+                        PetalConfig.QS_MEDIA_ART_BLUR_MAX_DP * density
+                                * PetalConfig.getQsMediaArtBlurScale(mContext),
+                        PetalConfig.getQsMediaRefractionScale(mContext))
+                : null);
     }
 
     private RippleAnimation createTouchRippleAnimation(ImageButton button) {
@@ -1568,4 +1658,3 @@ public class MediaControlPanel {
         set.setAlpha(actionId, visible ? 1.0f : 0.0f);
     }
 }
-

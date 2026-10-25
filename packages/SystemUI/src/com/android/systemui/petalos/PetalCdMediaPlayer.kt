@@ -30,6 +30,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -47,12 +48,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -71,6 +75,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -81,6 +86,11 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.roundToLong
+import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.sin
+import kotlin.math.exp
 
 // state the controller feeds in
 data class PetalCdState(
@@ -104,6 +114,37 @@ private val InkDim = Color(0xB8F4F4F7)
 private val TrackInk = Color(0x38FFFFFF)
 private val CaseRim = Color(0x33FFFFFF)
 
+private class CdMotion {
+    var angle by mutableFloatStateOf(0f)
+    var speed by mutableFloatStateOf(15f)
+    var held by mutableStateOf(false)
+    var sparkle by mutableFloatStateOf(0f)
+    var idleWeight by mutableFloatStateOf(1f)
+    var lastTouchMs = 0L
+    var scratched = false
+
+    fun advance(dt: Float, playing: Boolean) {
+        val target = if (playing) 15f else 0f
+        val damping = exp(-dt / 1.6f)
+        if (!held) {
+            // integrate the coast exactly so 60 and 120 Hz don't feel different
+            angle = (angle + target * dt + (speed - target) * 1.6f * (1f - damping)) % 360f
+            speed = target + (speed - target) * damping
+        } else if (android.os.SystemClock.uptimeMillis() - lastTouchMs > 80L) {
+            // a parked finger isn't still scratching
+            speed *= exp(-dt / .06f)
+        }
+        if (!held && abs(speed - target) < PetalCdScratchSynth.MIN_SPEED) scratched = false
+        val idleTarget = if (held) 0f else 1f -
+            (abs(speed - target) / 180f).coerceIn(0f, 1f)
+        idleWeight += (idleTarget - idleWeight) * (1f - exp(-dt / .35f))
+        sparkle = maxOf(sparkle * exp(-dt / .7f),
+            (abs(speed - target) / 1000f).coerceIn(0f, .65f))
+    }
+
+    fun scratchVelocity(): Float = if (scratched) speed else 0f
+}
+
 @Composable
 fun PetalCdMediaPlayer(
     state: PetalCdState,
@@ -112,6 +153,7 @@ fun PetalCdMediaPlayer(
     onNext: () -> Unit,
     onSeek: (Float) -> Unit,
     modifier: Modifier = Modifier,
+    onScratchMotion: (Float) -> Unit = {},
 ) {
     Column(
         modifier = modifier.fillMaxWidth(),
@@ -123,7 +165,7 @@ fun PetalCdMediaPlayer(
             contentAlignment = Alignment.Center,
         ) {
             val side = maxWidth * 0.60f
-            CdAssembly(state, side, onPlayPause)
+            CdAssembly(state, side, onPlayPause, onScratchMotion)
         }
         Spacer(Modifier.height(18.dp))
         Text(
@@ -163,7 +205,33 @@ fun PetalCdMediaPlayer(
 }
 
 @Composable
-private fun CdAssembly(state: PetalCdState, side: Dp, onPlayPause: () -> Unit) {
+private fun CdAssembly(
+    state: PetalCdState,
+    side: Dp,
+    onPlayPause: () -> Unit,
+    onScratchMotion: (Float) -> Unit,
+) {
+    val motion = remember { CdMotion() }
+    val playing by rememberUpdatedState(state.playing)
+    val scratchMotion by rememberUpdatedState(onScratchMotion)
+    val hostView = LocalView.current
+    DisposableEffect(motion, hostView) {
+        onDispose {
+            motion.held = false
+            motion.scratched = false
+            scratchMotion(0f)
+            hostView.parent?.requestDisallowInterceptTouchEvent(false)
+        }
+    }
+    LaunchedEffect(motion) {
+        var previous = withFrameNanos { it }
+        while (true) {
+            val now = withFrameNanos { it }
+            motion.advance(((now - previous) / 1_000_000_000f).coerceIn(0f, .05f), playing)
+            scratchMotion(motion.scratchVelocity())
+            previous = now
+        }
+    }
     val transition = rememberInfiniteTransition(label = "cd")
     // the 3d spin. slow yaw, smaller pitch
     val yaw by
@@ -193,8 +261,10 @@ private fun CdAssembly(state: PetalCdState, side: Dp, onPlayPause: () -> Unit) {
             flip.snapTo(0f)
         }
     }
-    val degrees = flip.value % 360f
+    val degrees = (flip.value + yaw * motion.idleWeight + 360f) % 360f
     val showBack = degrees > 90f && degrees < 270f
+    val discDegrees = (flip.value + yaw * 1.6f * motion.idleWeight + 360f) % 360f
+    val discBack = discDegrees > 90f && discDegrees < 270f
 
     // disc slides out of the sleeve when playing, hides back inside when paused
     val slide = remember { Animatable(if (state.playing) 1f else 0f) }
@@ -222,21 +292,69 @@ private fun CdAssembly(state: PetalCdState, side: Dp, onPlayPause: () -> Unit) {
     }
 
     val disc = side * 0.95f
-    val overhang = disc * 0.40f
+    val discX = side / 2f + (side / 2f - disc * 0.10f) * slide.value
+    val overhang = (discX + disc / 2f - side).coerceAtLeast(0.dp)
+    // don't leave an empty bloody disc slot shifting the sleeve left
     val assemblyWidth = side + overhang
     val densityValue = LocalDensity.current.density
+    val discCenter by rememberUpdatedState(
+        with(LocalDensity.current) { Offset(discX.toPx(), side.toPx() / 2f) }
+    )
     Box(
         modifier =
-            Modifier.size(width = assemblyWidth, height = side).graphicsLayer {
-                rotationY = yaw + flip.value
-                rotationX = pitch
-                cameraDistance = 10f * densityValue
-            },
+            Modifier.size(width = assemblyWidth, height = side)
+                .graphicsLayer {
+                    rotationY = yaw * motion.idleWeight + flip.value
+                    rotationX = pitch * motion.idleWeight
+                    cameraDistance = 10f * densityValue
+                }
+                // drag in the disc's flipped space, not the bloody screen's
+                .pointerInput(motion) {
+                    detectDragGestures(
+                        onDragStart = {
+                            motion.held = true
+                            motion.speed = 0f
+                            motion.scratched = false
+                            motion.lastTouchMs = android.os.SystemClock.uptimeMillis()
+                            hostView.parent?.requestDisallowInterceptTouchEvent(true)
+                        },
+                        onDragEnd = {
+                            motion.held = false
+                            hostView.parent?.requestDisallowInterceptTouchEvent(false)
+                        },
+                        onDragCancel = {
+                            motion.held = false
+                            motion.scratched = false
+                            scratchMotion(0f)
+                            hostView.parent?.requestDisallowInterceptTouchEvent(false)
+                        },
+                    ) { change, amount ->
+                        val pivot = discCenter
+                        val before = change.position - amount - pivot
+                        val after = change.position - pivot
+                        val delta = if (before.getDistance() < size.height * .12f ||
+                            after.getDistance() < size.height * .12f) {
+                            amount.x / size.width.coerceAtLeast(1) * 180f
+                        } else {
+                            val raw = (atan2(after.y, after.x) - atan2(before.y, before.x)) *
+                                180f / Math.PI.toFloat()
+                            (raw + 540f) % 360f - 180f
+                        }
+                        val dt = ((change.uptimeMillis - motion.lastTouchMs) / 1000f)
+                            .coerceIn(.001f, .05f)
+                        motion.lastTouchMs = change.uptimeMillis
+                        motion.angle = (motion.angle + delta) % 360f
+                        motion.scratched = true
+                        val gain = 1f - exp(-dt / .035f)
+                        motion.speed += ((delta / dt).coerceIn(-1440f, 1440f) - motion.speed) * gain
+                        motion.sparkle = maxOf(motion.sparkle, .45f)
+                        change.consume()
+                    }
+                },
     ) {
         // disc goes UNDER the sleeve, the case hides whatever is still inside it
-        val discX = side / 2f + (side / 2f - disc * 0.10f) * slide.value
         Box(Modifier.offset(x = discX - disc / 2f, y = (side - disc) / 2f)) {
-            RefractionDisc(state, disc, showBack, yaw, pitch)
+            RefractionDisc(state, disc, discBack, yaw, pitch, motion)
         }
         if (showBack) {
             // whole thing is flipped here, so the art reads as the reverse
@@ -302,10 +420,7 @@ private fun CaseFront(state: PetalCdState, side: Dp, onPlayPause: () -> Unit) {
     }
 }
 
-/**
- * Album art that crossfades when it changes, so the sleeve fades the incoming
- * cover in over the outgoing one — the lockscreen "cover art fade".
- */
+// fade the new cover over the old one
 @Composable
 private fun FadingArt(
     bitmap: ImageBitmap?,
@@ -361,16 +476,10 @@ private fun RefractionDisc(
     dataSide: Boolean,
     tiltY: Float,
     tiltX: Float,
+    motion: CdMotion,
 ) {
     val density = LocalDensity.current.density
     val spin = rememberInfiniteTransition(label = "disc")
-    val angle by
-        spin.animateFloat(
-            initialValue = 0f,
-            targetValue = 360f,
-            animationSpec = infiniteRepeatable(tween(24000, easing = LinearEasing)),
-            label = "discAngle",
-        )
     val sweep by
         spin.animateFloat(
             initialValue = 0f,
@@ -406,10 +515,8 @@ private fun RefractionDisc(
             Modifier.size(side)
                 .graphicsLayer {
                     // give the disc its own sway so it is not welded to the case
-                    rotationY = tiltY * 0.6f
-                    rotationX = tiltX * 0.6f
-                    // only spin while playing, feels dead otherwise
-                    rotationZ = if (state.playing) angle else 0f
+                    rotationY = tiltY * 0.6f * motion.idleWeight
+                    rotationX = tiltX * 0.6f * motion.idleWeight
                     cameraDistance = 7f * density
                     alpha = 1f - 0.5f * dipVal
                     scaleX = 1f - 0.04f * dipVal
@@ -431,6 +538,8 @@ private fun RefractionDisc(
         Box(
             modifier =
                 Modifier.fillMaxSize()
+                    // spin on its own axle before the whole disc tilts
+                    .graphicsLayer { rotationZ = motion.angle }
                     .shadow(6.dp, CircleShape, clip = false)
                     .clip(CircleShape),
         ) {
@@ -453,7 +562,23 @@ private fun RefractionDisc(
         }
         Canvas(modifier = Modifier.fillMaxSize()) {
             val c = center
-            val r = size.minDimension / 2f
+             val r = size.minDimension / 2f
+             val sparkle = motion.sparkle
+
+            // little rim glints, not a disco ball slapped over the artwork
+            for (i in 0 until 7) {
+                val phase = sweep * .025f + i * 1.9f
+                val intensity = ((sin(phase) - .65f) / .35f).coerceIn(0f, 1f) *
+                    (.12f + sparkle * .65f)
+                val theta = i * .8976f
+                val point = c + Offset(cos(theta), sin(theta)) * (r * .86f)
+                val span = (1.8f + sparkle * 2.8f).dp.toPx()
+                val glint = Color.White.copy(alpha = intensity)
+                drawLine(glint, point - Offset(span, 0f), point + Offset(span, 0f),
+                    strokeWidth = .7.dp.toPx(), blendMode = BlendMode.Plus)
+                drawLine(glint, point - Offset(0f, span), point + Offset(0f, span),
+                    strokeWidth = .7.dp.toPx(), blendMode = BlendMode.Plus)
+            }
 
             if (dataSide) {
                 // dark chromatic arse-end of the disc

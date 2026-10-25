@@ -21,11 +21,15 @@ import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.is;
 import static org.junit.Assert.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Color;
 import android.view.InputDevice;
 import android.view.MotionEvent;
 import android.view.View;
@@ -119,6 +123,72 @@ public class LockPatternViewTest {
         mLockPatternView.measure(widthMeasureSpec, heightMeasureSpec);
         mLockPatternView.layout(0, 0, mLockPatternView.getMeasuredWidth(),
                 mLockPatternView.getMeasuredHeight());
+    }
+
+    @UiThreadTest
+    @Test
+    public void liquidPattern_drawsConnections() {
+        mLockPatternView.setBackground(null);
+        mLockPatternView.setLiquidPatternEnabled(true);
+        mLockPatternView.setVisibleDots(false);
+        mLockPatternView.setFadePattern(false);
+        mLockPatternView.setColors(Color.WHITE, Color.WHITE, Color.RED);
+        mLockPatternView.setPattern(LockPatternView.DisplayMode.Correct,
+                Arrays.asList(LockPatternView.Cell.of(0, 0), LockPatternView.Cell.of(1, 1)));
+        Bitmap drawn = Bitmap.createBitmap(mViewSize, mViewSize, Bitmap.Config.ARGB_8888);
+        Bitmap empty = Bitmap.createBitmap(mViewSize, mViewSize, Bitmap.Config.ARGB_8888);
+        try {
+            mLockPatternView.draw(new Canvas(drawn));
+            assertThat(drawn.sameAs(empty), is(false));
+        } finally {
+            drawn.recycle();
+            empty.recycle();
+        }
+    }
+
+    @UiThreadTest
+    @Test
+    public void liquidPattern_stealthDoesNotDrawConnections() {
+        mLockPatternView.setBackground(null);
+        mLockPatternView.setLiquidPatternEnabled(true);
+        mLockPatternView.setVisibleDots(false);
+        mLockPatternView.setFadePattern(false);
+        mLockPatternView.setInStealthMode(true);
+        mLockPatternView.setPattern(LockPatternView.DisplayMode.Correct,
+                Arrays.asList(LockPatternView.Cell.of(0, 0), LockPatternView.Cell.of(1, 1)));
+        Bitmap drawn = Bitmap.createBitmap(mViewSize, mViewSize, Bitmap.Config.ARGB_8888);
+        Bitmap empty = Bitmap.createBitmap(mViewSize, mViewSize, Bitmap.Config.ARGB_8888);
+        try {
+            mLockPatternView.draw(new Canvas(drawn));
+            assertThat(drawn.sameAs(empty), is(true));
+        } finally {
+            drawn.recycle();
+            empty.recycle();
+        }
+    }
+
+    @UiThreadTest
+    @Test
+    public void liquidPattern_keepsGapFillingAndDetection() {
+        mLockPatternView.setLiquidPatternEnabled(true);
+        mLockPatternView.setOnPatternListener(mPatternListener);
+        MotionEvent down = MotionEvent.obtain(0, 0, MotionEvent.ACTION_DOWN, mDot1x, mDot1y, 1);
+        MotionEvent move = MotionEvent.obtain(0, 16, MotionEvent.ACTION_MOVE, mDot3x, mDot3y, 1);
+        MotionEvent up = MotionEvent.obtain(0, 32, MotionEvent.ACTION_UP, mDot3x, mDot3y, 1);
+        try {
+            mLockPatternView.onTouchEvent(down);
+            mLockPatternView.onTouchEvent(move);
+            mLockPatternView.onTouchEvent(up);
+            verify(mPatternListener).onPatternDetected(mCellsArgumentCaptor.capture(), any(),
+                    eq(LockPatternUtils.PATTERN_SIZE_DEFAULT));
+            assertThat(mCellsArgumentCaptor.getValue(), contains(
+                    LockPatternView.Cell.of(0, 0), LockPatternView.Cell.of(0, 1),
+                    LockPatternView.Cell.of(0, 2)));
+        } finally {
+            down.recycle();
+            move.recycle();
+            up.recycle();
+        }
     }
 
     @UiThreadTest

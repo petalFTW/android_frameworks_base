@@ -67,6 +67,8 @@ class KeyguardUnlockAnimationControllerTest : SysuiTestCase() {
     @Mock private lateinit var notificationShadeWindowController: NotificationShadeWindowController
     @Mock private lateinit var powerManager: PowerManager
     @Mock private lateinit var wallpaperManager: WallpaperManager
+    @Mock private lateinit var petalSeamlessUnlockController: PetalSeamlessUnlockController
+    @Mock private lateinit var petalHomeUnlockOrigin: PetalHomeUnlockOrigin
     private val kosmos = testKosmos()
 
     @Mock
@@ -177,6 +179,8 @@ class KeyguardUnlockAnimationControllerTest : SysuiTestCase() {
                     notificationShadeWindowController,
                     powerManager,
                     wallpaperManager,
+                    petalSeamlessUnlockController,
+                    petalHomeUnlockOrigin,
                 ) {
                 override fun shouldPerformSmartspaceTransition(): Boolean =
                     shouldPerformSmartspaceTransition
@@ -411,6 +415,44 @@ class KeyguardUnlockAnimationControllerTest : SysuiTestCase() {
      * The canned animation should launch a cross fade when there are different wallpapers on lock
      * and home screen.
      */
+    @Test
+    fun quickUnlock_settlesCurrentWallpapersWithoutWaitingForCannedAnimation() {
+        whenever(petalSeamlessUnlockController.isEnabled()).thenReturn(true)
+        keyguardUnlockAnimationController.notifyStartSurfaceBehindRemoteAnimation(
+            remoteAnimationTargets,
+            wallpaperTargets,
+            lockWallpaperTargets,
+            0,
+            false,
+        )
+
+        keyguardUnlockAnimationController.notifyFinishedKeyguardExitAnimation(false)
+
+        verify(petalSeamlessUnlockController).finishWallpaperTransition(
+            wallpaperTargets,
+            lockWallpaperTargets,
+        )
+    }
+
+    @Test
+    fun cancelledUnlock_doesNotFinishWallpaperHandoff() {
+        whenever(petalSeamlessUnlockController.isEnabled()).thenReturn(true)
+        keyguardUnlockAnimationController.notifyStartSurfaceBehindRemoteAnimation(
+            remoteAnimationTargets,
+            wallpaperTargets,
+            lockWallpaperTargets,
+            0,
+            false,
+        )
+
+        keyguardUnlockAnimationController.notifyFinishedKeyguardExitAnimation(true)
+
+        verify(petalSeamlessUnlockController, never()).finishWallpaperTransition(
+            wallpaperTargets,
+            lockWallpaperTargets,
+        )
+    }
+
     @Test
     fun manualUnlock_multipleWallpapers() {
         var lastFadeInAlpha = -1f

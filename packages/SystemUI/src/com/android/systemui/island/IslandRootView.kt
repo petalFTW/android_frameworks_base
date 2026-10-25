@@ -92,21 +92,29 @@ class IslandRootView(
             }
         }
         super.dispatchDraw(canvas)
+        if (leftIsland.isShadowAnimating || rightIsland.isShadowAnimating) {
+            postInvalidateOnAnimation()
+        }
     }
 
     private fun drawIslandShadow(canvas: Canvas, island: IslandView) {
         val offsetY = geometry.dp(3f).toFloat()
         val r = island.cornerRadius()
         shadowRect.set(
-            island.left.toFloat(),
-            island.top + offsetY,
-            island.right.toFloat(),
-            island.bottom + offsetY,
+            0f,
+            offsetY,
+            island.width.toFloat(),
+            island.height + offsetY,
         )
         shadowPath.reset()
         shadowPath.addRoundRect(shadowRect, r, r, Path.Direction.CW)
         shadowPaint.color = if (dark) 0x33000000.toInt() else 0x1A000000.toInt()
+        shadowPaint.alpha = (shadowPaint.alpha * island.presenceProgress()).toInt()
+        val save = canvas.save()
+        canvas.translate(island.left.toFloat(), island.top.toFloat())
+        canvas.concat(island.matrix)
         canvas.drawPath(shadowPath, shadowPaint)
+        canvas.restoreToCount(save)
     }
 
     fun setInsetsListener() {

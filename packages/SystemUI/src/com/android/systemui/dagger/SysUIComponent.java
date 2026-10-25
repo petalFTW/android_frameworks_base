@@ -31,6 +31,7 @@ import com.android.systemui.people.PeopleProvider;
 import com.android.systemui.petalos.dagger.PetalCdPlayerModule;
 import com.android.systemui.petalos.dagger.PetalClockStyleModule;
 import com.android.systemui.petalos.dagger.PetalScreenDitheringModule;
+import com.android.systemui.petalos.dagger.PetalServiceProviderModule;
 import com.android.systemui.petalos.dagger.PetalMediaCoverModule;
 import com.android.systemui.settings.MultiUserUtilsModule;
 import com.android.systemui.startable.Dependencies;
@@ -83,6 +84,7 @@ import javax.inject.Provider;
         PetalCdPlayerModule.class,
         PetalClockStyleModule.class,
         PetalScreenDitheringModule.class,
+        PetalServiceProviderModule.class,
         PetalMediaCoverModule.class,
         QsFrameTranslateModule.class,
         ReferenceSystemUIModule.class,

@@ -41,6 +41,7 @@ import com.android.systemui.shade.largeScreenHeaderHelper
 import com.android.systemui.shade.transition.largeScreenShadeInterpolator
 import com.android.systemui.statusbar.disableflags.domain.interactor.disableFlagsInteractor
 import com.android.systemui.statusbar.sysuiStatusBarStateController
+import com.android.systemui.statusbar.notification.domain.interactor.activeNotificationsInteractor
 
 val Kosmos.qsFragmentComposeViewModelFactory by
     Kosmos.Fixture {
@@ -73,6 +74,7 @@ val Kosmos.qsFragmentComposeViewModelFactory by
                     lifecycleScope,
                     mediaCarouselInteractor,
                     mediaViewModelFactory,
+                    activeNotificationsInteractor,
                 )
             }
         }

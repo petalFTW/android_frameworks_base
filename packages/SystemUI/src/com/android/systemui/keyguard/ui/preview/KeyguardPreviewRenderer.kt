@@ -376,6 +376,13 @@ constructor(
 
         setupShortcuts(keyguardRootView)
 
+        // an applied depth wallpaper owns the preview instead of the stock clock
+        if (PetalDepthPreview.isEnabled(previewContext)) {
+            clockViewModel.setShowClock(false)
+            PetalDepthPreview.attach(previewContext, keyguardRootView)
+            return
+        }
+
         if (!clockViewModel.shouldHideClock) {
             setUpClock(previewContext, rootView)
             if (com.android.systemui.shared.Flags.clockReactiveSmartspaceLayout()) {

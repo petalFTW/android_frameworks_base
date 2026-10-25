@@ -24,6 +24,7 @@ import android.util.Log
 import android.view.View
 import com.android.systemui.dagger.SysUISingleton
 import com.android.systemui.dagger.qualifiers.Application
+import com.android.systemui.keyguard.PetalHomeUnlockOrigin
 import com.android.systemui.keyguard.domain.interactor.InWindowLauncherUnlockAnimationInteractor
 import com.android.systemui.keyguard.ui.binder.InWindowLauncherAnimationViewBinder
 import com.android.systemui.keyguard.ui.viewmodel.InWindowLauncherAnimationViewModel
@@ -50,6 +51,7 @@ constructor(
     val interactor: InWindowLauncherUnlockAnimationInteractor,
     val viewModel: InWindowLauncherAnimationViewModel,
     @Application val scope: CoroutineScope,
+    private val petalHomeUnlockOrigin: PetalHomeUnlockOrigin,
 ) : ISysuiUnlockAnimationController.Stub() {
 
     /**
@@ -161,6 +163,7 @@ constructor(
     ) {
         if (preparedForUnlock) {
             launcherAnimationController?.let { launcher ->
+                petalHomeUnlockOrigin.sendTo(launcher)
                 launcher.playUnlockAnimation(unlocked, duration, startDelay)
                 interactor.setStartedUnlockAnimation(true)
             }

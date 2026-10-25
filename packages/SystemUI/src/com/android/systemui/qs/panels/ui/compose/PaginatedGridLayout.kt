@@ -34,7 +34,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.integerResource
@@ -76,10 +75,8 @@ constructor(
                 viewModelFactory.create()
             }
 
-        // The petal control center is one continuous composition. Passing it through the stock
-        // pager constrains every section to a stock page height and causes the media/sliders to be
-        // clipped while later tiles overflow into a second page.
-        if (PetalQsSkin.isEnabled(LocalContext.current)) {
+        // Stock pager height clips this lot; Petal owns its inner pager.
+        if (PetalQsSkin.enabled()) {
             Column(modifier) {
                 with(delegateGridLayout) {
                     TileGrid(
@@ -96,7 +93,7 @@ constructor(
                 EditModeButton(
                     viewModel = editButtonViewModel,
                     isVisible = listening(),
-                    modifier = Modifier.align(Alignment.End),
+                    modifier = Modifier.align(Alignment.CenterHorizontally),
                 )
             }
             return

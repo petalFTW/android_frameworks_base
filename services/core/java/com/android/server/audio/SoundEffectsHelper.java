@@ -17,6 +17,7 @@
 package com.android.server.audio;
 
 import android.content.Context;
+import android.content.res.AssetFileDescriptor;
 import android.content.res.Resources;
 import android.content.res.XmlResourceParser;
 import android.media.AudioAttributes;
@@ -27,10 +28,13 @@ import android.media.MediaPlayer.OnCompletionListener;
 import android.media.MediaPlayer.OnErrorListener;
 import android.media.PlayerBase;
 import android.media.SoundPool;
+import android.net.Uri;
 import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
+import android.os.UserHandle;
+import android.provider.Settings;
 import android.util.Log;
 import android.util.PrintWriterPrinter;
 
@@ -48,6 +52,7 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.function.Consumer;
 
 /**
@@ -110,6 +115,10 @@ class SoundEffectsHelper {
     private final List<Resource> mResources = new ArrayList<Resource>();
     private final int[] mEffects = new int[AudioManager.NUM_SOUND_EFFECTS]; // indexes in mResources
     private SoundPool mSoundPool;
+    private SoundPool mTapPool;
+    private String mTapUri;
+    private int mTapSampleId;
+    private boolean mTapLoaded;
     private SoundPoolLoader mSoundPoolLoader;
     /** callback to provide handle to the player of the sound effects */
     private final Consumer<PlayerBase> mPlayerAvailableCb;
@@ -233,6 +242,8 @@ class SoundEffectsHelper {
     }
 
     void onUnloadSoundEffects() {
+        releaseTapPool();
+        mTapUri = null;
         if (mSoundPool == null) {
             return;
         }
@@ -266,6 +277,8 @@ class SoundEffectsHelper {
             volFloat = volume / 1000.0f;
         }
 
+        if (effect == AudioManager.FX_KEY_CLICK && playCustomTap(volFloat)) return;
+
         Resource res = mResources.get(mEffects[effect]);
         if (mSoundPool != null && res.mSampleId != EFFECT_NOT_IN_SOUND_POOL && res.mLoaded) {
             mSoundPool.play(res.mSampleId, volFloat, volFloat, 0, 0, 1.0f);
@@ -297,6 +310,55 @@ class SoundEffectsHelper {
                 Log.w(TAG, "MediaPlayer IllegalStateException: " + ex);
             }
         }
+    }
+
+    private boolean playCustomTap(float volume) {
+        String sound = Settings.System.getStringForUser(mContext.getContentResolver(),
+                "petal_tap_sound", UserHandle.USER_CURRENT);
+        if (sound == null) {
+            if (mTapUri != null) {
+                releaseTapPool();
+                mTapUri = null;
+            }
+            return false;
+        }
+        if (sound.isEmpty()) {
+            if (!sound.equals(mTapUri)) releaseTapPool();
+            mTapUri = sound;
+            return true;
+        }
+        if (!Objects.equals(sound, mTapUri)) {
+            releaseTapPool();
+            mTapUri = sound;
+            SoundPool pool = new SoundPool.Builder().setMaxStreams(1)
+                    .setAudioAttributes(new AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .build())
+                    .build();
+            mTapPool = pool;
+            pool.setOnLoadCompleteListener((loaded, sampleId, status) -> {
+                if (mTapPool == loaded && sampleId == mTapSampleId) {
+                    mTapLoaded = status == 0;
+                }
+            });
+            try (AssetFileDescriptor afd = mContext.getContentResolver()
+                    .openAssetFileDescriptor(Uri.parse(sound), "r")) {
+                if (afd != null) mTapSampleId = pool.load(afd, 1);
+            } catch (Exception e) {
+                Log.w(TAG, "Custom tap sound unavailable", e);
+            }
+        }
+        if (mTapPool == null || !mTapLoaded) return false;
+        mTapPool.play(mTapSampleId, volume, volume, 0, 0, 1f);
+        return true;
+    }
+
+    private void releaseTapPool() {
+        if (mTapPool != null) mTapPool.release();
+        mTapPool = null;
+        mTapSampleId = 0;
+        mTapLoaded = false;
     }
 
     private static void cleanupPlayer(MediaPlayer mp) {

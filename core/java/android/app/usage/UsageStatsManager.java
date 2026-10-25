@@ -720,8 +720,10 @@ public final class UsageStatsManager {
      */
     public boolean isAppInactive(String packageName) {
         try {
-            return mService.isAppInactive(packageName, mContext.getUserId(),
+            final boolean inactive = mService.isAppInactive(packageName, mContext.getUserId(),
                     mContext.getOpPackageName());
+            return inactive && !android.app.PetalStateOverrides.isEnabledForPackage(
+                    android.app.PetalStateOverrides.STANDBY, packageName, mContext.getUserId());
         } catch (RemoteException e) {
             // fall through and return default
         }
@@ -760,9 +762,10 @@ public final class UsageStatsManager {
      */
     public @StandbyBuckets int getAppStandbyBucket() {
         try {
-            return mService.getAppStandbyBucket(mContext.getOpPackageName(),
+            final int bucket = mService.getAppStandbyBucket(mContext.getOpPackageName(),
                     mContext.getOpPackageName(),
                     mContext.getUserId());
+            return reportedStandbyBucket(mContext.getOpPackageName(), bucket);
         } catch (RemoteException e) {
         }
         return STANDBY_BUCKET_ACTIVE;
@@ -778,11 +781,20 @@ public final class UsageStatsManager {
     @RequiresPermission(android.Manifest.permission.PACKAGE_USAGE_STATS)
     public @StandbyBuckets int getAppStandbyBucket(String packageName) {
         try {
-            return mService.getAppStandbyBucket(packageName, mContext.getOpPackageName(),
+            final int bucket = mService.getAppStandbyBucket(packageName, mContext.getOpPackageName(),
                     mContext.getUserId());
+            return reportedStandbyBucket(packageName, bucket);
         } catch (RemoteException e) {
         }
         return STANDBY_BUCKET_ACTIVE;
+    }
+
+    private int reportedStandbyBucket(String packageName, int bucket) {
+        // Preserve the stronger real EXEMPTED bucket rather than downgrading it to ACTIVE.
+        return bucket > STANDBY_BUCKET_ACTIVE
+                && android.app.PetalStateOverrides.isEnabledForPackage(
+                android.app.PetalStateOverrides.STANDBY, packageName, mContext.getUserId())
+                ? STANDBY_BUCKET_ACTIVE : bucket;
     }
 
     /**

@@ -16,12 +16,13 @@
 
 package com.android.systemui.petalos
 
+import android.service.quicksettings.Tile.STATE_ACTIVE
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.Orientation
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.draggable
-import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -33,6 +34,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
@@ -43,8 +45,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.contentDescription
@@ -70,12 +72,23 @@ fun PetalVerticalSliderPill(
     onIconClick: () -> Unit = {},
     iconActionDescription: String = contentDescriptionText,
     iconTint: Color = Color.Unspecified,
+    onDraggingChanged: (Boolean) -> Unit = {},
+    reveal: PetalQsReveal? = null,
 ) {
     val dark = PetalQsSkin.dark()
-    // dark mode fills with the near-white card, light mode with the dark contrast fill
-    val fillColor = if (dark) PetalQsSkin.CardLight else PetalQsSkin.CardFillLight
+    // pull from the tile palette so the pills stop looking like a stock progress bar
+    val tileColors =
+        PetalQsSkin.tileColors(
+            state = STATE_ACTIVE,
+            handlesSecondaryClick = true,
+            iconOnly = false,
+            emission = PetalQsSkin.emission(),
+            dark = dark,
+        )
+    val fillColor = tileColors.background
+    val iconBoxColor = tileColors.iconBackground
     val resolvedIconTint = if (iconTint == Color.Unspecified) {
-        if (dark) PetalQsSkin.GlyphDark else PetalQsSkin.GlyphLight
+        tileColors.icon
     } else {
         iconTint
     }
@@ -84,54 +97,47 @@ fun PetalVerticalSliderPill(
     val shown = (if (dragFraction.isNaN()) value else dragFraction).coerceIn(0f, 1f)
     val currentOnCommit by rememberUpdatedState(onCommit)
     val currentOnValueChange by rememberUpdatedState(onValueChange)
+    val currentOnDraggingChanged by rememberUpdatedState(onDraggingChanged)
+    val view = LocalView.current
+    DisposableEffect(Unit) {
+        onDispose { currentOnDraggingChanged(false) }
+    }
     val horizontal = orientation == Orientation.Horizontal
     val rtl = LocalLayoutDirection.current == LayoutDirection.Rtl
-    var axisSize by remember { mutableFloatStateOf(1f) }
-    val dragState = rememberDraggableState { delta ->
-        val base = if (dragFraction.isNaN()) value else dragFraction
-        val direction = if (horizontal && !rtl) 1f else -1f
-        val next = (base + direction * delta / axisSize).coerceIn(0f, 1f)
-        dragFraction = next
-        onValueChange(next)
-    }
     val pillShape = RoundedCornerShape(PetalQsSkin.TileCornerRadius)
-
-    fun commit() {
-        val frac = if (dragFraction.isNaN()) value else dragFraction
-        dragFraction = Float.NaN
-        currentOnCommit(frac.coerceIn(0f, 1f))
-    }
 
     Box(
         modifier =
             modifier
-                .width(width)
+                .width(if (horizontal) width else maxOf(width, 48.dp))
                 .height(height)
-                .onSizeChanged { size ->
-                    axisSize =
-                        (if (horizontal) size.width else size.height).toFloat().coerceAtLeast(1f)
-                }
-                .clip(pillShape)
-                .background(PetalQsSkin.tileGlass(dark))
-                // glass edge highlight on the rim
-                .border(1.dp, PetalQsSkin.tileGlassBorderBrush(dark), pillShape)
-                .draggable(
-                    orientation = orientation,
-                    state = dragState,
-                    onDragStopped = { commit() },
-                )
                 .pointerInput(orientation, rtl) {
-                    detectTapGestures { offset ->
-                        val frac =
-                            if (horizontal) {
-                                val x = offset.x / size.width.toFloat().coerceAtLeast(1f)
+                    awaitEachGesture {
+                        val down = awaitFirstDown()
+                        // claim the lane before the shade thinks this is a collapse swipe
+                        view.parent?.requestDisallowInterceptTouchEvent(true)
+                        currentOnDraggingChanged(true)
+                        fun update(position: androidx.compose.ui.geometry.Offset) {
+                            val fraction = if (horizontal) {
+                                val x = position.x / size.width.toFloat().coerceAtLeast(1f)
                                 if (rtl) 1f - x else x
-                            } else {
-                                1f - (offset.y / size.height.toFloat().coerceAtLeast(1f))
+                            } else 1f - position.y / size.height.toFloat().coerceAtLeast(1f)
+                            dragFraction = fraction.coerceIn(0f, 1f)
+                            currentOnValueChange(dragFraction)
+                        }
+                        down.consume()
+                        update(down.position)
+                        try {
+                            val released = drag(down.id) { change ->
+                                change.consume()
+                                update(change.position)
                             }
-                        dragFraction = frac.coerceIn(0f, 1f)
-                        currentOnValueChange(dragFraction)
-                        commit()
+                            if (released) currentOnCommit(dragFraction)
+                        } finally {
+                            dragFraction = Float.NaN
+                            currentOnDraggingChanged(false)
+                            view.parent?.requestDisallowInterceptTouchEvent(false)
+                        }
                     }
                 }
                 .semantics {
@@ -145,33 +151,48 @@ fun PetalVerticalSliderPill(
                     }
                 }
     ) {
-        // fill grows from the bottom
         Box(
             modifier =
-                Modifier.align(if (horizontal) Alignment.CenterStart else Alignment.BottomCenter)
+                Modifier.align(Alignment.Center)
+                    .petalQsSurfaceReveal(reveal)
                     .then(
-                        if (horizontal) Modifier.fillMaxHeight().fillMaxWidth(shown)
-                        else Modifier.fillMaxWidth().fillMaxHeight(shown)
+                        if (horizontal) Modifier.fillMaxWidth().height(40.dp)
+                        else Modifier.width(width).fillMaxHeight()
                     )
-                    .background(fillColor)
-        )
+                    .clip(pillShape)
+                    .background(PetalQsSkin.tileGlass(dark))
+                    .border(1.dp, PetalQsSkin.tileGlassBorderBrush(dark), pillShape)
+        ) {
+            // Skinny glass, proper touch lane. No fiddly little target.
+            Box(
+                modifier =
+                    Modifier.align(if (horizontal) Alignment.CenterStart else Alignment.BottomCenter)
+                        .then(
+                            if (horizontal) Modifier.fillMaxHeight().fillMaxWidth(shown)
+                            else Modifier.fillMaxWidth().fillMaxHeight(shown)
+                        )
+                        .background(fillColor)
+            )
+        }
         IconButton(
             onClick = onIconClick,
             modifier =
                 Modifier.align(if (horizontal) Alignment.CenterStart else Alignment.BottomCenter)
-                    .size(if (horizontal) height else width),
+                    .petalQsSurfaceReveal(reveal)
+                    .petalQsContentReveal(reveal)
+                    .size(48.dp),
         ) {
             // keep to vector icons, level lists crash painter
             Icon(
                 painter = painterResource(id = iconRes),
                 contentDescription = iconActionDescription,
                 tint = resolvedIconTint,
-                // backing circle so the icon shows at zero
+                // backing box matches the tiles now, not a white lollipop
                 modifier =
                     Modifier.size(32.dp)
                         .background(
-                            fillColor,
-                            androidx.compose.foundation.shape.CircleShape,
+                            iconBoxColor,
+                            PetalQsSkin.iconShape(),
                         )
                         .padding(6.dp),
             )

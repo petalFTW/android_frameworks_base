@@ -96,6 +96,7 @@ import com.android.systemui.ExpandHelper;
 import com.android.systemui.flags.FeatureFlags;
 import com.android.systemui.flags.Flags;
 import com.android.systemui.qs.flags.QSComposeFragment;
+import com.android.systemui.media.remedia.shared.flag.MediaControlsInComposeFlag;
 import com.android.systemui.res.R;
 import com.android.systemui.scene.shared.flag.SceneContainerFlag;
 import com.android.systemui.shade.QSHeaderBoundsProvider;
@@ -1147,7 +1148,14 @@ public class NotificationStackScrollLayout
         // correctly as they are used to calculate how many we can fit on the screen.
         final int size = getChildCount();
         for (int i = 0; i < size; i++) {
-            measureChild(getChildAt(i), childWidthSpec, childHeightSpec);
+            View child = getChildAt(i);
+            // The ribbon runs to the screen edges; notification cards keep their gutters.
+            boolean ribbon = child instanceof MediaContainerView && mAmbientState.isOnKeyguard()
+                    && !mShouldUseSplitNotificationShade && !MediaControlsInComposeFlag.isEnabled();
+            int mediaWidthSpec = ribbon
+                    ? MeasureSpec.makeMeasureSpec(width, MeasureSpec.getMode(widthMeasureSpec))
+                    : childWidthSpec;
+            measureChild(child, mediaWidthSpec, childHeightSpec);
         }
         if (SceneContainerFlag.isEnabled()) {
             setMaxLayoutHeight(getMeasuredHeight());
@@ -1456,9 +1464,35 @@ public class NotificationStackScrollLayout
     }
 
     private boolean mPetalSilentExpanded;
+    private final PetalNotificationCollection mPetalCollection = new PetalNotificationCollection(this);
     private final Set<ExpandableNotificationRow> mPetalHiddenSilentRows = new HashSet<>();
 
-    /** Collapse presentation only: keep entries in the pipeline and preserve clear-all semantics. */
+    public void setPetalCdPlayer(View player, boolean showing) {
+        mPetalCollection.setCdPlayer(player, showing);
+    }
+
+    public float getPetalCollectionHeight() {
+        return mPetalCollection.getHeight(mAmbientState, false);
+    }
+
+    public float getPetalCollectionMinimumHeight() {
+        return mPetalCollection.getHeight(mAmbientState, true);
+    }
+
+    public boolean isPetalCollectionActive() {
+        return mPetalCollection.isActive();
+    }
+
+    boolean ownsPetalCollectionTouch() {
+        return mPetalCollection.ownsTouch();
+    }
+
+    void onPetalCollectionChanged() {
+        updateContentHeight();
+        requestChildrenUpdate();
+    }
+
+    // Hide the rows, don't bin the actual notifications.
     private void updatePetalSilentSection() {
         SectionHeaderView header = mSectionsManager.getSilentHeaderView();
         boolean enabled = com.android.systemui.petalos.PetalQsSkin.isEnabled(mContext)
@@ -1492,6 +1526,7 @@ public class NotificationStackScrollLayout
         if (changed) {
             mSpeedBumpIndexDirty = true;
             updateContentHeight();
+            notifyHeightChangeListener(null, false);
             updateFirstAndLastBackgroundViews();
         }
     }
@@ -1508,7 +1543,8 @@ public class NotificationStackScrollLayout
                 ? 0
                 : mScroller.getCurrVelocity());
         mStackScrollAlgorithm.resetViewStates(mAmbientState, getSpeedBumpIndex());
-        if (!isCurrentlyAnimating() && !mNeedsAnimation) {
+        mPetalCollection.updateStates(mAmbientState);
+        if (mPetalCollection.isAnimating() || (!isCurrentlyAnimating() && !mNeedsAnimation)) {
             applyCurrentState();
         } else {
             startAnimationToState();
@@ -1531,6 +1567,7 @@ public class NotificationStackScrollLayout
      */
     @VisibleForTesting
     void avoidNotificationOverlaps() {
+        if (mPetalCollection.isActive()) return;
         if (!physicalNotificationMovement()) {
             return;
         }
@@ -2942,6 +2979,12 @@ public class NotificationStackScrollLayout
     }
 
     private void updateContentHeight() {
+        // Headers and the footer eat space too, not just the bloody rows.
+        int mediaNotificationHeight = (int) Math.ceil(getScrimTopPaddingOrZero()
+                + mNotificationStackSizeCalculator.computeShadeNotificationHeight(this));
+        com.android.systemui.petalos.PetalMediaSpace.setNotificationHeight(mediaNotificationHeight);
+        com.android.systemui.petalos.PetalMediaSpace.setAvailableShadeHeight(
+                getHeight() - mBottomPadding);
         if (SceneContainerFlag.isEnabled()) {
             updateIntrinsicStackHeight();
             updateStackEndHeightAndStackHeight(mAmbientState.getExpansionFraction());
@@ -4125,6 +4168,15 @@ public class NotificationStackScrollLayout
 
     @Override
     public boolean dispatchTouchEvent(MotionEvent ev) {
+        if (mPetalCollection.onTouch(ev)) {
+            if (mPetalCollection.shouldCancelChildTouch()) {
+                MotionEvent cancel = MotionEvent.obtain(ev);
+                cancel.setAction(MotionEvent.ACTION_CANCEL);
+                super.dispatchTouchEvent(cancel);
+                cancel.recycle();
+            }
+            return true;
+        }
         if (SceneContainerFlag.isEnabled()) {
             int action = ev.getActionMasked();
             boolean isTouchInGuts = mController.isTouchInGutsView(ev);
@@ -4718,6 +4770,7 @@ public class NotificationStackScrollLayout
      */
     @Override
     public boolean performAccessibilityActionInternal(int action, Bundle arguments) {
+        if (mPetalCollection.performAccessibilityAction(action)) return true;
         if (super.performAccessibilityActionInternal(action, arguments)) {
             return true;
         }
@@ -5458,6 +5511,7 @@ public class NotificationStackScrollLayout
     @Override
     public void onInitializeAccessibilityNodeInfoInternal(AccessibilityNodeInfo info) {
         super.onInitializeAccessibilityNodeInfoInternal(info);
+        mPetalCollection.addAccessibilityAction(info);
         if (mScrollable) {
             info.setScrollable(true);
             if (mBackwardScrollable) {
@@ -5671,7 +5725,7 @@ public class NotificationStackScrollLayout
         return mQsFullScreen;
     }
 
-    private float getQsExpansionFraction() {
+    float getQsExpansionFraction() {
         SceneContainerFlag.assertInLegacyMode();
         return mQsExpansionFraction;
     }

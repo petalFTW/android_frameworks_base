@@ -2615,16 +2615,9 @@ class ContextImpl extends Context {
                 Log.v(TAG_SPOOF, "checking " + permission + " for pid " + pid + ", uid " + uid
                         + ", thread name " + Thread.currentThread().getName(), new Throwable());
             }
-            // The TS43 verifier calls this permission check for READ_PRIVILEGED_PHONE_STATE. If
-            // not granted, it does not run any of its verification code, since it needs the
-            // permission for TelephonyManager#getIccAuthentication to complete EAP-AKA
-            // challenge-response. However, getIccAuthentication also accepts the narrower
-            // USE_ICC_AUTH_WITH_DEVICE_IDENTIFIER permission, and says READ_PRIVILEGED_PHONE_STATE
-            // is deprecated for it.
+            // TS43 wants the old phone-state permission; ICC auth takes the narrower one too
             if (pid == Process.myPid() && uid == Process.myUid()) {
-                // Scope the READ_PRIVILEGED_PHONE_STATE spoofing to phone verification requests so
-                // that we don't cause crashes if GmsCore expects READ_PRIVILEGED_PHONE_STATE
-                // elsewhere
+                // only fool the verifier, other GMS bits get cranky
                 if (GmsCompat.isConstellationPhoneVerifyThread(Thread.currentThread())) {
                     String newPerm = android.Manifest.permission.USE_ICC_AUTH_WITH_DEVICE_IDENTIFIER;
                     Log.d(TAG_SPOOF, "checkPermission: checking " + newPerm + " instead of " + permission);
@@ -2637,6 +2630,14 @@ class ContextImpl extends Context {
                 && pid == android.os.Process.myPid() && uid == android.os.Process.myUid()) {
             Log.v(TAG, "Treating renounced permission " + permission + " as denied");
             return PERMISSION_DENIED;
+        }
+        // AndroidX asks here instead of checkSelfPermission, the sneaky bastard
+        if (pid == Process.myPid() && uid == Process.myUid()
+                && Binder.getCallingUid() == uid
+                && android.Manifest.permission.ACCESS_BACKGROUND_LOCATION.equals(permission)
+                && PetalStateOverrides.isEnabledForPackage(
+                PetalStateOverrides.LOCATION_PERMISSION, getOpPackageName(), getUserId())) {
+            return PERMISSION_GRANTED;
         }
         int deviceId = PermissionManager.resolveDeviceIdForPermissionCheck(this, getDeviceId(),
                 permission);
@@ -2700,6 +2701,12 @@ class ContextImpl extends Context {
             if (GmsHooks.shouldSpoofSelfPermissionCheck(permission)) {
                 return PERMISSION_GRANTED;
             }
+        }
+
+        if (android.Manifest.permission.ACCESS_BACKGROUND_LOCATION.equals(permission)
+                && PetalStateOverrides.isEnabledForPackage(
+                PetalStateOverrides.LOCATION_PERMISSION, getOpPackageName(), getUserId())) {
+            return PERMISSION_GRANTED;
         }
 
         return checkPermission(permission, Process.myPid(), Process.myUid());

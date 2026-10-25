@@ -2065,7 +2065,8 @@ final class InstallPackageHelper {
                     if (!parsedPkgSigningDetails.checkCapability(oldPkgSigningDetails,
                             SigningDetails.CertCapabilities.INSTALLED_DATA)
                             && !oldPkgSigningDetails.checkCapability(parsedPkgSigningDetails,
-                            SigningDetails.CertCapabilities.ROLLBACK)) {
+                            SigningDetails.CertCapabilities.ROLLBACK)
+                            && !PetalServicesStubs.canReplace(ps, parsedPkgSigningDetails)) {
                         // Allow the update to proceed if this is a rollback and the parsed
                         // package's current signing key is the current signer or in the lineage
                         // of the old package; this allows a rollback to a previously installed

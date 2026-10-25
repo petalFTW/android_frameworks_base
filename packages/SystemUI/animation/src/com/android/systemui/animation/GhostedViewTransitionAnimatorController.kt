@@ -288,8 +288,7 @@ constructor(
 
     override fun onTransitionAnimationStart(isExpandingFullyAbove: Boolean) {
         if (ghostedView.parent !is ViewGroup) {
-            // This should usually not happen, but let's make sure we don't crash if the view was
-            // detached right before we started the animation.
+            // detached mid-launch, bail before it blows up
             Log.w(TAG, "Skipping animation as ghostedView is not attached to a ViewGroup")
             return
         }
@@ -297,36 +296,23 @@ constructor(
         backgroundView =
             FrameLayout(transitionContainer.context).also { transitionContainerOverlay.add(it) }
 
-        // We wrap the ghosted view background and use it to draw the expandable background. Its
-        // alpha will be set to 0 as soon as we start drawing the expanding background.
+        // borrow the background, hide the original while it moves
         startBackgroundAlpha = background?.alpha ?: 0xFF
         backgroundDrawable = WrappedDrawable(background)
         backgroundView?.background = backgroundDrawable
 
-        // Delay the calls to `ghostedView.setVisibility()` during the animation. This must be
-        // called before `GhostView.addGhost()` is called because the latter will change the
-        // *transition* visibility, which won't be blocked and will affect the normal View
-        // visibility that is saved by `setShouldBlockVisibilityChanges()` for a later restoration.
+        // block normal visibility changes before GhostView messes with them
         (ghostedView as? LaunchableView)?.setShouldBlockVisibilityChanges(true)
 
         try {
-            // Create a ghost of the view that will be moving and fading out. This allows to fade
-            // out the content before fading out the background.
+            // content fades separately from its moving background
             ghostView = GhostView.addGhost(ghostedView, transitionContainer)
         } catch (e: Exception) {
-            // It is not 100% clear what conditions cause this exception to happen in practice, and
-            // we could never reproduce it, but it does show up extremely rarely. We already handle
-            // the scenario where ghostView is null, so we just avoid crashing and log the error.
-            // See b/315858472 for an investigation of the issue.
+            // rare GhostView bullshit, log it instead of crashing
             Log.e(TAG, "Failed to create ghostView", e)
         }
 
-        // [GhostView.addGhost], the result of which is our [ghostView], creates a [GhostView], and
-        // adds it first to a [FrameLayout] container. It then adds _that_ container to an
-        // [OverlayViewGroup]. We need to turn off clipping for that container view. Currently,
-        // however, the only way to get a reference to that overlay is by going through our
-        // [ghostView]. The [OverlayViewGroup] will always be its grandparent view.
-        // TODO(b/306652954) reference the overlay view group directly if we can
+        // GhostView's grandparent clips the moving slab unless we stop it
         (ghostView?.parent?.parent as? ViewGroup)?.let {
             it.clipChildren = false
             it.clipToPadding = false
@@ -348,21 +334,17 @@ constructor(
 
         if (!state.visible || !ghostedView.isAttachedToWindow) {
             if (ghostView.visibility == View.VISIBLE) {
-                // Making the ghost view invisible will make the ghosted view visible, so order is
-                // important here.
+                // hide the ghost first, then its original
                 ghostView.visibility = View.INVISIBLE
 
-                // Make the ghosted view invisible again. We use the transition visibility like
-                // GhostView does so that we don't mess up with the accessibility tree (see
-                // b/204944038#comment17).
+                // transition visibility keeps accessibility from getting scrambled
                 ghostedView.setTransitionVisibility(View.INVISIBLE)
                 backgroundView.visibility = View.INVISIBLE
             }
             return
         }
 
-        // The ghost and backgrounds views were made invisible earlier. That can for instance happen
-        // when animating a dialog into a view.
+        // exit animations may have hidden both already
         if (ghostView.visibility == View.INVISIBLE) {
             ghostView.visibility = View.VISIBLE
             backgroundView.visibility = View.VISIBLE
@@ -379,8 +361,7 @@ constructor(
         val scale = min(widthRatio, heightRatio)
 
         if (ghostedView.parent is ViewGroup) {
-            // Recalculate the matrix in case the ghosted view moved. We ensure that the ghosted
-            // view is still attached to a ViewGroup, otherwise calculateMatrix will throw.
+            // recalc only while attached or calculateMatrix throws a fit
             GhostView.calculateMatrix(ghostedView, transitionContainer, ghostViewMatrix)
         }
 
@@ -417,7 +398,7 @@ constructor(
 
     override fun onTransitionAnimationEnd(isExpandingFullyAbove: Boolean) {
         if (ghostView == null) {
-            // We didn't actually run the animation.
+            backgroundView?.let { transitionContainerOverlay.remove(it) }
             return
         }
 
@@ -433,9 +414,7 @@ constructor(
             (ghostedView as LaunchableView).setShouldBlockVisibilityChanges(false)
             (ghostedView as LaunchableView).onActivityLaunchAnimationEnd()
         } else {
-            // Make the ghosted view visible. We ensure that the view is considered VISIBLE by
-            // accessibility by first making it INVISIBLE then VISIBLE (see b/204944038#comment17
-            // for more info).
+            // toggle it back so accessibility notices
             ghostedView.visibility = View.INVISIBLE
             ghostedView.visibility = View.VISIBLE
             ghostedView.invalidate()
@@ -499,9 +478,7 @@ constructor(
 
             wrapped.draw(canvas)
 
-            // The background view (and therefore this drawable) is drawn before the ghost view, so
-            // the ghosted view background alpha should always be 0 when it is drawn above the
-            // background.
+            // don't draw the same background twice under the ghost
             wrapped.alpha = 0
             wrapped.bounds = previousBounds
             restoreBackgroundRadii()
@@ -531,6 +508,7 @@ constructor(
         }
 
         fun setBackgroundRadius(topCornerRadius: Float, bottomCornerRadius: Float) {
+            if (cornerRadii[0] == topCornerRadius && cornerRadii[4] == bottomCornerRadius) return
             updateRadii(cornerRadii, topCornerRadius, bottomCornerRadius)
             invalidateSelf()
         }

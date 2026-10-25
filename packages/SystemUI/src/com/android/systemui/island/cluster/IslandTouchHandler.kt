@@ -29,17 +29,16 @@ class IslandTouchHandler(
     private val geometry: IslandGeometry,
 ) {
     private val touchSlop = ViewConfiguration.get(view.context).scaledTouchSlop
-    private val longPressTimeout = 500L
+    private val longPressTimeout = ViewConfiguration.getLongPressTimeout().toLong()
 
     private var downX = 0f
     private var downY = 0f
-    private var startX = 0f
-    private var startY = 0f
     private var dragging = false
     private var longPressed = false
-
-    // cleared on down. first move after an intercept sets the start point
     private var gotDown = false
+    private var activePointerId = MotionEvent.INVALID_POINTER_ID
+    private var tapEligible = false
+    private var dragUpdatedThisEvent = false
 
     // set once we pick an axis, doesn't change mid drag
     private var horizontalAxis = false
@@ -48,126 +47,170 @@ class IslandTouchHandler(
 
     private val longPressRunnable = Runnable { onLongPress() }
 
-    // grabs the gesture as soon as it looks like a drag
-    fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
-        when (ev.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                downX = ev.x
-                downY = ev.y
-                startX = ev.x
-                startY = ev.y
-                dragging = false
-                longPressed = false
-                horizontalAxis = false
-            }
-            MotionEvent.ACTION_MOVE -> {
-                if (!dragging) {
-                    val dx = ev.x - startX
-                    val dy = ev.y - startY
-                    if (abs(dx) > touchSlop || abs(dy) > touchSlop) {
-                        dragging = true
-                        horizontalAxis = abs(dx) > abs(dy)
-                        view.removeCallbacks(longPressRunnable)
-                    }
-                }
-            }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                dragging = false
-            }
+    // Record once, before intercept and touch can both see the same event.
+    fun onDispatchTouchEvent(ev: MotionEvent) {
+        dragUpdatedThisEvent = false
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN) {
+            cancel()
+            activePointerId = ev.getPointerId(0)
+            downX = ev.getRawX(0)
+            downY = ev.getRawY(0)
+            gotDown = true
+            tapEligible = true
+            velocityTracker = VelocityTracker.obtain()
+            view.callbacks?.onUserTouchChanged(view, true)
         }
+        if (!gotDown) return
+        if (ev.actionMasked == MotionEvent.ACTION_POINTER_DOWN) {
+            tapEligible = false
+            view.removeCallbacks(longPressRunnable)
+        }
+        if (ev.actionMasked == MotionEvent.ACTION_POINTER_UP &&
+            ev.getPointerId(ev.actionIndex) == activePointerId) {
+            val replacement = if (ev.actionIndex == 0) 1 else 0
+            if (replacement >= ev.pointerCount) {
+                cancelDrag()
+                cancel()
+                return
+            }
+            // Keep displacement when the active finger lifts, not its absolute position.
+            downX = ev.getRawX(replacement) - (ev.getRawX(ev.actionIndex) - downX)
+            downY = ev.getRawY(replacement) - (ev.getRawY(ev.actionIndex) - downY)
+            activePointerId = ev.getPointerId(replacement)
+            tapEligible = false
+            velocityTracker?.clear()
+        }
+        val rawEvent = MotionEvent.obtain(ev)
+        rawEvent.offsetLocation(ev.getRawX(0) - ev.getX(0), ev.getRawY(0) - ev.getY(0))
+        velocityTracker?.addMovement(rawEvent)
+        rawEvent.recycle()
+    }
+
+    fun onDispatchTouchEventFinished(ev: MotionEvent) {
+        // Interception can spend the whole MOVE cancelling a child button.
+        if (ev.actionMasked == MotionEvent.ACTION_MOVE && dragging && !dragUpdatedThisEvent) {
+            updateDrag(ev)
+        }
+        if (ev.actionMasked == MotionEvent.ACTION_UP || ev.actionMasked == MotionEvent.ACTION_CANCEL) {
+            cancel()
+        }
+    }
+
+    // Local coordinates move with the island. Using them here made it bounce between two spots.
+    fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+        if (ev.actionMasked == MotionEvent.ACTION_MOVE) startDragIfNeeded(ev)
         return dragging
+    }
+
+    private fun startDragIfNeeded(ev: MotionEvent) {
+        if (dragging || !gotDown) return
+        val index = ev.findPointerIndex(activePointerId)
+        if (index < 0) return
+        val dx = ev.getRawX(index) - downX
+        val dy = ev.getRawY(index) - downY
+        if (abs(dx) <= touchSlop && abs(dy) <= touchSlop) return
+        tapEligible = false
+        view.removeCallbacks(longPressRunnable)
+        // A bit sideways is still down, don't chuck the bloody blob away.
+        val downward = dy > touchSlop && dy >= abs(dx) * 0.5f
+        val vertical = downward || abs(dy) >= abs(dx)
+        val horizontal = abs(dx) > touchSlop * 2f &&
+            (dy <= 0f || abs(dx) > abs(dy) * 2f)
+        if (!vertical && !horizontal) return
+        horizontalAxis = !vertical
+        if (!view.onGestureDragStart(horizontalAxis)) return
+        dragging = true
+        view.parent?.requestDisallowInterceptTouchEvent(true)
     }
 
     // taps and drags get handled here
     fun onTouchEvent(ev: MotionEvent): Boolean {
-        if (velocityTracker == null) velocityTracker = VelocityTracker.obtain()
-        velocityTracker?.addMovement(ev)
-
+        if (!gotDown) return false
         when (ev.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                downX = ev.x
-                downY = ev.y
-                startX = ev.x
-                startY = ev.y
-                dragging = false
-                gotDown = true
-                longPressed = false
-                horizontalAxis = false
                 view.postDelayed(longPressRunnable, longPressTimeout)
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
-                if (!gotDown) {
-                    // first move after an intercept, we need a starting point
-                    downX = ev.x
-                    downY = ev.y
-                    startX = ev.x
-                    startY = ev.y
-                    gotDown = true
-                }
-                if (!dragging) {
-                    val dx = ev.x - startX
-                    val dy = ev.y - startY
-                    if (abs(dx) > touchSlop || abs(dy) > touchSlop) {
-                        dragging = true
-                        horizontalAxis = abs(dx) > abs(dy)
-                        view.removeCallbacks(longPressRunnable)
-                    }
-                }
-                if (dragging) {
-                    if (horizontalAxis) {
-                        view.onHorizontalDragUpdate(ev.x - startX)
-                    } else {
-                        view.onDragUpdate(ev.y - startY)
-                    }
-                }
+                startDragIfNeeded(ev)
+                updateDrag(ev)
                 return true
             }
             MotionEvent.ACTION_UP -> {
                 view.removeCallbacks(longPressRunnable)
-                val dx = ev.x - downX
-                val dy = ev.y - downY
+                // A quick flick can dump its last bit of travel into UP.
+                startDragIfNeeded(ev)
+                val index = ev.findPointerIndex(activePointerId)
+                if (index < 0) {
+                    cancelDrag()
+                    return true
+                }
+                val dx = ev.getRawX(index) - downX
+                val dy = ev.getRawY(index) - downY
                 // no timeout on taps, any quick release counts
-                if (!dragging && !longPressed && gotDown && abs(dx) < touchSlop &&
+                if (!dragging && !longPressed && tapEligible && abs(dx) < touchSlop &&
                     abs(dy) < touchSlop
                 ) {
-                    onTap(ev.x, ev.y)
+                    onTap(ev.getX(index), ev.getY(index))
                 } else if (dragging) {
+                    updateDrag(ev)
                     if (horizontalAxis) {
                         velocityTracker?.computeCurrentVelocity(1000)
-                        val vx = velocityTracker?.xVelocity ?: 0f
-                        view.onHorizontalDragEnd(ev.x - startX, vx)
+                        val vx = velocityTracker?.getXVelocity(activePointerId) ?: 0f
+                        view.onHorizontalDragEnd(dx, vx)
                     } else {
-                        view.onDragEnd(ev.y - startY)
+                        view.onDragEnd(dy)
                     }
                 }
-                recycleVelocityTracker()
-                dragging = false
-                gotDown = false
                 return true
             }
             MotionEvent.ACTION_CANCEL -> {
-                view.removeCallbacks(longPressRunnable)
-                if (dragging && horizontalAxis) {
-                    view.onHorizontalDragEnd(0f, 0f)
-                } else if (dragging) {
-                    view.onDragEnd(0f)
-                }
-                recycleVelocityTracker()
-                dragging = false
-                gotDown = false
+                cancelDrag()
                 return true
             }
+            MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_POINTER_UP -> return true
         }
         return false
     }
 
-    private fun recycleVelocityTracker() {
+    private fun cancelDrag() {
+        if (dragging && horizontalAxis) view.onHorizontalDragEnd(0f, 0f)
+        else if (dragging) view.onDragEnd(0f)
+    }
+
+    private fun updateDrag(ev: MotionEvent) {
+        val index = ev.findPointerIndex(activePointerId)
+        if (index < 0) {
+            cancelDrag()
+            cancel()
+            return
+        }
+        if (!dragging) return
+        dragUpdatedThisEvent = true
+        if (horizontalAxis) {
+            view.onHorizontalDragUpdate(ev.getRawX(index) - downX)
+        } else {
+            view.onDragUpdate(ev.getRawY(index) - downY)
+        }
+    }
+
+    fun cancel() {
+        val hadTouch = gotDown
+        view.removeCallbacks(longPressRunnable)
         velocityTracker?.recycle()
         velocityTracker = null
+        if (dragging) view.parent?.requestDisallowInterceptTouchEvent(false)
+        dragging = false
+        gotDown = false
+        longPressed = false
+        horizontalAxis = false
+        tapEligible = false
+        activePointerId = MotionEvent.INVALID_POINTER_ID
+        if (hadTouch) view.callbacks?.onUserTouchChanged(view, false)
     }
 
     private fun onLongPress() {
+        if (!gotDown || dragging || longPressed || !tapEligible) return
         longPressed = true
         view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
         if (!view.isExpanded) view.callbacks?.onUserExpand(view)

@@ -2326,11 +2326,28 @@ public class PreferencesHelper implements RankingConfig {
      */
     public boolean isDelegateAllowed(String sourcePkg, int sourceUid,
             String potentialDelegatePkg, int potentialDelegateUid) {
+        if (potentialDelegatePkg == null || potentialDelegateUid == INVALID_UID) return false;
         synchronized (mLock) {
             PackagePreferences prefs = getPackagePreferencesLocked(sourcePkg, sourceUid);
-
-            return prefs != null && prefs.isValidDelegate(potentialDelegatePkg,
-                    potentialDelegateUid);
+            if (prefs == null || prefs.delegate == null || !prefs.delegate.mEnabled
+                    || !Objects.equals(prefs.delegate.mPkg, potentialDelegatePkg)) {
+                return false;
+            }
+            if (prefs.delegate.mUid == potentialDelegateUid) return true;
+        }
+        try {
+            if (mPm.getPackageUidAsUser(potentialDelegatePkg, UserHandle.getUserId(sourceUid))
+                    != potentialDelegateUid) return false;
+        } catch (PackageManager.NameNotFoundException e) {
+            return false;
+        }
+        synchronized (mLock) {
+            PackagePreferences prefs = getPackagePreferencesLocked(sourcePkg, sourceUid);
+            if (prefs == null || prefs.delegate == null || !prefs.delegate.mEnabled
+                    || !Objects.equals(prefs.delegate.mPkg, potentialDelegatePkg)) return false;
+            // GMS changed uid again; the package still owns this delegate
+            prefs.delegate = new Delegate(potentialDelegatePkg, potentialDelegateUid, true);
+            return true;
         }
     }
 
@@ -3087,12 +3104,23 @@ public class PreferencesHelper implements RankingConfig {
                 }
                 // Package upgrade
                 try {
+                    final int currentUid = mPm.getPackageUidAsUser(pkg, changeUserId);
                     synchronized (mLock) {
                         PackagePreferences fullPackagePreferences = getPackagePreferencesLocked(pkg,
-                                mPm.getPackageUidAsUser(pkg, changeUserId));
+                                currentUid);
                         if (fullPackagePreferences != null) {
                             updated |= createDefaultChannelIfNeededLocked(fullPackagePreferences);
                             updated |= deleteDefaultChannelIfNeededLocked(fullPackagePreferences);
+                        }
+                        for (int i = 0; i < mPackagePreferences.size(); i++) {
+                            PackagePreferences prefs = mPackagePreferences.valueAt(i);
+                            Delegate delegate = prefs.delegate;
+                            if (UserHandle.getUserId(prefs.uid) == changeUserId
+                                    && delegate != null && delegate.mPkg.equals(pkg)
+                                    && delegate.mUid != currentUid) {
+                                prefs.delegate = new Delegate(pkg, currentUid, delegate.mEnabled);
+                                updated = true;
+                            }
                         }
                     }
                 } catch (PackageManager.NameNotFoundException e) {

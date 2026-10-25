@@ -69,7 +69,10 @@ import android.graphics.Matrix;
 import android.hardware.biometrics.BiometricSourceType;
 import android.media.AudioAttributes;
 import android.media.AudioManager;
+import android.media.Ringtone;
+import android.media.RingtoneManager;
 import android.media.SoundPool;
+import android.net.Uri;
 import android.os.Binder;
 import android.os.Bundle;
 import android.os.DeadObjectException;
@@ -3038,7 +3041,33 @@ public class KeyguardViewMediator implements CoreStartable,
     }
 
     private void playSounds(boolean locked) {
-        playSound(locked ? mLockSoundId : mUnlockSoundId);
+        String custom = Settings.System.getStringForUser(mContext.getContentResolver(),
+                locked ? "petal_lock_sound" : "petal_unlock_sound",
+                mSelectedUserInteractor.getSelectedUserId());
+        if (custom == null) {
+            playSound(locked ? mLockSoundId : mUnlockSoundId);
+        } else if (!custom.isEmpty()) {
+            playCustomLockSound(custom);
+        }
+    }
+
+    private void playCustomLockSound(String sound) {
+        if (mSystemSettings.getIntForUser(LOCKSCREEN_SOUNDS_ENABLED, 1,
+                mSelectedUserInteractor.getSelectedUserId()) != 1) return;
+        if (mAudioManager == null) {
+            mAudioManager = mContext.getSystemService(AudioManager.class);
+            if (mAudioManager == null) return;
+            mUiSoundsStreamType = mAudioManager.getUiSoundsStreamType();
+        }
+        mUiBgExecutor.execute(() -> {
+            if (mAudioManager.isStreamMute(mUiSoundsStreamType)) return;
+            Ringtone ringtone = RingtoneManager.getRingtone(mContext, Uri.parse(sound));
+            if (ringtone != null) {
+                ringtone.setStreamType(mUiSoundsStreamType);
+                ringtone.setVolume(mLockSoundVolume);
+                ringtone.play();
+            }
+        });
     }
 
     private void playSound(int soundId) {

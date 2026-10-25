@@ -44,8 +44,8 @@ public final class PetalUtils {
     public static final int COLOR_POWER_OFF_GLOW = 0xFFFF2D2D;
     public static final int COLOR_REBOOT = 0xFF34C759;
     public static final int COLOR_REBOOT_GLOW = 0xFF22E06A;
-    public static final int COLOR_SYSUI = 0xFF3B7BFF;
-    public static final int COLOR_SYSUI_GLOW = 0xFF4D7BFF;
+    public static final int COLOR_SYSUI = 0xFF7C5CFF;
+    public static final int COLOR_SYSUI_GLOW = 0xFFB9A5FF;
 
     // gold used to confirm a long press
     public static final int COLOR_GOLD = 0xFFFFB300;

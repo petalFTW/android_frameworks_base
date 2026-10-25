@@ -38,6 +38,7 @@ object AlternateBouncerUdfpsViewBinder {
         view.repeatWhenAttached {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 view.alpha = 0f
+                fgIconView.setContainerAlpha(0f)
 
                 launch("$TAG#viewModel.accessibilityDelegateHint") {
                     viewModel.accessibilityDelegateHint.collect { hint ->
@@ -52,8 +53,14 @@ object AlternateBouncerUdfpsViewBinder {
 
                 if (SceneContainerFlag.isEnabled) {
                     view.alpha = 1f
+                    fgIconView.setContainerAlpha(1f)
                 } else {
-                    launch("$TAG#viewModel.alpha") { viewModel.alpha.collect { view.alpha = it } }
+                    launch("$TAG#viewModel.alpha") {
+                        viewModel.alpha.collect {
+                            view.alpha = it
+                            fgIconView.setContainerAlpha(it)
+                        }
+                    }
                 }
             }
         }
@@ -72,6 +79,11 @@ object AlternateBouncerUdfpsViewBinder {
                         fgViewModel.padding,
                         fgViewModel.padding,
                     )
+                    view.setIconAppearance(
+                        fgViewModel.type,
+                        fgViewModel.useAodVariant,
+                        fgViewModel.tint,
+                    )
                 }
             }
         }
@@ -85,7 +97,7 @@ object AlternateBouncerUdfpsViewBinder {
                     }
                 }
                 launch("$TAG#viewModel.bgAlpha") {
-                    viewModel.bgAlpha.collect { alpha -> bgView.alpha = alpha }
+                    viewModel.bgAlpha.collect { alpha -> view.backgroundProtectionAlpha = alpha }
                 }
             }
         }

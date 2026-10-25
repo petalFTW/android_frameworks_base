@@ -50,8 +50,6 @@ import com.android.systemui.user.ui.binder.StatusBarUserChipViewBinder;
 import com.android.systemui.user.ui.viewmodel.StatusBarUserChipViewModel;
 import com.android.systemui.util.leak.RotationUtils;
 
-import org.petalos.config.PetalConfig;
-
 import java.util.Objects;
 import java.util.function.BooleanSupplier;
 
@@ -315,19 +313,11 @@ public class PhoneStatusBarView extends FrameLayout {
         final int waterfallTopInset =
                 mDisplayCutout == null ? 0 : mDisplayCutout.getWaterfallInsets().top;
         ViewGroup.LayoutParams layoutParams = getLayoutParams();
-        mStatusBarHeight = getPetalStatusBarHeight();
+        mStatusBarHeight = SystemBarUtils.getStatusBarHeight(mContext);
         layoutParams.height = mStatusBarHeight - waterfallTopInset;
         updateSystemIconsContainerHeight();
         updatePaddings();
         setLayoutParams(layoutParams);
-    }
-
-    private int getPetalStatusBarHeight() {
-        final int dp = PetalConfig.getStatusBarHeightDp(mContext);
-        if (dp <= 0) {
-            return SystemBarUtils.getStatusBarHeight(mContext);
-        }
-        return Math.round(dp * getResources().getDisplayMetrics().density);
     }
 
     private void updateSystemIconsContainerHeight() {

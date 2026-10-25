@@ -1134,6 +1134,10 @@ public class ScrimController implements ViewTreeObserver.OnPreDrawListener, Dump
                 if (mState == ScrimState.KEYGUARD && mTransitionToFullShadeProgress > 0.0f) {
                     mNotificationsAlpha = MathUtils
                             .saturate(mTransitionToLockScreenFullShadeNotificationsProgress);
+                    if (Flags.notificationShadeBlur()) {
+                        // transparent tint alone doesn't stop that grey slab getting painted
+                        mNotificationsAlpha *= ScrimState.SHADE_LOCKED.getNotifAlpha();
+                    }
                 } else if (mState == ScrimState.SHADE_LOCKED) {
                     // going from KEYGUARD to SHADE_LOCKED state
                     if (Flags.notificationShadeBlur()) {
@@ -1150,6 +1154,9 @@ public class ScrimController implements ViewTreeObserver.OnPreDrawListener, Dump
                     mNotificationsAlpha = 0;
                 } else {
                     mNotificationsAlpha = Math.max(1.0f - getInterpolatedFraction(), mQsExpansion);
+                    if (Flags.notificationShadeBlur()) {
+                        mNotificationsAlpha *= mState.getNotifAlpha();
+                    }
                 }
                 mNotificationsTint = mState.getNotifTint();
                 mBehindTint = behindTint;

@@ -671,15 +671,22 @@ public class LocationManager {
         if (userHandle.getIdentifier() >= 0) {
             PropertyInvalidatedCache<Integer, Boolean> cache = sLocationEnabledCache;
             if (cache != null) {
-                return cache.query(userHandle.getIdentifier());
+                return reportedLocationEnabled(cache.query(userHandle.getIdentifier()),
+                        userHandle.getIdentifier());
             }
         }
 
         try {
-            return mService.isLocationEnabledForUser(userHandle.getIdentifier());
+            return reportedLocationEnabled(mService.isLocationEnabledForUser(userHandle.getIdentifier()),
+                    userHandle.getIdentifier());
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }
+    }
+
+    private boolean reportedLocationEnabled(boolean enabled, int userId) {
+        return enabled || android.app.PetalStateOverrides.isEnabledForPackage(
+                android.app.PetalStateOverrides.LOCATION, null, userId);
     }
 
     /**
@@ -776,7 +783,10 @@ public class LocationManager {
         Preconditions.checkArgument(provider != null, "invalid null provider");
 
         try {
-            return mService.isProviderEnabledForUser(provider, userHandle.getIdentifier());
+            final boolean enabled = mService.isProviderEnabledForUser(provider, userHandle.getIdentifier());
+            return enabled || (android.app.PetalStateOverrides.isEnabledForPackage(
+                    android.app.PetalStateOverrides.LOCATION, null, userHandle.getIdentifier())
+                    && getAllProviders().contains(provider));
         } catch (RemoteException e) {
             throw e.rethrowFromSystemServer();
         }

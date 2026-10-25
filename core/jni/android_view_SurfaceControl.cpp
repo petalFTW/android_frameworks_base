@@ -910,6 +910,15 @@ static void nativeSetBlurRegions(JNIEnv* env, jclass clazz, jlong transactionObj
         float cornerRadiusTR = region[7];
         float cornerRadiusBL = region[8];
         float cornerRadiusBR = region[9];
+        // Older callers can continue supplying the original ten/twelve-field blur region.
+        float refraction[3] = {};
+        if (env->GetArrayLength(regionArray) >= 12) {
+            env->GetFloatArrayRegion(regionArray, 10, 2, refraction);
+        }
+        if (env->GetArrayLength(regionArray) >= 13) {
+            env->GetFloatArrayRegion(regionArray, 12, 1, &refraction[2]);
+        }
+        env->DeleteLocalRef(regionArray);
 
         blurRegionVector.push_back(BlurRegion{.blurRadius = static_cast<uint32_t>(blurRadius),
                                               .cornerRadiusTL = cornerRadiusTL,
@@ -920,7 +929,10 @@ static void nativeSetBlurRegions(JNIEnv* env, jclass clazz, jlong transactionObj
                                               .left = static_cast<int>(left),
                                               .top = static_cast<int>(top),
                                               .right = static_cast<int>(right),
-                                              .bottom = static_cast<int>(bottom)});
+                                              .bottom = static_cast<int>(bottom),
+                                              .refractionStrength = refraction[0],
+                                              .refractionBand = refraction[1],
+                                              .refractionChromatic = refraction[2]});
     }
 
     transaction->setBlurRegions(ctrl, blurRegionVector);

@@ -19,6 +19,7 @@ package com.android.keyguard
 import android.content.Context
 import android.testing.TestableLooper.RunWithLooper
 import android.util.AttributeSet
+import android.view.View
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SmallTest
 import com.android.systemui.SysuiTestCase
@@ -38,6 +39,9 @@ class BouncerKeyguardMessageAreaTest : SysuiTestCase() {
         BouncerKeyguardMessageArea(context, attrs) {
         override val SHOW_DURATION_MILLIS = 0L
         override val HIDE_DURATION_MILLIS = 0L
+        var hasNonTextContent = false
+
+        override fun shouldShowEmptyMessage(): Boolean = hasNonTextContent
     }
     lateinit var underTest: BouncerKeyguardMessageArea
 
@@ -74,5 +78,25 @@ class BouncerKeyguardMessageAreaTest : SysuiTestCase() {
 
         underTest.setMessage(null, animate = true)
         assertThat(underTest.text).isEqualTo("")
+    }
+
+    @Test
+    fun emptyMessageKeepsNonTextContentVisibleButRespectsBouncerVisibility() {
+        val view = underTest as FakeBouncerKeyguardMessageArea
+        view.setIsVisible(true)
+        view.setMessage("Draw pattern", animate = false)
+        view.hasNonTextContent = true
+
+        view.setMessage(null, animate = false)
+        assertThat(view.visibility).isEqualTo(View.VISIBLE)
+
+        view.setIsVisible(false)
+        assertThat(view.visibility).isEqualTo(View.INVISIBLE)
+
+        view.setIsVisible(true)
+        assertThat(view.visibility).isEqualTo(View.VISIBLE)
+
+        view.disable()
+        assertThat(view.visibility).isEqualTo(View.GONE)
     }
 }

@@ -46,6 +46,10 @@ interface MediaCardViewModel {
     val playPauseAction: MediaPlayPauseActionViewModel?
 
     val navigation: MediaNavigationViewModel
+    val previousAction: MediaSecondaryActionViewModel
+        get() = (navigation as? MediaNavigationViewModel.Showing)?.left ?: MediaSecondaryActionViewModel.None
+    val nextAction: MediaSecondaryActionViewModel
+        get() = (navigation as? MediaNavigationViewModel.Showing)?.right ?: MediaSecondaryActionViewModel.None
 
     val additionalActions: List<MediaSecondaryActionViewModel>
 

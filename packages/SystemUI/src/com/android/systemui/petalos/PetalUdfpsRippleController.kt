@@ -39,12 +39,18 @@ import android.view.animation.LinearInterpolator
 import com.android.systemui.dagger.SysUISingleton
 import com.android.systemui.dagger.qualifiers.Application
 import com.android.systemui.dagger.qualifiers.Main
+import com.android.systemui.keyguard.data.repository.DeviceEntryFingerprintAuthRepository
+import com.android.systemui.keyguard.shared.model.SuccessFingerprintAuthenticationStatus
+import com.android.systemui.keyguard.ui.view.FingerprintBlobView
 import com.android.systemui.keyguard.ui.view.KeyguardRootView
+import com.android.systemui.res.R
 import com.android.systemui.screenshot.ImageCapture
 import com.android.systemui.util.concurrency.DelayableExecutor
 import java.io.PrintWriter
 import java.util.concurrent.Executors
 import javax.inject.Inject
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
 
 // fingerprint splash. bends the live lockscreen with a runtime shader, then keeps
 // riding a little overlay so the ripple survives the unlock into home
@@ -53,9 +59,11 @@ class PetalUdfpsRippleController
 @Inject
 constructor(
     @Application private val context: Context,
+    @Application private val scope: CoroutineScope,
     @Main private val mainExecutor: DelayableExecutor,
     private val keyguardRootView: KeyguardRootView,
     private val imageCapture: ImageCapture,
+    private val fingerprintAuth: DeviceEntryFingerprintAuthRepository,
 ) {
 
     private val shader: RuntimeShader? =
@@ -95,18 +103,37 @@ constructor(
     private var animator: ValueAnimator? = null
     private var cx = 0f
     private var cy = 0f
+    private var lastX = 0f
+    private var lastY = 0f
     private val durationMs = 900L
 
-    // finger landed on the sensor, kick the water off
-    fun splash(anchor: View) {
-        val loc = IntArray(2)
-        anchor.getLocationOnScreen(loc)
-        splashAt(loc[0] + anchor.width / 2f, loc[1] + anchor.height / 2f)
+    init {
+        // wait for the sensor to say yes before splashing anything
+        scope.launch {
+            fingerprintAuth.authenticationStatus.collect { status ->
+                if (status is SuccessFingerprintAuthenticationStatus) {
+                    mainExecutor.execute { splashAt(lastX, lastY) }
+                }
+            }
+        }
     }
 
-    // the udfps overlay pilfers the touch so the keyguard icon never sees it,
-    // controller pokes us with raw screen coords instead
-    fun splashAt(screenX: Float, screenY: Float) {
+    // optical udfps steals the touch, so the sensor pokes us directly
+    fun onFingerDown(screenX: Float, screenY: Float) {
+        lastX = screenX
+        lastY = screenY
+        blob()?.setFingerPressed(true)
+    }
+
+    fun onFingerUp() {
+        blob()?.setFingerPressed(false)
+    }
+
+    private fun blob(): FingerprintBlobView? =
+        keyguardRootView.findViewById(R.id.device_entry_icon_fg)
+
+    // print got accepted, now the water goes
+    private fun splashAt(screenX: Float, screenY: Float) {
         if (android.provider.Settings.System.getIntForUser(
                 context.contentResolver, "petal_udfps_ripple", 1,
                 android.os.UserHandle.USER_CURRENT) != 1) return

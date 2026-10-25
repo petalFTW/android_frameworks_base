@@ -82,6 +82,69 @@ public class QuickSettingsControllerImplTest extends QuickSettingsControllerImpl
     }
 
     @Test
+    public void qqsHeightGrows_unchangedExpansionRequestClampsToNewMinimum() {
+        mQsController.setQs(mQs);
+        mQsController.setBarState(SHADE);
+        when(mQs.getQsMinExpansionHeight()).thenReturn(100);
+        when(mQs.getDesiredHeight()).thenReturn(1000);
+        mQsController.updateHeightsOnShadeLayoutChange();
+        mQsController.setExpansionHeight(300);
+
+        when(mQs.getQsMinExpansionHeight()).thenReturn(600);
+        mQsController.updateMinHeight();
+        mQsController.setExpansionHeight(mQsController.getExpansionHeight());
+
+        assertThat(mQsController.getExpansionHeight()).isEqualTo(600f);
+        assertThat(mQsController.computeExpansionFraction()).isEqualTo(0f);
+        assertThat(mQsController.getExpanded()).isFalse();
+    }
+
+    @Test
+    public void qqsHeightCallback_reconcilesCollapsedHeightAndRefreshesExpansion() {
+        mQsController.setQs(mQs);
+        mQsController.setBarState(SHADE);
+        when(mQs.getQsMinExpansionHeight()).thenReturn(100);
+        when(mQs.getDesiredHeight()).thenReturn(1000);
+        mQsController.updateHeightsOnShadeLayoutChange();
+        mQsController.setExpansionHeight(100);
+        org.mockito.Mockito.clearInvocations(mQs);
+
+        when(mQs.getQsMinExpansionHeight()).thenReturn(600);
+        mQsController.onQqsHeightChanged();
+
+        assertThat(mQsController.getExpansionHeight()).isEqualTo(600f);
+        assertThat(mQsController.computeExpansionFraction()).isEqualTo(0f);
+        verify(mQs, atLeastOnce()).setQsExpansion(eq(0f), anyFloat(), anyFloat(), anyFloat());
+    }
+
+    @Test
+    public void expansionFraction_duringMinimumHeightChangeIsNeverNegative() {
+        mQsController.setQs(mQs);
+        mQsController.setBarState(SHADE);
+        when(mQs.getQsMinExpansionHeight()).thenReturn(100);
+        when(mQs.getDesiredHeight()).thenReturn(1000);
+        mQsController.updateHeightsOnShadeLayoutChange();
+        mQsController.setExpansionHeight(300);
+
+        when(mQs.getQsMinExpansionHeight()).thenReturn(600);
+        mQsController.updateMinHeight();
+
+        assertThat(mQsController.computeExpansionFraction()).isEqualTo(0f);
+    }
+
+    @Test
+    public void expansionFraction_equalMinAndMaxIsFinite() {
+        mQsController.setQs(mQs);
+        mQsController.setBarState(SHADE);
+        when(mQs.getQsMinExpansionHeight()).thenReturn(600);
+        when(mQs.getDesiredHeight()).thenReturn(600);
+        mQsController.updateHeightsOnShadeLayoutChange();
+        mQsController.setExpansionHeight(600);
+
+        assertThat(mQsController.computeExpansionFraction()).isEqualTo(0f);
+    }
+
+    @Test
     public void testCloseQsSideEffects() {
         enableSplitShade(true);
         mQsController.setExpandImmediate(true);

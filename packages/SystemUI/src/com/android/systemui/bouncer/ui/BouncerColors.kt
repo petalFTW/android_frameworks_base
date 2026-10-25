@@ -17,20 +17,16 @@
 package com.android.systemui.bouncer.ui
 
 import android.content.Context
+import android.graphics.Color
 import com.android.systemui.Flags
 import com.android.systemui.bouncer.shared.constants.KeyguardBouncerConstants.ColorId.NUM_PAD_BACKGROUND
 import com.android.systemui.common.shared.colors.SurfaceEffectColors
 import com.android.systemui.res.R.color
-import com.android.systemui.shade.ui.ShadeColors
 
 object BouncerColors {
     @JvmStatic
     fun Context.surfaceColor(blurSupported: Boolean): Int {
-        return if (blurSupported) {
-            ShadeColors.bouncerSurfacePanel(context = this, blurSupported = blurSupported)
-        } else {
-            getColor(color.bouncer_fallback_bg)
-        }
+        return Color.TRANSPARENT
     }
 
     @JvmStatic

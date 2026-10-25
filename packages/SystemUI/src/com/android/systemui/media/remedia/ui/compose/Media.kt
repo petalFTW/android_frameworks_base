@@ -18,6 +18,10 @@
 
 package com.android.systemui.media.remedia.ui.compose
 
+import android.database.ContentObserver
+import android.os.Handler
+import android.os.Looper
+import android.provider.Settings
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
@@ -57,6 +61,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.pager.HorizontalPager
@@ -78,6 +84,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -92,17 +99,28 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.center
+import androidx.compose.ui.graphics.BlurEffect
+import androidx.compose.ui.graphics.asComposeRenderEffect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.TileMode
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.translate
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.PointerInputChange
@@ -111,9 +129,12 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.layout.layoutId
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.node.Ref
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.style.TextOverflow
@@ -121,6 +142,7 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.fastCoerceIn
@@ -165,17 +187,23 @@ import com.android.systemui.media.remedia.ui.viewmodel.MediaSecondaryActionViewM
 import com.android.systemui.media.remedia.ui.viewmodel.MediaSettingsButtonViewModel
 import com.android.systemui.media.remedia.ui.viewmodel.MediaViewModel
 import com.android.systemui.petalos.PetalQsSkin
+import com.android.systemui.petalos.LocalPetalNarrowMedia
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.font.FontWeight
+import com.android.systemui.petalos.LocalPetalQsPreferences
+import com.android.systemui.petalos.LocalPetalMediaGlass
+import com.android.systemui.petalos.LocalPetalMediaReveal
+import com.android.systemui.petalos.LocalPetalMediaStyle
+import com.android.systemui.petalos.PetalMediaStyle
+import com.android.systemui.petalos.petalQsContentReveal
+import com.android.systemui.island.render.RefractionShader
+import com.android.systemui.island.render.LiquidGlassDrawable
+import org.petalos.config.PetalConfig
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
-/**
- * Renders a media controls UI element.
- *
- * This composable supports a multitude of presentation styles/layouts controlled by the
- * [presentationStyle] parameter. If the card carousel can be swiped away to dismiss by the user,
- * the [onDismissed] callback will be invoked when/if that happens.
- */
+// Media host picks the layout and whether swiping can dismiss it.
 @Composable
 fun Media(
     viewModelFactory: MediaViewModel.Factory,
@@ -202,14 +230,7 @@ fun Media(
     )
 }
 
-/**
- * Renders a media controls carousel of cards.
- *
- * This composable supports a multitude of presentation styles/layouts controlled by the
- * [presentationStyle] parameter. The behavior is controlled by [behavior]. If
- * [MediaUiBehavior.isCarouselDismissible] is `true`, the [onDismissed] callback will be invoked
- * when/if that happens.
- */
+// Cards share the host's swipe policy.
 @Composable
 private fun CardCarousel(
     viewModel: MediaViewModel,
@@ -335,6 +356,12 @@ private fun Card(
     presentationStyle: MediaPresentationStyle,
     modifier: Modifier = Modifier,
 ) {
+    val petalStyle = LocalPetalMediaStyle.current
+    if (petalStyle == PetalMediaStyle.Lockscreen ||
+        (petalStyle != PetalMediaStyle.Stock && PetalQsSkin.isEnabled(LocalContext.current))) {
+        PetalConceptCard(viewModel, petalStyle, modifier)
+        return
+    }
     val stlState =
         rememberMutableSceneTransitionLayoutState(
             initialScene = presentationStyle.toScene(),
@@ -404,6 +431,192 @@ private fun Card(
 }
 
 @Composable
+private fun PetalConceptCard(
+    viewModel: MediaCardViewModel,
+    style: PetalMediaStyle,
+    modifier: Modifier = Modifier,
+) {
+    val target = if (style == PetalMediaStyle.Mini) Media.Scenes.Compressed else Media.Scenes.Default
+    val scenes = rememberMutableSceneTransitionLayoutState(target, Media.Transitions)
+    LaunchedEffect(target) { scenes.setTargetScene(targetScene = target, animationScope = this) }
+    val context = LocalContext.current
+    val accent = Color(context.getColor(android.R.color.system_accent1_500))
+    val glyph = Color.White
+    val shape = RoundedCornerShape(24.dp)
+    Box(modifier.clip(shape)
+        .border(1.dp, PetalQsSkin.tileGlassBorderBrush(true), shape)) {
+        androidx.compose.ui.viewinterop.AndroidView(
+            factory = { context ->
+                android.view.View(context).apply {
+                    // tile glass fill, matches PetalQsSkin
+                    setBackgroundColor(0x5F33333D.toInt())
+                    outlineProvider = object : android.view.ViewOutlineProvider() {
+                        override fun getOutline(view: android.view.View, outline: android.graphics.Outline) {
+                            outline.setRoundRect(0, 0, view.width, view.height,
+                                24f * view.resources.displayMetrics.density)
+                        }
+                    }
+                    clipToOutline = true
+                    com.android.systemui.petalos.PetalMediaBackdrop.setEnabled(this, true)
+                }
+            },
+            modifier = Modifier.matchParentSize(),
+            onRelease = { com.android.systemui.petalos.PetalMediaBackdrop.setEnabled(it, false) },
+        )
+        Expandable(
+            controller = rememberExpandableController(color = Color.Transparent, shape = shape),
+            useModifierBasedImplementation = true,
+        ) {
+            SceneTransitionLayout(state = scenes) {
+                scene(Media.Scenes.Default) {
+                    CompositionLocalProvider(
+                        LocalPetalMediaStyle provides if (style == PetalMediaStyle.Lockscreen) {
+                            PetalMediaStyle.Lockscreen
+                        } else PetalMediaStyle.LargeProgress,
+                    ) {
+                        PetalConceptForeground(it, viewModel, style == PetalMediaStyle.Lockscreen,
+                            mini = false, accent = accent, glyph = glyph)
+                    }
+                }
+                scene(Media.Scenes.Compressed) {
+                    CompositionLocalProvider(LocalPetalMediaStyle provides PetalMediaStyle.Mini) {
+                        PetalConceptForeground(it, viewModel, lock = false,
+                            mini = true, accent = accent, glyph = glyph)
+                    }
+                }
+            }
+        }
+        if (viewModel.guts.isVisible) {
+            val colors = rememberAnimatedColorScheme(viewModel.colorScheme)
+            CardGuts(viewModel.guts, colors, Modifier.matchParentSize())
+        }
+    }
+}
+
+@Composable
+private fun ContentScope.PetalConceptForeground(
+    expandable: Expandable,
+    viewModel: MediaCardViewModel,
+    lock: Boolean,
+    mini: Boolean,
+    accent: Color,
+    glyph: Color,
+) {
+    Column(Modifier.fillMaxWidth().combinedClickable(
+        onClick = { viewModel.onClick(expandable) },
+        onLongClick = viewModel.onLongClick,
+        onClickLabel = viewModel.onClickLabel,
+    )) {
+        if (mini) {
+            Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                PetalConceptArtwork(viewModel.background, Modifier.size(76.dp).clip(RoundedCornerShape(12.dp)))
+                Column(Modifier.weight(1f).padding(start = 10.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Metadata(viewModel.title, viewModel.subtitle, glyph, Modifier.weight(1f))
+                        SecondaryAction(viewModel.outputSwitcherChipButton, resId = MediaRes.OUTPUT_CHIP,
+                            element = Media.Elements.OutputSwitcherButton)
+                    }
+                    PetalConceptTransport(viewModel, accent, mini = true)
+                }
+            }
+            PetalConceptProgress(viewModel.navigation, accent, mini = true)
+        } else {
+            Box(Modifier.fillMaxWidth().thenIf(lock) { Modifier.padding(16.dp) }) {
+                PetalConceptArtwork(viewModel.background,
+                    Modifier.fillMaxWidth().height(if (lock) 156.dp else 108.dp)
+                        .thenIf(lock) { Modifier.clip(RoundedCornerShape(16.dp)) })
+                SecondaryAction(viewModel.outputSwitcherChipButton, resId = MediaRes.OUTPUT_CHIP,
+                    element = Media.Elements.OutputSwitcherButton,
+                    modifier = Modifier.align(Alignment.TopEnd).padding(4.dp)
+                        .background(Color.Black.copy(alpha = .25f), CircleShape))
+            }
+            Metadata(viewModel.title, viewModel.subtitle, glyph,
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = if (lock) 0.dp else 8.dp))
+            PetalConceptProgress(viewModel.navigation, accent, mini = false)
+            PetalConceptTransport(viewModel, accent, mini = false)
+            Spacer(Modifier.height(12.dp))
+        }
+    }
+}
+
+@Composable
+private fun ContentScope.PetalConceptArtwork(image: Icon?, modifier: Modifier) {
+    Element(Media.Elements.Artwork, modifier) {
+        val bitmap = (image as? Icon.Loaded)?.asImageBitmap()
+        if (bitmap != null) {
+            Image(bitmap, contentDescription = null, contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize())
+        } else {
+            Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.primaryContainer)) {
+                Icon(painterResource(android.R.drawable.ic_media_play), contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                    modifier = Modifier.size(32.dp).align(Alignment.Center))
+            }
+        }
+    }
+}
+
+@Composable
+private fun ContentScope.PetalConceptTransport(viewModel: MediaCardViewModel, accent: Color, mini: Boolean) {
+    val extras = viewModel.additionalActions.filterIsInstance<MediaSecondaryActionViewModel.Action>()
+    CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+        Column(Modifier.fillMaxWidth()) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceEvenly) {
+                if (!mini && extras.isNotEmpty() && !LocalPetalNarrowMedia.current) {
+                    SecondaryAction(extras.first(), resId = "action0",
+                        element = Media.Elements.additionalActionButton(0))
+                }
+                SecondaryAction(viewModel.previousAction, resId = MediaRes.PREV_BTN,
+                    element = Media.Elements.PrevButton)
+                PlayPauseAction(viewModel.playPauseAction, accent,
+                    Color(PetalQsSkin.glyphOnBackground(accent.toArgb())), { 30.dp })
+                SecondaryAction(viewModel.nextAction, resId = MediaRes.NEXT_BTN,
+                    element = Media.Elements.NextButton)
+                if (!mini && extras.size > 1 && !LocalPetalNarrowMedia.current) {
+                    SecondaryAction(extras[1], resId = "action1",
+                        element = Media.Elements.additionalActionButton(1))
+                }
+            }
+            if (!mini) {
+                val remaining = if (LocalPetalNarrowMedia.current) extras else extras.drop(2)
+                remaining.chunked(4).forEachIndexed { row, actions ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                        actions.forEachIndexed { column, action ->
+                            val index = row * 4 + column + if (LocalPetalNarrowMedia.current) 0 else 2
+                            SecondaryAction(action, resId = "action$index",
+                                element = Media.Elements.additionalActionButton(index))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ContentScope.PetalConceptProgress(viewModel: MediaNavigationViewModel, accent: Color, mini: Boolean) {
+    val navigation = viewModel as? MediaNavigationViewModel.Showing ?: return
+    if (mini) {
+        Element(Media.Elements.SeekBarSlider, Modifier.fillMaxWidth().height(3.dp)) {
+            Canvas(Modifier.fillMaxSize()) {
+                drawRect(Color.White.copy(alpha = .18f))
+                drawRect(accent, size = androidx.compose.ui.geometry.Size(size.width * navigation.progress, size.height))
+            }
+        }
+    } else {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+            Navigation(viewModel, isSeekBarVisible = true, areActionsVisible = false,
+                modifier = Modifier.fillMaxWidth())
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(navigation.elapsedTime, color = Color.White.copy(alpha = .7f), fontSize = 11.sp)
+                Text(navigation.duration, color = Color.White.copy(alpha = .7f), fontSize = 11.sp)
+            }
+        }
+    }
+}
+
+@Composable
 private fun rememberAnimatedColorScheme(colorScheme: MediaColorScheme?): AnimatedColorScheme {
     val petalSkin = PetalQsSkin.isEnabled(LocalContext.current)
     val petalDark = PetalQsSkin.dark()
@@ -432,15 +645,7 @@ private fun rememberAnimatedColorScheme(colorScheme: MediaColorScheme?): Animate
     }
 }
 
-/**
- * Renders the foreground of a card, including all UI content and the internal "guts".
- *
- * If [threeRows] is `true`, the layout will be organized as three horizontal rows; if `false`, two
- * rows will be used, resulting in a more compact layout.
- *
- * If [fillHeight] is `true`, the card will grow vertically to fill all available space in its
- * parent. If not, it'll only be as tall as needed to show its UI.
- */
+// Content and guts share bounds, otherwise the menu jumps about.
 @Composable
 private fun ContentScope.CardForeground(
     expandable: Expandable,
@@ -450,15 +655,27 @@ private fun ContentScope.CardForeground(
     fillHeight: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    // Can't use a Crossfade composable because of the custom layout logic below. Animate the alpha
-    // of the guts (and, indirectly, of the content) from here.
+    // Crossfade can't measure both bits the way this needs.
+    if (LocalPetalNarrowMedia.current) {
+        // don't give scene elements the hidden menu's zero-origin bounds
+        val density = LocalDensity.current
+        var contentHeight by remember { mutableIntStateOf(0) }
+        Box(modifier) {
+            if (!viewModel.guts.isVisible) {
+                CardForegroundContent(expandable, viewModel, threeRows, fillHeight, colorScheme,
+                    Modifier.onSizeChanged { contentHeight = it.height })
+            } else {
+                val height = with(density) { contentHeight.toDp() }.coerceAtLeast(232.dp)
+                CardGuts(viewModel.guts, colorScheme, Modifier.fillMaxWidth().height(height))
+            }
+        }
+        return
+    }
     val gutsAlphaAnimatable = remember { Animatable(0f) }
     val isGutsVisible = viewModel.guts.isVisible
     LaunchedEffect(isGutsVisible) { gutsAlphaAnimatable.animateTo(if (isGutsVisible) 1f else 0f) }
 
-    // Use a custom layout to measure the content even if the content is being hidden because the
-    // internal guts are showing. This is needed because only the content knows the size the of the
-    // card and the guts are set to be the same size of the content.
+    // Measure the player even when the guts cover it.
     Layout(
         content = {
             CardForegroundContent(
@@ -468,7 +685,8 @@ private fun ContentScope.CardForeground(
                 fillHeight = fillHeight,
                 colorScheme = colorScheme,
                 modifier =
-                    Modifier.layoutId(Media.LayoutId.CardForeground).graphicsLayer {
+                    Modifier.layoutId(Media.LayoutId.CardForeground)
+                        .petalQsContentReveal(LocalPetalMediaReveal.current).graphicsLayer {
                         compositingStrategy = CompositingStrategy.ModulateAlpha
                         alpha = 1f - gutsAlphaAnimatable.value
                     },
@@ -489,8 +707,7 @@ private fun ContentScope.CardForeground(
         val measurableByLayoutId = measurables.byLayoutId<Media.LayoutId>()
         val contentPlaceable =
             measurableByLayoutId[Media.LayoutId.CardForeground]!!.measure(constraints)
-        // Guts should always have the exact dimensions as the content, even if we don't show the
-        // content.
+        // Same bounds, no surprise resizing.
         val gutsPlaceable =
             measurableByLayoutId[Media.LayoutId.CardGuts]!!.measure(
                 Constraints.fixed(contentPlaceable.width, contentPlaceable.height)
@@ -516,7 +733,10 @@ private fun ContentScope.CardForegroundContent(
     colorScheme: AnimatedColorScheme,
     modifier: Modifier = Modifier,
 ) {
-
+    if (LocalPetalNarrowMedia.current) {
+        PetalNarrowCardForeground(expandable, viewModel, colorScheme, modifier)
+        return
+    }
     Column(
         modifier =
             modifier.combinedClickable(
@@ -543,13 +763,7 @@ private fun ContentScope.CardForegroundContent(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier =
                     Modifier.align(Alignment.TopEnd)
-                        // Output switcher chip must be limited to at most 40% of the maximum
-                        // width of the card.
-                        //
-                        // This saves the maximum possible width of the card so it can be
-                        // referred to by child custom layout code below.
-                        //
-                        // The assumption is that the row can be as wide as the entire card.
+                        // Save card width so the output chip doesn't hog it.
                         .layout { measurable, constraints ->
                             cardMaxWidth = constraints.maxWidth
                             val placeable = measurable.measure(constraints)
@@ -592,11 +806,7 @@ private fun ContentScope.CardForegroundContent(
                         ),
                     modifier =
                         Modifier
-                            // The chip must be limited to 40% of the width of the card at most.
-                            //
-                            // The underlying assumption is that there'll never be more than one
-                            // chip with text and one more icon-only chip. Only the one with
-                            // text can ever end up being too wide.
+                            // Leave room for the app icon and suggested device.
                             .fractionalMaxWidth(containerMaxWidth = cardMaxWidth, fraction = 0.4f)
                             .padding(end = 16.dp)
                             .sysuiResTag(MediaRes.OUTPUT_CHIP),
@@ -604,9 +814,7 @@ private fun ContentScope.CardForegroundContent(
             }
         }
 
-        // If the card is taller than necessary to show all the rows, this adds spacing
-        // between the top row and the rows below, anchoring the next rows to the bottom
-        // of the card.
+        // Spare height goes here, controls stay near the bottom.
         if (fillHeight) {
             Spacer(Modifier.weight(1f))
         }
@@ -722,10 +930,123 @@ private fun ContentScope.CardForegroundContent(
     }
 }
 
-/**
- * Renders a simplified version of [CardForeground] that puts everything on a single row and doesn't
- * support the guts.
- */
+// The side sliders stole some width; give playback its own row.
+@Composable
+private fun ContentScope.PetalNarrowCardForeground(
+    expandable: Expandable,
+    viewModel: MediaCardViewModel,
+    colorScheme: AnimatedColorScheme,
+    modifier: Modifier = Modifier,
+) {
+    val glyph = PetalQsSkin.glyphOn(PetalQsSkin.dark())
+    Column(
+        modifier = modifier.fillMaxWidth()
+            .combinedClickable(
+                onClick = { viewModel.onClick(expandable) },
+                onLongClick = viewModel.onLongClick,
+                onClickLabel = viewModel.onClickLabel,
+            )
+             .padding(12.dp),
+    ) {
+        Row(modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            Icon(
+                icon = viewModel.icon,
+                tint = glyph,
+                modifier = Modifier.size(24.dp).clip(CircleShape),
+            )
+            Spacer(Modifier.size(8.dp))
+            DeviceChip(
+                viewModel = viewModel.outputSwitcherChip,
+                style = DeviceChipStyle(colorScheme.primary, colorScheme.onPrimary),
+                modifier = Modifier.weight(1f).sysuiResTag(MediaRes.OUTPUT_CHIP),
+                topPadding = 0.dp,
+            )
+        }
+        AnimatedVisibility(
+            visible = viewModel.deviceSuggestionChip != null,
+            enter = fadeIn(),
+            exit = fadeOut(),
+        ) {
+            rememberLastNonNull(viewModel.deviceSuggestionChip)?.let {
+                DeviceChip(
+                    viewModel = it,
+                    style = DeviceChipStyle(
+                        fillColor = Color.Transparent,
+                        contentColor = glyph,
+                        borderColor = glyph,
+                    ),
+                    modifier = Modifier.fillMaxWidth().sysuiResTag(MediaRes.SUGGESTED_DEVICE_CHIP),
+                    topPadding = 0.dp,
+                )
+            }
+        }
+        Metadata(
+            title = viewModel.title,
+            subtitle = viewModel.subtitle,
+            color = glyph,
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        )
+        CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            ) {
+                val navigation = viewModel.navigation as? MediaNavigationViewModel.Showing
+                val primaryActions =
+                    viewModel.actionButtonLayout == MediaCardActionButtonLayout.WithPlayPause
+                if (primaryActions && navigation != null) {
+                    SecondaryAction(
+                        navigation.left,
+                        resId = MediaRes.PREV_BTN,
+                        element = Media.Elements.PrevButton,
+                    )
+                }
+                if (primaryActions) {
+                    AnimatedVisibility(visible = viewModel.playPauseAction != null) {
+                        PlayPauseAction(
+                            viewModel = viewModel.playPauseAction,
+                            buttonColor = colorScheme.primary,
+                            iconColor = colorScheme.onPrimary,
+                            buttonCornerRadius = { 24.dp },
+                        )
+                    }
+                }
+                if (primaryActions && navigation != null) {
+                    SecondaryAction(
+                        navigation.right,
+                        resId = MediaRes.NEXT_BTN,
+                        element = Media.Elements.NextButton,
+                    )
+                }
+            }
+            Navigation(
+                viewModel = viewModel.navigation,
+                isSeekBarVisible = true,
+                areActionsVisible = false,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            viewModel.additionalActions.chunked(3).forEachIndexed { rowIndex, actions ->
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    actions.forEachIndexed { column, action ->
+                        val index = rowIndex * 3 + column
+                        SecondaryAction(
+                            viewModel = action,
+                            resId = "action$index",
+                            element = Media.Elements.additionalActionButton(index),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Compact host gets one row, no guts.
 @Composable
 private fun ContentScope.CompactCardForeground(
     expandable: Expandable,
@@ -792,9 +1113,67 @@ private fun CardBackground(
     colorScheme: AnimatedColorScheme,
     modifier: Modifier = Modifier,
 ) {
+    val glassSettings = petalMediaGlassSettings()
+    val blurScale = glassSettings.blur
+    val petalSkin = PetalQsSkin.isEnabled(LocalContext.current)
+    val petalDark = PetalQsSkin.dark()
+    val qsGlass = LocalPetalQsPreferences.current.enabled || LocalPetalMediaGlass.current
     Crossfade(targetState = image, modifier = modifier) { imageOrNull ->
-        val backgroundImage = imageOrNull?.let { (it as Icon.Loaded).asImageBitmap() }
+        val backgroundImage = (imageOrNull as? Icon.Loaded)?.asImageBitmap()
         if (backgroundImage != null) {
+            if (qsGlass) {
+                val pixelDensity = LocalDensity.current
+                val lens = remember(backgroundImage) { RefractionShader() }
+                var bounds by remember(backgroundImage) { mutableStateOf(IntSize.Zero) }
+                val effect = remember(backgroundImage, bounds, pixelDensity, glassSettings) {
+                    lens.artworkEffect(
+                        w = bounds.width,
+                        h = bounds.height,
+                        density = pixelDensity.density,
+                        radius = with(pixelDensity) { 32.dp.toPx() },
+                        blurRadius = with(pixelDensity) {
+                            (PetalConfig.QS_MEDIA_ART_BLUR_MAX_DP * blurScale).dp.toPx()
+                        },
+                        strengthScale = glassSettings.refraction,
+                    )?.asComposeRenderEffect()
+                }
+                Box(Modifier.fillMaxSize()) {
+                    Image(
+                        bitmap = backgroundImage,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                            .onSizeChanged { bounds = it }
+                            .graphicsLayer { renderEffect = effect },
+                    )
+                    Box(
+                        Modifier.matchParentSize().drawWithCache {
+                            val glass = LiquidGlassDrawable().apply {
+                                setCornerRadius(32.dp.toPx())
+                                setTintColor(PetalQsSkin.frostTint(petalDark).copy(alpha = .76f).toArgb())
+                                setRimWidth(1.dp.toPx())
+                                setRim(
+                                    if (petalDark) 0x30FFFFFF else 0x66FFFFFF,
+                                    if (petalDark) 0x0AFFFFFF else 0x14000000,
+                                )
+                                setGrainAlpha(if (petalDark) 0x14 else 0x10)
+                                setSlab(
+                                    lens.bandFor(size.width.toInt(), size.height.toInt(), pixelDensity.density),
+                                    glassSettings.refraction,
+                                )
+                            }
+                            // Keep labels out of the lens; only the art gets bent.
+                            onDrawBehind {
+                                drawIntoCanvas {
+                                    glass.setBounds(0, 0, size.width.toInt(), size.height.toInt())
+                                    glass.draw(it.nativeCanvas)
+                                }
+                            }
+                        }
+                    )
+                }
+                return@Crossfade
+            }
             // Loaded art.
             val gradientBaseColor = colorScheme.background
             Image(
@@ -802,42 +1181,216 @@ private fun CardBackground(
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier =
-                    Modifier.fillMaxSize().drawWithContent {
+                    Modifier.fillMaxSize()
+                        .thenIf(petalSkin && blurScale > 0f) {
+                            Modifier.graphicsLayer {
+                                val radius =
+                                    (PetalConfig.QS_MEDIA_ART_BLUR_MAX_DP * blurScale).dp.toPx()
+                                renderEffect = BlurEffect(radius, radius, TileMode.Clamp)
+                            }
+                        }
+                        .drawWithContent {
                         // Draw the content (loaded art).
                         drawContent()
 
                         if (image != null) {
-                            // Then draw the overlay.
-                            drawRect(
-                                brush =
-                                    Brush.radialGradient(
-                                        0f to gradientBaseColor.copy(alpha = 0.65f),
-                                        1f to gradientBaseColor.copy(alpha = 0.75f),
-                                        center = size.center,
-                                        radius = max(size.width, size.height) / 2,
-                                    )
-                            )
+                            if (petalSkin) {
+                                // charcoal veil: the card reads as petal glass, art only tints it
+                                val frost = PetalQsSkin.frostTint(petalDark)
+                                drawRect(
+                                    brush =
+                                        Brush.radialGradient(
+                                            0f to frost.copy(alpha = 0.80f),
+                                            1f to frost.copy(alpha = 0.92f),
+                                            center = size.center,
+                                            radius = max(size.width, size.height) / 2,
+                                        )
+                                )
+                            } else {
+                                // Then draw the overlay.
+                                drawRect(
+                                    brush =
+                                        Brush.radialGradient(
+                                            0f to gradientBaseColor.copy(alpha = 0.65f),
+                                            1f to gradientBaseColor.copy(alpha = 0.75f),
+                                            center = size.center,
+                                            radius = max(size.width, size.height) / 2,
+                                        )
+                                )
+                            }
                         }
                     },
             )
         } else {
             // Placeholder.
-            Box(Modifier.background(colorScheme.background).fillMaxSize())
+            Box(
+                Modifier
+                    .background(
+                        if (petalSkin) PetalQsSkin.frostTint(petalDark) else colorScheme.background
+                    )
+                    .fillMaxSize()
+            )
+        }
+    }
+}
+
+private data class MediaGlassSettings(val blur: Float, val refraction: Float)
+
+@Composable
+private fun petalMediaGlassSettings(): MediaGlassSettings {
+    val context = LocalContext.current
+    fun read() = MediaGlassSettings(
+        PetalConfig.getQsMediaArtBlurScale(context),
+        PetalConfig.getQsMediaRefractionScale(context),
+    )
+    var scale by remember(context) {
+        mutableStateOf(read())
+    }
+    DisposableEffect(context) {
+        val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean) {
+                scale = read()
+            }
+        }
+        context.contentResolver.registerContentObserver(
+            Settings.System.getUriFor(PetalConfig.KEY_QS_MEDIA_ART_BLUR), false, observer,
+        )
+        context.contentResolver.registerContentObserver(
+            Settings.System.getUriFor(PetalConfig.KEY_QS_MEDIA_REFRACTION), false, observer,
+        )
+        scale = read()
+        onDispose { context.contentResolver.unregisterContentObserver(observer) }
+    }
+    return scale
+}
+
+/** A QS-tile surface: glass when idle, accent + glow when active, matching the tile grid. */
+@Composable
+private fun petalTileSurface(active: Boolean, dark: Boolean): Modifier {
+    val emission = PetalQsSkin.emission()
+    val colors =
+        PetalQsSkin.tileColors(
+            state =
+                if (active) android.service.quicksettings.Tile.STATE_ACTIVE
+                else android.service.quicksettings.Tile.STATE_INACTIVE,
+            handlesSecondaryClick = false,
+            iconOnly = true,
+            emission = emission,
+            dark = dark,
+        )
+    val shape = RoundedCornerShape(PetalQsSkin.TileCornerRadius)
+    val glass =
+        with(PetalQsSkin) {
+            Modifier.liquidGlass(PetalQsSkin.TileCornerRadius, colors.background, dark, colors.glassFill)
+        }
+    val glow = with(PetalQsSkin) { Modifier.activeTileGlow(active, emission, dark) }
+    return Modifier.clip(shape)
+        .then(glass)
+        .then(glow)
+        .border(1.dp, PetalQsSkin.tileGlassBorderBrush(dark), shape)
+}
+
+/** The glyph colour for a tile surface in the given active state. */
+@Composable
+private fun petalTileGlyph(active: Boolean, dark: Boolean): Color =
+    PetalQsSkin.tileColors(
+            state =
+                if (active) android.service.quicksettings.Tile.STATE_ACTIVE
+                else android.service.quicksettings.Tile.STATE_INACTIVE,
+            handlesSecondaryClick = false,
+            iconOnly = true,
+            emission = PetalQsSkin.emission(),
+            dark = dark,
+        )
+        .icon
+
+/** A transport glyph given depth: a soft dark extrusion under a solid cap, no backing plate. */
+@Composable
+private fun Petal3dIcon(
+    painter: Painter,
+    contentDescription: String?,
+    tint: Color,
+    modifier: Modifier = Modifier,
+    glyphSize: Dp = 30.dp,
+) {
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        Icon(
+            painter = painter,
+            contentDescription = null,
+            tint = Color.Black.copy(alpha = 0.32f),
+            modifier = Modifier.size(glyphSize).offset(y = 2.dp),
+        )
+        Icon(
+            painter = painter,
+            contentDescription = contentDescription,
+            tint = tint,
+            modifier = Modifier.size(glyphSize),
+        )
+    }
+}
+
+/** Quiet glass circle for the small transport buttons, same fill family as the qs icon tiles. */
+private fun Modifier.petalMediaGlassCircle(radius: Dp, dark: Boolean): Modifier {
+    return drawWithCache {
+        val r = radius.toPx()
+        val shape = Path().apply {
+            val corner = CornerRadius(r)
+            addRoundRect(RoundRect(0f, 0f, size.width, size.height,
+                corner, corner, corner, corner))
+        }
+        onDrawWithContent {
+            drawPath(shape, PetalQsSkin.tileGlass(dark))
+            // no rim: the transport buttons are plain glass
+            drawContent()
         }
     }
 }
 
 /**
- * Renders the navigation UI (seek bar and/or previous/next buttons).
- *
- * If [isSeekBarVisible] is `false`, the seek bar will not be included in the layout, even if it
- * would otherwise be showing based on the view-model alone. This is meant for callers to decide
- * whether they'd like to show the seek bar in addition to the prev/next buttons or just show the
- * buttons.
- *
- * If [areActionsVisible] is `false`, the left/right buttons to the left and right of the seek bar
- * will not be included in the layout.
+ * Play/pause fill: an accent disc while playing (same violet family as active tiles), quiet
+ * glass when paused. A soft highlight sweep runs across on toggle.
  */
+private fun Modifier.petalMediaPlayFill(
+    playing: Boolean,
+    accent: Color,
+    dark: Boolean,
+    sweep: Float = -1f,
+): Modifier {
+    return drawWithCache {
+        val r = size.minDimension / 2f
+        val shape = Path().apply {
+            val corner = CornerRadius(r)
+            addRoundRect(RoundRect(0f, 0f, size.width, size.height,
+                corner, corner, corner, corner))
+        }
+        onDrawWithContent {
+            if (playing) {
+                drawPath(shape, accent)
+                drawPath(shape, Color.White.copy(alpha = 0.30f),
+                    style = Stroke(width = 1.dp.toPx()))
+            } else {
+                drawPath(shape, PetalQsSkin.tileGlass(dark))
+                drawPath(
+                    shape,
+                    if (dark) Color.White.copy(alpha = 0.20f) else Color.Black.copy(alpha = 0.10f),
+                    style = Stroke(width = 1.dp.toPx()),
+                )
+            }
+            drawContent()
+            if (sweep in 0f..1f) {
+                val x = (size.width + size.height) * sweep - size.height
+                clipPath(shape) {
+                    drawRect(Brush.linearGradient(
+                        listOf(Color.Transparent, Color.White.copy(alpha = 0.28f), Color.Transparent),
+                        start = Offset(x, 0f), end = Offset(x + size.height, 0f),
+                    ))
+                }
+            }
+        }
+    }
+}
+
+// Host chooses seeking, transport buttons, or both.
 @Composable
 private fun ContentScope.Navigation(
     viewModel: MediaNavigationViewModel,
@@ -845,6 +1398,7 @@ private fun ContentScope.Navigation(
     areActionsVisible: Boolean,
     modifier: Modifier = Modifier,
 ) {
+    val hostView = LocalView.current
     when (viewModel) {
         is MediaNavigationViewModel.Showing -> {
             Row(
@@ -861,18 +1415,27 @@ private fun ContentScope.Navigation(
                 }
 
                 val interactionSource = remember { MutableInteractionSource() }
+                val petalSkin = PetalQsSkin.isEnabled(LocalContext.current) ||
+                    LocalPetalMediaStyle.current != PetalMediaStyle.Stock
+                val petalDark = PetalQsSkin.dark()
+                // petal: the seek bar borrows the qs accent so playback ties into the tile glow
+                val seekActive =
+                    if (petalSkin) {
+                        Color(LocalContext.current.getColor(android.R.color.system_accent1_500))
+                    } else {
+                        Color.White
+                    }
                 val colors =
                     colors(
-                        activeTrackColor = Color.White,
-                        inactiveTrackColor = Color.White.copy(alpha = 0.3f),
+                        activeTrackColor = seekActive,
+                        inactiveTrackColor = Color.White.copy(alpha = if (petalSkin) 0.22f else 0.3f),
                         thumbColor = Color.White,
                     )
                 if (isSeekBarVisible) {
                     // To allow the seek bar slider to fade in and out, it's tagged as an element.
                     Element(key = Media.Elements.SeekBarSlider, modifier = Modifier.weight(1f)) {
                         val sliderDragDelta = remember {
-                            // Not a mutableStateOf - this is never accessed in composition and
-                            // using an anonymous object avoids generics boxing of inline Offset.
+                            // No recomposition for a delta only the callback needs.
                             object {
                                 var value = Offset.Zero
                             }
@@ -891,7 +1454,8 @@ private fun ContentScope.Navigation(
                             track = { sliderState ->
                                 SeekBarTrack(
                                     sliderState = sliderState,
-                                    isSquiggly = viewModel.isSquiggly,
+                                    // petal: straight bar, the squiggle fights the glass language
+                                    isSquiggly = viewModel.isSquiggly && !petalSkin,
                                     colors = colors,
                                     modifier = Modifier.fillMaxWidth(),
                                 )
@@ -901,37 +1465,35 @@ private fun ContentScope.Navigation(
                                     .clearAndSetSemantics {
                                         contentDescription = viewModel.contentDescription
                                     }
-                                    .pointerInput(Unit) {
-                                        // Track and report the drag delta to the view-model so it
-                                        // can
-                                        // decide whether to accept the next onValueChangeFinished
-                                        // or
-                                        // reject it if the drag was overly vertical.
-                                        awaitPointerEventScope {
-                                            var down: PointerInputChange? = null
-                                            while (true) {
-                                                val event =
-                                                    awaitPointerEvent(PointerEventPass.Initial)
-                                                when (event.type) {
-                                                    PointerEventType.Press -> {
-                                                        // A new gesture has begun. Record the
-                                                        // initial
-                                                        // down input change.
-                                                        down = event.changes.last()
-                                                    }
-
-                                                    PointerEventType.Move -> {
-                                                        // The pointer has moved. If it's the same
-                                                        // pointer as the latest down, calculate and
-                                                        // report the drag delta.
-                                                        val change = event.changes.last()
-                                                        if (change.id == down?.id) {
-                                                            sliderDragDelta.value =
-                                                                change.position - down.position
+                                    .pointerInput(hostView) {
+                                        try {
+                                            awaitPointerEventScope {
+                                                var down: PointerInputChange? = null
+                                                while (true) {
+                                                    val event = awaitPointerEvent(PointerEventPass.Initial)
+                                                    when (event.type) {
+                                                        PointerEventType.Press -> {
+                                                            hostView.parent?.requestDisallowInterceptTouchEvent(true)
+                                                            sliderDragDelta.value = Offset.Zero
+                                                            down = event.changes.last()
+                                                        }
+                                                        PointerEventType.Move -> {
+                                                            val change = event.changes.last()
+                                                            val start = down
+                                                            if (start != null && change.id == start.id) {
+                                                                sliderDragDelta.value = change.position - start.position
+                                                            }
+                                                        }
+                                                        PointerEventType.Release -> {
+                                                            if (event.changes.none { it.pressed }) {
+                                                                hostView.parent?.requestDisallowInterceptTouchEvent(false)
+                                                            }
                                                         }
                                                     }
                                                 }
                                             }
+                                        } finally {
+                                            hostView.parent?.requestDisallowInterceptTouchEvent(false)
                                         }
                                     },
                         )
@@ -959,6 +1521,10 @@ private fun SeekBarThumb(
     colors: SliderColors,
     modifier: Modifier = Modifier,
 ) {
+    if (LocalPetalMediaStyle.current != PetalMediaStyle.Stock) {
+        Spacer(modifier.size(12.dp).background(colors.thumbColor, CircleShape))
+        return
+    }
     val interactions = remember { mutableStateListOf<Interaction>() }
     LaunchedEffect(interactionSource) {
         interactionSource.interactions.collect { interaction ->
@@ -998,6 +1564,16 @@ private fun SeekBarTrack(
     amplitude: Dp = 3.dp,
     waveSpeedDpPerSec: Dp = 8.dp,
 ) {
+    if (LocalPetalMediaStyle.current != PetalMediaStyle.Stock) {
+        Canvas(modifier.height(6.dp)) {
+            drawLine(colors.inactiveTrackColor, Offset(0f, center.y), Offset(size.width, center.y),
+                strokeWidth = size.height, cap = StrokeCap.Round)
+            drawLine(colors.activeTrackColor, Offset(0f, center.y),
+                Offset(size.width * sliderState.value.coerceIn(0f, 1f), center.y),
+                strokeWidth = size.height, cap = StrokeCap.Round)
+        }
+        return
+    }
     // Animating the amplitude allows the squiggle to gradually grow to its full height or shrink
     // back to a flat line as needed.
     val animatedAmplitude by
@@ -1169,6 +1745,18 @@ private fun ContentScope.Metadata(
     color: Color,
     modifier: Modifier = Modifier,
 ) {
+    if (LocalPetalNarrowMedia.current) {
+        // this small card needs its own bounds, not the compact scene's old offset
+        Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(text = title, color = color, fontSize = 16.sp, lineHeight = 20.sp,
+                fontWeight = FontWeight.Medium, maxLines = 2, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.sysuiResTag(MediaRes.TITLE))
+            Text(text = subtitle, color = color.copy(alpha = .78f), fontSize = 12.sp,
+                lineHeight = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.sysuiResTag(MediaRes.ARTIST))
+        }
+        return
+    }
     // This element can be animated when switching between scenes inside a media card.
     Element(key = Media.Elements.Metadata, modifier = modifier) {
         // When the title and/or subtitle change, crossfade between the old and the new.
@@ -1180,7 +1768,7 @@ private fun ContentScope.Metadata(
                     modifier = Modifier.sysuiResTag(MediaRes.TITLE),
                     style = MaterialTheme.typography.titleMediumEmphasized,
                     color = color,
-                    maxLines = 1,
+                    maxLines = if (LocalPetalNarrowMedia.current) 2 else 1,
                     overflow = TextOverflow.Ellipsis,
                 )
 
@@ -1202,17 +1790,9 @@ private fun DeviceChip(
     viewModel: MediaDeviceChipViewModel,
     style: DeviceChipStyle,
     modifier: Modifier = Modifier,
+    topPadding: Dp = 16.dp,
 ) {
-    // For accessibility reasons, the touch area for the chip needs to be at least 48dp in height.
-    // At the same time, the rounded corner chip should only be as tall as it needs to be to contain
-    // its contents and look like a nice design; also, the ripple effect should only be shown within
-    // the bounds of the chip.
-    //
-    // This is achieved by sharing this InteractionSource between the outer and inner composables.
-    //
-    // The outer composable hosts that clickable that writes user events into the InteractionSource.
-    // The inner composable consumes the user events from the InteractionSource and feeds them into
-    // its indication.
+    // Tiny-looking chip, still a 48dp target. Ripple stays inside the glass.
     val petalSkin = PetalQsSkin.isEnabled(LocalContext.current)
     val petalDark = PetalQsSkin.dark()
     val chipFill = if (petalSkin) {
@@ -1228,7 +1808,7 @@ private fun DeviceChip(
                 color = Color.Transparent,
                 shape = RoundedCornerShape(12.dp),
             ),
-        modifier = modifier.padding(top = 16.dp, bottom = 0.dp),
+        modifier = modifier.padding(top = topPadding, bottom = 0.dp),
         useModifierBasedImplementation = true,
     ) {
         Box(
@@ -1297,10 +1877,21 @@ private fun ContentScope.PlayPauseAction(
     if (viewModel == null) return
 
     val petalSkin = PetalQsSkin.isEnabled(LocalContext.current)
-    val buttonSize = DpSize(width = if (petalSkin) 56.dp else 72.dp, height = 48.dp)
+    val concept = LocalPetalMediaStyle.current != PetalMediaStyle.Stock
+    val buttonSize =
+        if (concept) {
+            val side = if (LocalPetalMediaStyle.current == PetalMediaStyle.Mini) 48.dp else 60.dp
+            DpSize(side, side)
+        } else if (petalSkin) DpSize(width = 56.dp, height = 56.dp)
+        else DpSize(width = 72.dp, height = 48.dp)
+    val petalDark = PetalQsSkin.dark()
+    val petalPlaying = viewModel.state != MediaSessionState.Paused
+    // match the qs icon tiles: glass when idle, accent + glow when playing
+    val petalIconColor = if (petalSkin && !concept) petalTileGlyph(petalPlaying, petalDark) else iconColor
+    val petalSurface = if (petalSkin && !concept) petalTileSurface(petalPlaying, petalDark) else Modifier
     val cornerRadius: Dp by
         animateDpAsState(
-            targetValue = if (petalSkin) 24.dp
+            targetValue = if (concept) 30.dp else if (petalSkin) 24.dp
                 else buttonCornerRadius(viewModel.state != MediaSessionState.Paused),
             label = "PlayPauseAction.cornerRadius",
         )
@@ -1309,9 +1900,10 @@ private fun ContentScope.PlayPauseAction(
         PlatformButton(
             onClick = viewModel.onClick ?: {},
             enabled = viewModel.onClick != null,
-            colors = ButtonDefaults.buttonColors(containerColor = buttonColor),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if (petalSkin && !concept) Color.Transparent else buttonColor),
             shape = RoundedCornerShape(cornerRadius),
-            modifier = Modifier.size(buttonSize),
+            modifier = Modifier.size(buttonSize).then(petalSurface),
         ) {
             when (viewModel.state) {
                 is MediaSessionState.Playing,
@@ -1335,13 +1927,13 @@ private fun ContentScope.PlayPauseAction(
                         Icon(
                             painter = painter,
                             contentDescription = viewModel.icon?.contentDescription?.load(),
-                            tint = iconColor,
+                            tint = petalIconColor,
                             modifier = Modifier.size(24.dp).sysuiResTag(MediaRes.PLAY_PAUSE_BTN),
                         )
                     }
                 }
                 is MediaSessionState.Buffering -> {
-                    CircularProgressIndicator(color = iconColor, modifier = Modifier.size(24.dp))
+                    CircularProgressIndicator(color = petalIconColor, modifier = Modifier.size(24.dp))
                 }
             }
         }
@@ -1384,7 +1976,49 @@ private fun SecondaryActionContent(
     resId: String,
     modifier: Modifier = Modifier,
 ) {
+    val petalSkin = PetalQsSkin.isEnabled(LocalContext.current)
+    val petalDark = PetalQsSkin.dark()
+
+    // petal: just the glyph, given depth, with no backing plate
+    if (petalSkin) {
+        when (viewModel) {
+            is MediaSecondaryActionViewModel.Action -> {
+                val icon = viewModel.icon
+                if (icon != null) {
+                    val painter =
+                        when (icon) {
+                            is Icon.Resource -> painterResource(icon.resId)
+                            is Icon.Loaded -> rememberDrawablePainter(icon.drawable)
+                        }
+                    Box(
+                        modifier =
+                            modifier
+                                .size(48.dp)
+                                .clickable(
+                                    enabled = viewModel.onClick != null,
+                                    onClick = { viewModel.onClick?.invoke() },
+                                )
+                                .sysuiResTag(resId),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Petal3dIcon(
+                            painter = painter,
+                            contentDescription = icon.contentDescription?.load(),
+                            tint = PetalQsSkin.glyphOn(petalDark),
+                            glyphSize = 32.dp,
+                        )
+                    }
+                }
+            }
+            is MediaSecondaryActionViewModel.ReserveSpace ->
+                Spacer(modifier = modifier.size(48.dp))
+            is MediaSecondaryActionViewModel.None -> Unit
+        }
+        return
+    }
+
     val sharedModifier = modifier.size(48.dp).padding(13.dp)
+    val colors = IconButtonDefaults.iconButtonColors(contentColor = iconColor)
     when (viewModel) {
         is MediaSecondaryActionViewModel.Action ->
             when (viewModel.icon) {
@@ -1393,7 +2027,7 @@ private fun SecondaryActionContent(
                         onClick = viewModel.onClick ?: {},
                         modifier = sharedModifier.sysuiResTag(resId),
                         enabled = viewModel.onClick != null,
-                        colors = IconButtonDefaults.iconButtonColors(contentColor = iconColor),
+                        colors = colors,
                         iconResource = viewModel.icon.resId,
                         contentDescription = viewModel.icon.contentDescription?.load(),
                     )
@@ -1403,7 +2037,7 @@ private fun SecondaryActionContent(
                         onClick = viewModel.onClick ?: {},
                         modifier = sharedModifier.sysuiResTag(resId),
                         enabled = viewModel.onClick != null,
-                        colors = IconButtonDefaults.iconButtonColors(contentColor = iconColor),
+                        colors = colors,
                         iconDrawable = viewModel.icon.drawable,
                         contentDescription = viewModel.icon.contentDescription?.load(),
                     )
@@ -1563,6 +2197,7 @@ object Media {
      * animations even further.
      */
     object Elements {
+        val Artwork = ElementKey("petal_artwork")
         val PlayPauseButton = ElementKey("play_pause")
         val Metadata = ElementKey("metadata")
         val PrevButton = ElementKey("prev")

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- empty card, redaction sleeping -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="?attr/colorControlNormal">
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M4,5.5 L20,5.5 A2,2 0 0 1 22,7.5 L22,16.5 A2,2 0 0 1 20,18.5 L4,18.5 A2,2 0 0 1 2,16.5 L2,7.5 A2,2 0 0 1 4,5.5 Z M4,7.5 L4,16.5 L20,16.5 L20,7.5 Z" />
+</vector>

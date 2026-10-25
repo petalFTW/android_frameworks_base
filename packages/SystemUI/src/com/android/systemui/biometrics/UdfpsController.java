@@ -614,8 +614,8 @@ public class UdfpsController implements DozeReceiver, Dumpable {
         switch (processedTouch.getEvent()) {
             case DOWN:
                 // optical udfps pilfers the down before the keyguard icon ever sees it,
-                // so kick the lockscreen ripple straight off the sensor touch
-                mPetalRipple.splashAt(event.getRawX(), event.getRawY());
+                // so grow the blob from here instead
+                mPetalRipple.onFingerDown(event.getRawX(), event.getRawY());
                 if (shouldTryToDismissKeyguard()) {
                     tryDismissingKeyguard();
                 }
@@ -648,6 +648,7 @@ public class UdfpsController implements DozeReceiver, Dumpable {
                 if (InteractionEvent.CANCEL.equals(processedTouch.getEvent())) {
                     Log.w(TAG, "This is a CANCEL event that's reported as an UP event!");
                 }
+                mPetalRipple.onFingerUp();
                 mAttemptedToDismissKeyguard = false;
                 onFingerUp(requestId,
                         mOverlay.getTouchOverlay(),

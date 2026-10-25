@@ -62,7 +62,7 @@ class PetalFooterGlassDrawable(private val context: Context) : Drawable() {
     init {
         glass.setCornerRadius(corner)
         glass.setRimWidth(1.1f * density)
-        glass.setTintColor(if (dark) 0xCC2A2A31.toInt() else 0xE6F4F5FA.toInt())
+        glass.setTintColor(if (dark) 0xE6222430.toInt() else 0xEAF7F6FA.toInt())
         glass.setRim(
             if (dark) 0x66FFFFFF.toInt() else 0xFFFFFFFF.toInt(),
             if (dark) 0x1AFFFFFF.toInt() else 0x1F000000.toInt(),

@@ -29,6 +29,7 @@ import android.graphics.Rect;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.os.Build;
+import android.service.notification.StatusBarNotification;
 import android.view.NotificationHeaderView;
 import android.view.View;
 import android.view.ViewGroup;
@@ -62,45 +63,53 @@ public abstract class NotificationViewWrapper implements TransformableView {
     protected int mBackgroundColor = 0;
 
     public static NotificationViewWrapper wrap(Context ctx, View v, ExpandableNotificationRow row) {
+        NotificationViewWrapper wrapper;
         if (v.getId() == com.android.internal.R.id.status_bar_latest_event_content) {
             if ("bigPicture".equals(v.getTag())) {
-                return new NotificationBigPictureTemplateViewWrapper(ctx, v, row);
+                wrapper = new NotificationBigPictureTemplateViewWrapper(ctx, v, row);
             } else if ("bigText".equals(v.getTag())) {
-                return new NotificationBigTextTemplateViewWrapper(ctx, v, row);
+                wrapper = new NotificationBigTextTemplateViewWrapper(ctx, v, row);
             } else if ("media".equals(v.getTag()) || "bigMediaNarrow".equals(v.getTag())) {
-                return new NotificationMediaTemplateViewWrapper(ctx, v, row);
+                wrapper = new NotificationMediaTemplateViewWrapper(ctx, v, row);
             } else if ("messaging".equals(v.getTag())) {
-                return new NotificationMessagingTemplateViewWrapper(ctx, v, row);
+                wrapper = new NotificationMessagingTemplateViewWrapper(ctx, v, row);
             } else if ("conversation".equals(v.getTag())) {
-                return new NotificationConversationTemplateViewWrapper(ctx, v, row);
+                wrapper = new NotificationConversationTemplateViewWrapper(ctx, v, row);
             } else if ("call".equals(v.getTag())) {
-                return new NotificationCallTemplateViewWrapper(ctx, v, row);
+                wrapper = new NotificationCallTemplateViewWrapper(ctx, v, row);
             } else if ("compactHUN".equals((v.getTag()))) {
-                return new NotificationCompactHeadsUpTemplateViewWrapper(ctx, v, row);
+                wrapper = new NotificationCompactHeadsUpTemplateViewWrapper(ctx, v, row);
             } else if ("compactMessagingHUN".equals((v.getTag()))) {
-                return new NotificationCompactMessagingTemplateViewWrapper(ctx, v, row);
+                wrapper = new NotificationCompactMessagingTemplateViewWrapper(ctx, v, row);
             } else if ("progress".equals(v.getTag())) {
-                return new NotificationProgressTemplateViewWrapper(ctx, v, row);
-            }
-
-            if (NotificationBundleUi.isEnabled()
+                wrapper = new NotificationProgressTemplateViewWrapper(ctx, v, row);
+            } else if (NotificationBundleUi.isEnabled()
                     ? row.getEntryAdapter().getSbn().getNotification().isStyle(
                     Notification.DecoratedCustomViewStyle.class)
                     : row.getEntryLegacy().getSbn().getNotification().isStyle(
                     Notification.DecoratedCustomViewStyle.class)) {
-                return new NotificationDecoratedCustomViewWrapper(ctx, v, row);
+                wrapper = new NotificationDecoratedCustomViewWrapper(ctx, v, row);
+            } else if (NotificationDecoratedCustomViewWrapper.hasCustomView(v)) {
+                wrapper = new NotificationDecoratedCustomViewWrapper(ctx, v, row);
+            } else {
+                wrapper = new NotificationTemplateViewWrapper(ctx, v, row);
             }
-            if (NotificationDecoratedCustomViewWrapper.hasCustomView(v)) {
-                return new NotificationDecoratedCustomViewWrapper(ctx, v, row);
-            }
-            return new NotificationTemplateViewWrapper(ctx, v, row);
         } else if (v instanceof NotificationHeaderView) {
-            return new NotificationHeaderViewWrapper(ctx, v, row);
+            wrapper = new NotificationHeaderViewWrapper(ctx, v, row);
         } else if (v instanceof ComposeView && row.isBundle()) {
-            return new BundleHeaderViewWrapper(ctx, v, row);
+            wrapper = new BundleHeaderViewWrapper(ctx, v, row);
         } else {
-            return new NotificationCustomViewWrapper(ctx, v, row);
+            wrapper = new NotificationCustomViewWrapper(ctx, v, row);
         }
+        // work mode black bars, every presentation passes through here
+        StatusBarNotification sbn = NotificationBundleUi.isEnabled()
+                ? (row.getEntryAdapter() != null ? row.getEntryAdapter().getSbn() : null)
+                : (row.getEntryLegacy() != null ? row.getEntryLegacy().getSbn() : null);
+        com.android.systemui.petalos.PetalWorkRedaction.track(row);
+        if (v instanceof ViewGroup) {
+            com.android.systemui.petalos.PetalWorkRedaction.apply(ctx, (ViewGroup) v, sbn);
+        }
+        return wrapper;
     }
 
     protected NotificationViewWrapper(Context ctx, View view, ExpandableNotificationRow row) {

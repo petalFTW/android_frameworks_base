@@ -31,6 +31,7 @@ import android.view.View;
 import android.view.animation.Interpolator;
 
 import com.android.app.animation.Interpolators;
+import com.android.internal.graphics.drawable.PetalGlassDrawable;
 import com.android.settingslib.Utils;
 import com.android.systemui.navigationbar.views.buttons.ButtonInterface;
 import com.android.systemui.res.R;
@@ -47,6 +48,7 @@ public class NavigationHandle extends View implements ButtonInterface {
     private final float mShrinkWidthForAnimation;
     private boolean mRequiresInvalidate;
     private boolean mShrink;
+    protected final PetalGlassDrawable mGlass;
 
     private ObjectAnimator mPulseAnimator = null;
     private float mPulseAnimationProgress;
@@ -87,6 +89,9 @@ public class NavigationHandle extends View implements ButtonInterface {
         mLightColor = Utils.getColorAttrDefaultColor(lightContext, R.attr.homeHandleColor);
         mDarkColor = Utils.getColorAttrDefaultColor(darkContext, R.attr.homeHandleColor);
         mPaint.setAntiAlias(true);
+        // sheen is enough for this skinny thing
+        mGlass = new PetalGlassDrawable(this, 100f, 0f, false);
+        mGlass.setColor(mLightColor & 0x00FFFFFF | 0x90000000);
         setFocusable(false);
     }
 
@@ -120,7 +125,9 @@ public class NavigationHandle extends View implements ButtonInterface {
         float x = -additionalWidth;
         float y = navHeight - mBottom - height + (additionalHeight / 2);
         float adjustedRadius = height / 2;
-        canvas.drawRoundRect(x, y, width, y + height, adjustedRadius, adjustedRadius, mPaint);
+        mGlass.setBounds(Math.round(x), Math.round(y), Math.round(width), Math.round(y + height));
+        mGlass.setGlassCorners(adjustedRadius, adjustedRadius);
+        mGlass.draw(canvas);
     }
 
     @Override
@@ -137,10 +144,11 @@ public class NavigationHandle extends View implements ButtonInterface {
         int color = (int) ArgbEvaluator.getInstance().evaluate(intensity, mLightColor, mDarkColor);
         if (mPaint.getColor() != color) {
             mPaint.setColor(color);
+            mGlass.setColor(color & 0x00FFFFFF | 0x90000000);
             if (getVisibility() == VISIBLE && getAlpha() > 0) {
                 invalidate();
             } else {
-                // If we are currently invisible, then invalidate when we are next made visible
+                // hidden now, kick it when it comes back
                 mRequiresInvalidate = true;
             }
         }
@@ -161,13 +169,7 @@ public class NavigationHandle extends View implements ButtonInterface {
             interpolator = Interpolators.LEGACY_DECELERATE;
         } else {
             if (isTouchDown) {
-                // For now we animate the navbar expanding and contracting so that the navbar is
-                // the original size by the end of {@code duration}. This is because a screenshot
-                // is taken at that point and we don't want to capture the larger navbar.
-                // TODO(b/306400785): Determine a way to exclude navbar from the screenshot.
-
-                // Fraction of the touch down animation to expand; remaining is used to contract
-                // again.
+                // shrink before the screenshot catches the chunky bar
                 float expandFraction = 0.9f;
                 interpolator = t -> t <= expandFraction
                         ? Interpolators.clampToProgress(Interpolators.LEGACY, t, 0, expandFraction)

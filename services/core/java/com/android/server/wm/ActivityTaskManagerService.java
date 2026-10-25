@@ -7791,6 +7791,13 @@ public class ActivityTaskManagerService extends IActivityTaskManager.Stub {
         }
 
         @Override
+        public boolean hasRecentTaskForUid(int uid) {
+            synchronized (mGlobalLock) {
+                return mRecentTasks.hasRecentTaskForUid(uid);
+            }
+        }
+
+        @Override
         public void cleanupRecentTasksForUser(int userId) {
             synchronized (mGlobalLock) {
                 mRecentTasks.cleanupLocked(userId);

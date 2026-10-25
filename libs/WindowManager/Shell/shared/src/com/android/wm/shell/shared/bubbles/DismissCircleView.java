@@ -18,6 +18,7 @@ package com.android.wm.shell.shared.bubbles;
 
 import android.content.Context;
 import android.content.res.Configuration;
+import android.graphics.drawable.Drawable;
 import android.view.Gravity;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -36,6 +37,12 @@ public class DismissCircleView extends FrameLayout {
     @DimenRes int mIconSizeResId;
 
     private final ImageView mIconView = new ImageView(getContext());
+    private Drawable mCustomBackground;
+
+    public void setCustomBackground(Drawable background) {
+        mCustomBackground = background;
+        setBackground(background);
+    }
 
     public DismissCircleView(Context context) {
         super(context);
@@ -45,7 +52,8 @@ public class DismissCircleView extends FrameLayout {
     @Override
     protected void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
-        setBackground(ContextCompat.getDrawable(getContext(), mBackgroundResId));
+        setBackground(mCustomBackground != null ? mCustomBackground
+                : ContextCompat.getDrawable(getContext(), mBackgroundResId));
         setViewSizes();
     }
 

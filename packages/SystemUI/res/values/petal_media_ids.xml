@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <item type="id" name="petal_media_cover" />
+    <item type="id" name="petal_media_elapsed" />
+    <item type="id" name="petal_media_duration" />
+    <item type="id" name="petal_media_backdrop" />
+    <item type="id" name="petal_media_output" />
+    <item type="id" name="petal_media_equalizer" />
+    <item type="id" name="petal_media_ribbon_waveform" />
+    <!-- original text hangs here while work mode blacks it out -->
+    <item type="id" name="petal_redacted_text" />
+    <item type="id" name="petal_redaction_identity" />
+    <!-- how far the default lockscreen player sits below the clock -->
+    <item type="dimen" name="petal_lock_media_top_offset">12dp</item>
+</resources>

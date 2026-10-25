@@ -4902,10 +4902,10 @@ public class PackageInstallerSession extends IPackageInstallerSession.Stub {
         // {@link PackageLite#getTargetSdk()}
         mValidatedTargetSdk = packageLite.getTargetSdk();
 
-        if (mPackageName.equals(android.ext.PackageId.GSF_NAME)) {
-            // Installation of GSF is not needed for GmsCompat. However, other apps might use
-            // package that holds the GSF package name without permission checks since GSF is a
-            // preinstalled package on GMS Android.
+        if (mPackageName.equals(android.ext.PackageId.GSF_NAME)
+                && !com.android.internal.gmscompat.MicrogCompat.isTrustedGsfProxy(
+                        mPackageName, mSigningDetails)) {
+            // Google's GSF stays blocked; the signed microG legacy proxy gets an exception.
             throw new PackageManagerException(INSTALL_FAILED_SESSION_INVALID, "GSF installation is not allowed");
         }
 

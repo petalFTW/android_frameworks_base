@@ -20,6 +20,8 @@ import android.app.Notification
 import android.app.NotificationManager
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.os.Handler
+import android.os.Looper
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import com.android.systemui.dagger.SysUISingleton
@@ -47,6 +49,8 @@ class NotificationSignalSource @Inject constructor(
     private val router: SignalRouter,
 ) {
     private val packageManager: PackageManager = context.packageManager
+    private val handler = Handler(Looper.getMainLooper())
+    private val scheduled = mutableMapOf<String, Runnable>()
 
     // progress notifs never send a clean done, so track their keys here
     private val progressKeys = mutableSetOf<String>()
@@ -63,6 +67,7 @@ class NotificationSignalSource @Inject constructor(
             }
 
             override fun onEntryRemoved(entry: NotificationEntry, reason: Int) {
+                scheduled.remove(entry.key)?.let(handler::removeCallbacks)
                 progressKeys.remove(entry.key)
                 router.removeSignal("notif:${entry.key}")
                 router.clearHeadsUpHandled(entry.key)
@@ -86,9 +91,26 @@ class NotificationSignalSource @Inject constructor(
     }
 
     private fun maybeEmit(entry: NotificationEntry) {
+        scheduled.remove(entry.key)?.let(handler::removeCallbacks)
         val sbn = entry.sbn
         val n = sbn.notification
         android.util.Log.d(TAG, "maybeEmit key=${entry.key} imp=${entry.ranking.importance}")
+
+        val now = System.currentTimeMillis()
+        val dueAt = n.`when` - UPCOMING_WINDOW_MS
+        if (dueAt > now && dueAt - now < MAX_FUTURE_MS &&
+            n.category != Notification.CATEGORY_CALL &&
+            !n.isStyle(Notification.CallStyle::class.java)
+        ) {
+            val key = entry.key
+            val task = Runnable {
+                scheduled.remove(key)
+                notifPipeline.getEntry(key)?.let(::maybeEmit)
+            }
+            scheduled[key] = task
+            handler.postDelayed(task, dueAt - now)
+            return
+        }
 
         if (n.category == Notification.CATEGORY_CALL || n.isStyle(Notification.CallStyle::class.java)) return
 
@@ -185,6 +207,7 @@ class NotificationSignalSource @Inject constructor(
             progressIndeterminate = n.extras.getBoolean(Notification.EXTRA_PROGRESS_INDETERMINATE),
             whenMillis = n.`when`,
             otpCode = com.android.systemui.petalos.PetalOtpHelper.extract(title, text, subText),
+            sourceNotification = sbn,
         )
 
         val signal = IslandSignal(
@@ -230,6 +253,7 @@ class NotificationSignalSource @Inject constructor(
             progressIndeterminate = false,
             whenMillis = n.`when`,
             otpCode = null,
+            sourceNotification = sbn,
         )
         val signal = IslandSignal(
             id = "notif:$key",
@@ -263,5 +287,7 @@ class NotificationSignalSource @Inject constructor(
 
     companion object {
         private const val TAG = "IslandNotif"
+        private const val UPCOMING_WINDOW_MS = 15 * 60 * 1000L
+        private const val MAX_FUTURE_MS = 7 * 24 * 60 * 60 * 1000L
     }
 }

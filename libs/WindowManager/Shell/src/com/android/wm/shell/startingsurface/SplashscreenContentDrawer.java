@@ -393,6 +393,38 @@ public class SplashscreenContentDrawer {
         return estimatedWindowBGColor;
     }
 
+    // petalOS: channel values at or below this are treated as a solid black splash background.
+    private static final int NEAR_BLACK_CHANNEL_MAX = 8;
+
+    // petalOS: how much of the app icon colour to blend into the dark splash surface.
+    private static final float SPLASH_ICON_TINT_RATIO = 0.22f;
+
+    private static boolean isNearBlack(@ColorInt int color) {
+        return Color.alpha(color) == 255
+                && Color.red(color) <= NEAR_BLACK_CHANNEL_MAX
+                && Color.green(color) <= NEAR_BLACK_CHANNEL_MAX
+                && Color.blue(color) <= NEAR_BLACK_CHANNEL_MAX;
+    }
+
+    /**
+     * petalOS: keep the splash surface dark (for icon and status-bar legibility) but tint it
+     * with the app's own colour so apps that ask for a black starting window do not show a flat
+     * black loading screen while {@code bindApplication} runs.
+     */
+    private static int tintSplashBackground(@ColorInt int seed) {
+        final int surface = getSystemBGColor();
+        if (seed == Color.TRANSPARENT || isNearBlack(seed)) {
+            return surface;
+        }
+        return Color.rgb(
+                Math.round(Color.red(surface) * (1f - SPLASH_ICON_TINT_RATIO)
+                        + Color.red(seed) * SPLASH_ICON_TINT_RATIO),
+                Math.round(Color.green(surface) * (1f - SPLASH_ICON_TINT_RATIO)
+                        + Color.green(seed) * SPLASH_ICON_TINT_RATIO),
+                Math.round(Color.blue(surface) * (1f - SPLASH_ICON_TINT_RATIO)
+                        + Color.blue(seed) * SPLASH_ICON_TINT_RATIO));
+    }
+
     private int estimateWindowBGColor(Drawable themeBGDrawable) {
         final DrawableColorTester themeBGTester = new DrawableColorTester(
                 themeBGDrawable, DrawableColorTester.TRANSLUCENT_FILTER /* filterType */);
@@ -631,6 +663,7 @@ public class SplashscreenContentDrawer {
             } else if (mTmpAttrs.mSplashScreenIcon != null) {
                 // Using the windowSplashScreenAnimatedIcon attribute
                 iconDrawable = mTmpAttrs.mSplashScreenIcon;
+                themeBlackSplashBackground(iconDrawable);
 
                 // There is no background below the icon, so scale the icon up
                 if (mTmpAttrs.mIconBgColor == Color.TRANSPARENT
@@ -647,6 +680,7 @@ public class SplashscreenContentDrawer {
                 iconDrawable = mHighResIconProvider.getIcon(
                         mActivityInfo, densityDpi, scaledIconDpi);
                 Trace.traceEnd(TRACE_TAG_WINDOW_MANAGER);
+                themeBlackSplashBackground(iconDrawable);
                 if (!processAdaptiveIcon(iconDrawable)) {
                     ProtoLog.v(ShellProtoLogGroup.WM_SHELL_STARTING_WINDOW,
                             "The icon is not an AdaptiveIconDrawable");
@@ -682,6 +716,29 @@ public class SplashscreenContentDrawer {
                         mTmpAttrs.mIconBgColor, mThemeColor, iconDrawable, mDefaultIconSize,
                         mFinalIconSize, loadInDetail, mSplashscreenWorkerHandler);
             }
+        }
+
+        /**
+         * petalOS: replace a (near) black splash background with one tinted from the app's own
+         * icon, so the cold-launch wait is a themed surface instead of a black void.
+         */
+        private void themeBlackSplashBackground(Drawable iconDrawable) {
+            if (iconDrawable == null || !isNearBlack(mThemeColor)) {
+                return;
+            }
+            int seed = Color.TRANSPARENT;
+            try {
+                final Drawable source = iconDrawable instanceof AdaptiveIconDrawable
+                        ? ((AdaptiveIconDrawable) iconDrawable).getBackground()
+                        : iconDrawable;
+                if (source != null) {
+                    seed = new DrawableColorTester(source,
+                            DrawableColorTester.TRANSLUCENT_FILTER).getDominateColor();
+                }
+            } catch (RuntimeException e) {
+                Slog.w(TAG, "Unable to sample splash icon color, using the default surface", e);
+            }
+            mThemeColor = tintSplashBackground(seed);
         }
 
         private boolean processAdaptiveIcon(Drawable iconDrawable) {

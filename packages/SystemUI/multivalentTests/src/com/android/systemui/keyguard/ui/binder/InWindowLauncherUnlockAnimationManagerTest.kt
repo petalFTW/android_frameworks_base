@@ -19,6 +19,7 @@ package com.android.systemui.keyguard.ui.binder
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.SmallTest
 import com.android.systemui.SysuiTestCase
+import com.android.systemui.keyguard.PetalHomeUnlockOrigin
 import com.android.systemui.keyguard.domain.interactor.inWindowLauncherUnlockAnimationInteractor
 import com.android.systemui.keyguard.ui.view.InWindowLauncherUnlockAnimationManager
 import com.android.systemui.keyguard.ui.viewmodel.InWindowLauncherAnimationViewModel
@@ -34,6 +35,7 @@ import org.junit.runner.RunWith
 import org.mockito.Mock
 import org.mockito.Mockito.anyBoolean
 import org.mockito.Mockito.anyInt
+import org.mockito.Mockito.inOrder
 import org.mockito.Mockito.never
 import org.mockito.Mockito.verify
 import org.mockito.Mockito.verifyNoMoreInteractions
@@ -47,6 +49,7 @@ class InWindowLauncherUnlockAnimationManagerTest : SysuiTestCase() {
     private val testScope = kosmos.testScope
 
     @Mock private lateinit var launcherUnlockAnimationController: ILauncherUnlockAnimationController
+    @Mock private lateinit var petalHomeUnlockOrigin: PetalHomeUnlockOrigin
 
     @Before
     fun setUp() {
@@ -58,7 +61,8 @@ class InWindowLauncherUnlockAnimationManagerTest : SysuiTestCase() {
                 InWindowLauncherAnimationViewModel(
                     kosmos.inWindowLauncherUnlockAnimationInteractor
                 ),
-                kosmos.applicationCoroutineScope
+                kosmos.applicationCoroutineScope,
+                petalHomeUnlockOrigin,
             )
         underTest.setLauncherUnlockController("launcherClass", launcherUnlockAnimationController)
     }
@@ -79,6 +83,17 @@ class InWindowLauncherUnlockAnimationManagerTest : SysuiTestCase() {
             underTest.playUnlockAnimation(true, 200, 0)
             verify(launcherUnlockAnimationController, never())
                 .playUnlockAnimation(any(), any(), any())
+        }
+
+    @Test
+    fun testPlayUnlockAnimation_sendsOriginBeforeStarting() =
+        testScope.runTest {
+            underTest.prepareForUnlock()
+            underTest.playUnlockAnimation(true, 200, 0)
+
+            val order = inOrder(petalHomeUnlockOrigin, launcherUnlockAnimationController)
+            order.verify(petalHomeUnlockOrigin).sendTo(launcherUnlockAnimationController)
+            order.verify(launcherUnlockAnimationController).playUnlockAnimation(true, 200, 0)
         }
 
     @Test

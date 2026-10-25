@@ -115,67 +115,37 @@ public enum ScrimState {
         }
     },
 
-    /**
-     * Showing password challenge on the keyguard.
-     */
+    // Credential page, keep the wallpaper's actual colours.
     BOUNCER {
         @Override
         public void prepare(ScrimState previousState) {
-            if (Flags.bouncerUiRevamp()) {
-                mBehindAlpha = ScrimState.getColorAlpha(mBouncerSurfaceColor);
-                mNotifAlpha = 0f;
-                mBehindTint = mNotifTint = mBouncerSurfaceColor;
-                mFrontAlpha = 0f;
-                return;
-            }
-            mBehindAlpha = mClipQsScrim ? 1 : mDefaultScrimAlpha;
-            mBehindTint = mClipQsScrim ? mBackgroundColor : mBouncerSurfaceColor;
-            mNotifAlpha = mClipQsScrim ? mDefaultScrimAlpha : 0;
-            mNotifTint = Color.TRANSPARENT;
+            mBehindAlpha = 0f;
+            mNotifAlpha = 0f;
+            mBehindTint = mNotifTint = Color.TRANSPARENT;
             mFrontAlpha = 0f;
         }
 
         @Override
         public void setBouncerSurfaceColor(int surfaceColor) {
             super.setBouncerSurfaceColor(surfaceColor);
-            if (Flags.bouncerUiRevamp()) {
-                mBehindTint = mNotifTint = mBouncerSurfaceColor;
-                return;
-            }
-            if (!mClipQsScrim) {
-                mBehindTint = mBouncerSurfaceColor;
-            }
+            mBehindTint = mNotifTint = Color.TRANSPARENT;
         }
     },
 
-    /**
-     * Showing password challenge on top of a FLAG_SHOW_WHEN_LOCKED activity.
-     */
+    // Same clear treatment when an app is sitting behind the bouncer.
     BOUNCER_SCRIMMED {
         @ExperimentalCoroutinesApi
         @Override
         public void prepare(ScrimState previousState) {
-            if (Flags.bouncerUiRevamp()) {
-                // Add unlocked here because scrim state is unlocked when there is an app on top of
-                // the lockscreen and shade is pulled over it.
-                if (previousState == SHADE_LOCKED || previousState == UNLOCKED) {
-                    mBehindAlpha = previousState.getBehindAlpha();
-                    mNotifAlpha = previousState.getNotifAlpha();
-                } else {
-                    mNotifAlpha = 0f;
-                    mBehindAlpha = 0f;
-                }
-                mFrontAlpha = ScrimState.getColorAlpha(mBouncerSurfaceColor);
-                mFrontTint = mBouncerSurfaceColor;
-                return;
-            }
-            mBehindAlpha = 0;
-            mFrontAlpha = mDefaultScrimAlpha;
+            mBehindAlpha = 0f;
+            mNotifAlpha = 0f;
+            mFrontAlpha = 0f;
+            mBehindTint = mNotifTint = mFrontTint = Color.TRANSPARENT;
         }
 
         @Override
         public boolean shouldBlendWithMainColor() {
-            return !Flags.bouncerUiRevamp();
+            return false;
         }
     },
 

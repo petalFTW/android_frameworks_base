@@ -20,6 +20,11 @@ import android.animation.AnimatorSet
 import android.content.Context
 import android.content.res.Configuration
 import android.content.res.Configuration.ORIENTATION_LANDSCAPE
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Outline
+import android.graphics.Rect
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
@@ -54,6 +59,7 @@ import com.android.systemui.util.animation.MeasurementInput
 import com.android.systemui.util.animation.TransitionLayout
 import com.android.systemui.util.animation.TransitionViewState
 import com.android.systemui.util.animation.WidgetState
+import com.google.common.truth.Truth.assertThat
 import junit.framework.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -221,6 +227,254 @@ class MediaViewControllerTest : SysuiTestCase() {
                 mediaViewController.expandedLayout.getConstraint(id).layout.mHeight ==
                     ConstraintSet.MATCH_CONSTRAINT
             )
+        }
+    }
+
+    @Test
+    fun petalLockscreen_shortHostKeepsTransportInsideCard() {
+        val holder = MediaViewHolder.create(android.view.LayoutInflater.from(context), FrameLayout(context))
+        mediaViewController.attach(holder.player)
+        val density = context.resources.displayMetrics.density
+        val oldHeight = (184 * density).toInt()
+        val state = MediaHost.MediaHostStateHolder().apply {
+            expansion = 1f
+            petalStyle = com.android.systemui.petalos.PetalMediaStyle.Lockscreen
+            measurementInput = MeasurementInput(
+                View.MeasureSpec.makeMeasureSpec((320 * density).toInt(), View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(oldHeight, View.MeasureSpec.EXACTLY),
+            )
+        }
+
+        val result = mediaViewController.obtainViewState(state)!!
+        assertTrue(result.measureHeight > oldHeight)
+        for (id in listOf(R.id.actionPlayPause, R.id.actionPrev, R.id.actionNext,
+            R.id.media_progress_bar, R.id.petal_media_elapsed, R.id.petal_media_duration)) {
+            val widget = result.widgetStates.getValue(id)
+            assertTrue(widget.y + widget.height <= result.height)
+        }
+        val play = result.widgetStates.getValue(R.id.actionPlayPause)
+        assertTrue(!play.gone && play.alpha > 0f)
+    }
+
+    @Test
+    fun petalLockscreen_pendingQsAnimationAppliesLockscreenGeometryImmediately() {
+        assertLockscreenGeometryAfterQsAnimation(startAnimation = false)
+    }
+
+    @Test
+    fun petalLockscreen_ribbonContentsFitInsideSweptSurface() {
+        val holder = MediaViewHolder.create(android.view.LayoutInflater.from(context), FrameLayout(context))
+        mediaViewController.attach(holder.player)
+        for (id in MediaViewHolder.genericButtonIds) {
+            mediaViewController.expandedLayout.setVisibility(id,
+                if (id == R.id.action0 || id == R.id.action1) View.VISIBLE else View.GONE)
+        }
+        val density = context.resources.displayMetrics.density
+        for (width in listOf(280, 364, 400)) {
+            val state = MediaHost.MediaHostStateHolder().apply {
+                expansion = 1f
+                petalStyle = com.android.systemui.petalos.PetalMediaStyle.Lockscreen
+                measurementInput = MeasurementInput(
+                    View.MeasureSpec.makeMeasureSpec((width * density).toInt(), View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec((184 * density).toInt(), View.MeasureSpec.EXACTLY),
+                )
+            }
+            val result = mediaViewController.obtainViewState(state)!!
+            val bitmap = Bitmap.createBitmap(result.width, result.height, Bitmap.Config.ARGB_8888)
+            try {
+                val ribbon = com.android.systemui.petalos.PetalMediaRibbonDrawable(density)
+                ribbon.setBounds(0, 0, result.width, result.height)
+                ribbon.draw(Canvas(bitmap))
+                assertThat(Color.alpha(bitmap.getPixel(0, 0))).isEqualTo(0)
+                assertThat(Color.alpha(bitmap.getPixel(result.width - 1, result.height - 1))).isEqualTo(0)
+                // A straight fill edge used to leave the curved rim hanging in mid-air.
+                val bandHeights = listOf(0.15f, 0.35f, 0.65f, 0.85f).map { fraction ->
+                    val x = (result.width * fraction).toInt()
+                    val filled = (0 until result.height).filter { y ->
+                        Color.alpha(bitmap.getPixel(x, y)) > 0
+                    }
+                    filled.last() - filled.first()
+                }
+                assertThat(bandHeights.max() - bandHeights.min()).isAtMost((3 * density).toInt() + 2)
+                for (id in listOf(R.id.petal_media_cover, R.id.header_title, R.id.header_artist,
+                    R.id.petal_media_ribbon_waveform, R.id.action0, R.id.actionPrev,
+                    R.id.actionPlayPause, R.id.actionNext, R.id.action1)) {
+                    val widget = result.widgetStates.getValue(id)
+                    assertThat(widget.gone).isFalse()
+                    val left = widget.x.toInt()
+                    val top = widget.y.toInt()
+                    val right = left + widget.width - 1
+                    val bottom = top + widget.height - 1
+                    assertThat(left).isAtLeast(0)
+                    assertThat(right).isLessThan(result.width)
+                    assertThat(top).isAtLeast(0)
+                    assertThat(bottom).isLessThan(result.height)
+                    for ((x, y) in listOf(left to top, right to top, left to bottom, right to bottom)) {
+                        assertThat(Color.alpha(bitmap.getPixel(x, y))).isGreaterThan(0)
+                    }
+                }
+                val cover = result.widgetStates.getValue(R.id.petal_media_cover)
+                assertThat(cover.width).isEqualTo(cover.height)
+                assertThat(result.widgetStates.getValue(R.id.media_seamless).gone).isTrue()
+            } finally {
+                bitmap.recycle()
+            }
+        }
+    }
+
+    @Test
+    fun petalLockscreen_outlineDoesNotReenterThroughBackgroundInvalidation() {
+        val holder = MediaViewHolder.create(android.view.LayoutInflater.from(context), FrameLayout(context))
+        mediaViewController.sizeChangedListener = {}
+        mediaViewController.attach(holder.player)
+        val density = context.resources.displayMetrics.density
+        val location = MediaHierarchyManager.LOCATION_LOCKSCREEN
+        mediaHostStatesManager.mediaHostStates[location] = MediaHost.MediaHostStateHolder().apply {
+            expansion = 1f
+            petalStyle = com.android.systemui.petalos.PetalMediaStyle.Lockscreen
+            measurementInput = MeasurementInput(
+                View.MeasureSpec.makeMeasureSpec((364 * density).toInt(), View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec((184 * density).toInt(), View.MeasureSpec.EXACTLY),
+            )
+        }
+        mediaViewController.setCurrentState(MediaHierarchyManager.LOCATION_UNKNOWN,
+            location, 1f, applyImmediately = true)
+        val background = holder.player.background
+        val oldBounds = Rect(background.bounds)
+        val oldCallback = background.callback
+        var invalidations = 0
+        background.callback = object : Drawable.Callback {
+            override fun invalidateDrawable(who: Drawable) {
+                invalidations++
+                check(invalidations < 2) { "Outline calculation recursively invalidated the background" }
+                holder.player.outlineProvider.getOutline(holder.player, Outline())
+            }
+            override fun scheduleDrawable(who: Drawable, what: Runnable, at: Long) {}
+            override fun unscheduleDrawable(who: Drawable, what: Runnable) {}
+        }
+        try {
+            val outline = Outline()
+            holder.player.outlineProvider.getOutline(holder.player, outline)
+            holder.player.setLeftTopRightBottom(0, 0, holder.player.width + 10, holder.player.height + 10)
+            holder.player.outlineProvider.getOutline(holder.player, outline)
+            assertThat(outline.isEmpty).isFalse()
+            assertThat(outline.canClip()).isTrue()
+            assertThat(invalidations).isEqualTo(0)
+            assertThat(background.bounds).isEqualTo(oldBounds)
+        } finally {
+            background.callback = oldCallback
+            mediaViewController.onDestroy()
+        }
+    }
+
+    @Test
+    fun petalLockscreen_runningQsAnimationAppliesLockscreenGeometryImmediately() {
+        assertLockscreenGeometryAfterQsAnimation(startAnimation = true)
+    }
+
+    @Test
+    fun petalLockscreen_missingMeasurementDoesNotConsumeStyleChange() {
+        assertLockscreenGeometryAfterQsAnimation(startAnimation = false, missingMeasurement = true)
+    }
+
+    private fun assertLockscreenGeometryAfterQsAnimation(
+        startAnimation: Boolean,
+        missingMeasurement: Boolean = false,
+    ) {
+        val holder = MediaViewHolder.create(android.view.LayoutInflater.from(context), FrameLayout(context))
+        mediaViewController.sizeChangedListener = {}
+        mediaViewController.attach(holder.player)
+        val density = context.resources.displayMetrics.density
+        val qs = MediaHost.MediaHostStateHolder().apply {
+            expansion = 1f
+            measurementInput = MeasurementInput(
+                View.MeasureSpec.makeMeasureSpec((320 * density).toInt(), View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec((184 * density).toInt(), View.MeasureSpec.EXACTLY),
+            )
+        }
+        val lockscreen = qs.copy().apply {
+            petalStyle = com.android.systemui.petalos.PetalMediaStyle.Lockscreen
+        }
+        val qsLocation = MediaHierarchyManager.LOCATION_QS
+        val lockscreenLocation = MediaHierarchyManager.LOCATION_LOCKSCREEN
+        val unknown = MediaHierarchyManager.LOCATION_UNKNOWN
+        mediaHostStatesManager.mediaHostStates[qsLocation] = qs
+        mediaHostStatesManager.mediaHostStates[lockscreenLocation] = lockscreen
+        val expected = mediaViewController.obtainViewState(lockscreen)!!
+        mediaViewController.setCurrentState(unknown, qsLocation, 1f, applyImmediately = true)
+        assertThat(holder.player.height).isNotEqualTo(expected.height)
+
+        mediaViewController.animatePendingStateChange(1000L, 0L)
+        if (startAnimation) {
+            mediaViewController.setCurrentState(unknown, qsLocation, 1f, applyImmediately = false)
+        }
+        if (missingMeasurement) {
+            lockscreen.measurementInput = null
+            mediaViewController.setCurrentState(unknown, lockscreenLocation, 1f, applyImmediately = false)
+            lockscreen.measurementInput = qs.measurementInput?.copy()
+        }
+        mediaViewController.setCurrentState(unknown, lockscreenLocation, 1f, applyImmediately = false)
+
+        assertThat(holder.player.height).isEqualTo(expected.height)
+        for (id in listOf(R.id.petal_media_cover, R.id.header_title, R.id.actionPlayPause)) {
+            val child = holder.player.findViewById<View>(id)
+            val widget = expected.widgetStates.getValue(id)
+            assertThat(child.width).isEqualTo(widget.width)
+            assertThat(child.height).isEqualTo(widget.height)
+            assertThat(child.top).isEqualTo(widget.y.toInt())
+        }
+        mediaViewController.onDestroy()
+    }
+
+    @Test
+    fun petalSplit_sideSlidersLeaveReadableMetadataAndDisjointControls() {
+        val resolver = context.contentResolver
+        val key = org.petalos.config.PetalConfig.KEY_QS_SKIN_ENABLED
+        val previous = android.provider.Settings.System.getString(resolver, key)
+        try {
+            android.provider.Settings.System.putInt(resolver, key, 1)
+            val holder = MediaViewHolder.create(android.view.LayoutInflater.from(context), FrameLayout(context))
+            holder.titleText.text = "Jimmy Cooks"
+            holder.artistText.text = "Drake"
+            mediaViewController.attach(holder.player)
+            for (id in MediaViewHolder.genericButtonIds) {
+                mediaViewController.expandedLayout.setVisibility(id,
+                    if (id == R.id.action0 || id == R.id.action1) View.VISIBLE else View.GONE)
+            }
+            val density = context.resources.displayMetrics.density
+            for (width in listOf(219, 331)) {
+                val state = MediaHost.MediaHostStateHolder().apply {
+                    expansion = 1f
+                    petalStyle = com.android.systemui.petalos.PetalMediaStyle.Split
+                    measurementInput = MeasurementInput(
+                        View.MeasureSpec.makeMeasureSpec((width * density).toInt(), View.MeasureSpec.EXACTLY),
+                        View.MeasureSpec.makeMeasureSpec((184 * density).toInt(), View.MeasureSpec.EXACTLY),
+                    )
+                }
+                val result = mediaViewController.obtainViewState(state)!!
+                fun widget(id: Int) = result.widgetStates.getValue(id)
+                val title = widget(R.id.header_title)
+                assertTrue(title.width >= 96 * density)
+                val art = widget(R.id.petal_media_cover)
+                val progress = widget(R.id.media_progress_bar)
+                assertTrue(progress.y >= art.y + art.height)
+                val actions = listOf(R.id.action0, R.id.actionPrev, R.id.actionPlayPause,
+                    R.id.actionNext, R.id.action1).map(::widget)
+                for ((left, right) in actions.zipWithNext()) {
+                    assertTrue(left.x + left.width <= right.x)
+                }
+                for (action in actions) {
+                    assertTrue(action.x >= 0 && action.x + action.width <= result.width)
+                }
+                val device = widget(R.id.media_seamless)
+                val output = widget(R.id.petal_media_output)
+                assertTrue(output.gone)
+                assertTrue(device.width >= (width - 32) * density - 2)
+                assertTrue(device.y + device.height <= result.height)
+                assertTrue(actions.maxOf { it.y + it.height } <= device.y)
+            }
+        } finally {
+            android.provider.Settings.System.putString(resolver, key, previous)
         }
     }
 

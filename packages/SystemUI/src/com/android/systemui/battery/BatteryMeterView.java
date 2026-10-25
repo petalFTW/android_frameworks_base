@@ -85,6 +85,7 @@ public class BatteryMeterView extends LinearLayout implements DarkReceiver {
     private boolean mShowPercentAvailable;
     private String mEstimateText = null;
     private boolean mPluggedIn;
+    private boolean mCharging;
     private boolean mPowerSaveEnabled;
     private boolean mIsBatteryDefender;
     private boolean mIsIncompatibleCharging;
@@ -228,15 +229,16 @@ public class BatteryMeterView extends LinearLayout implements DarkReceiver {
         return false;
     }
 
-    /**
-     * Update battery level
-     *
-     * @param level     int between 0 and 100 (representing percentage value)
-     * @param pluggedIn whether the device is plugged in or not
-     */
+    // old callers only gave us plugged, keep that shortcut working
     public void onBatteryLevelChanged(@IntRange(from = 0, to = 100) int level, boolean pluggedIn) {
+        onBatteryLevelChanged(level, pluggedIn, pluggedIn);
+    }
+
+    public void onBatteryLevelChanged(@IntRange(from = 0, to = 100) int level,
+            boolean pluggedIn, boolean charging) {
         boolean wasCharging = isCharging();
         mPluggedIn = pluggedIn;
+        mCharging = charging;
         mLevel = level;
         boolean isCharging = isCharging();
         mDrawable.setCharging(isCharging);
@@ -758,7 +760,8 @@ public class BatteryMeterView extends LinearLayout implements DarkReceiver {
 
     @VisibleForTesting
     boolean isCharging() {
-        return mPluggedIn && !mIsIncompatibleCharging;
+        // oplus can leave plugged stuck on while the battery is discharging, lovely
+        return mPluggedIn && mCharging && !mIsIncompatibleCharging;
     }
 
     public void dump(PrintWriter pw, String[] args) {
@@ -775,6 +778,7 @@ public class BatteryMeterView extends LinearLayout implements DarkReceiver {
         pw.println("    mBatteryStateUnknown: " + mBatteryStateUnknown);
         pw.println("    mIsIncompatibleCharging: " + mIsIncompatibleCharging);
         pw.println("    mPluggedIn: " + mPluggedIn);
+        pw.println("    mCharging: " + mCharging);
         pw.println("    mLevel: " + mLevel);
         pw.println("    mMode: " + mShowPercentMode);
         if (NewStatusBarIcons.isEnabled()) {
@@ -803,4 +807,3 @@ public class BatteryMeterView extends LinearLayout implements DarkReceiver {
                 BatteryController.EstimateFetchCompletion completion);
     }
 }
-

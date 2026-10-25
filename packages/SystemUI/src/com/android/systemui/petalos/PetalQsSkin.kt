@@ -41,11 +41,14 @@ import androidx.compose.ui.unit.sp
 import com.android.systemui.island.render.LiquidGlassDrawable
 import org.petalos.config.PetalConfig
 
-/** smoked glass, faint blue when active. flips to a frosted white set in light mode */
+/** Petal glass tiles with a violet active state and matched light and dark surfaces. */
 object PetalQsSkin {
 
     /** true when the petal qs skin is on */
     @JvmStatic fun isEnabled(context: Context): Boolean = PetalConfig.isQsSkinEnabled(context)
+
+    @Composable
+    internal fun enabled(): Boolean = petalQsPreferences().enabled
 
     /** night check for the java side, drawables and views cant read compose locals */
     @JvmStatic
@@ -64,22 +67,23 @@ object PetalQsSkin {
     @Composable
     @ReadOnlyComposable
     internal fun emission(): Float =
-        PetalConfig.getQsEmission(LocalContext.current) / 100f
+        LocalPetalQsPreferences.current.let {
+            if (it.provided) it.emission / 100f
+            else PetalConfig.getQsEmission(LocalContext.current) / 100f
+        }
 
     // matches the volume and power overlay palette
-    internal val CardColor = Color(0xCC0C0C0E)
+    internal val CardColor = Color(0xE6222430)
     internal val GlyphLight = Color(0xFFF5F5F8)
     internal val GlyphDark = Color(0xFF161618)
     internal val GlyphMuted = Color(0xFFB9BAC4)
-    internal val AccentBlue = Color(0xFF3B7BFF)
 
     // dark veil so text survives a white wallpaper
-    internal val FrostTint = Color(0xFF14141B)
+    internal val FrostTint = Color(0xFF0A0B10)
     internal const val FrostScrimAlpha = 0xB8
-    internal val CardLight = Color(0xF2EDF0FF)
-    // active tile goes blue as emission climbs
-    internal val ActiveGlassDim = Color(0xE0323846)
-    internal val ActiveGlassHot = Color(0xFF2F63E6)
+    internal val CardLight = Color(0xF2ECE7FF)
+    // Active tiles move toward the shared petal accent as emission climbs.
+    internal val ActiveGlassDim = Color(0xE033343D)
     internal val TileGlassDark = Color(0xB833333D)
     internal val TileGlassBorder = Color(0x30FFFFFF)
     // see-through fill, the rest comes from the island glass renderer
@@ -92,12 +96,12 @@ object PetalQsSkin {
         )
 
     // light mirror of the dark palette, frosted white instead of smoked charcoal
-    internal val CardColorLight = Color(0xCCE6E8F0)
-    internal val CardFillLight = Color(0xF22C2E36)
+    internal val CardColorLight = Color(0xEAF7F6FA)
+    internal val CardFillLight = Color(0xF2191B23)
     internal val GlyphOnLight = Color(0xFF17171A)
     internal val GlyphOnLightMuted = Color(0xFF565663)
     internal val GlyphUnavailableLight = Color(0xFF8A8A95)
-    internal val FrostTintLight = Color(0xFFEDEFF5)
+    internal val FrostTintLight = Color(0xFFF6F6FA)
     internal const val FrostScrimAlphaLight = 0xC4
     internal val TileGlassLight = Color(0xB8FBFBFE)
     internal val TileGlassBorderLight = Color(0x1A000000)
@@ -107,7 +111,7 @@ object PetalQsSkin {
         Brush.linearGradient(
             colors = listOf(Color(0x99FFFFFF), Color(0x40FFFFFF), Color(0x1AFFFFFF))
         )
-    internal val ActiveGlassDimLight = Color(0xE0BFCBE6)
+    internal val ActiveGlassDimLight = Color(0xE0ECECF1)
 
     /** frosted panel tint, dark vs light */
     internal fun frostTint(dark: Boolean): Color = if (dark) FrostTint else FrostTintLight
@@ -137,25 +141,32 @@ object PetalQsSkin {
     /** end of the light mirror */
 
     // the glow follows the emission slider
+    @Composable
     internal fun Modifier.activeTileGlow(
         active: Boolean,
         emission: Float = 1f,
         dark: Boolean = true,
-    ): Modifier =
-        if (!active || emission <= 0.01f) this else drawWithCache {
-            val e = emission.coerceIn(0f, 1f)
+    ): Modifier {
+        val context = LocalContext.current
+        val accent = Color(context.getColor(android.R.color.system_accent1_500))
+        val softAccent = Color(context.getColor(android.R.color.system_accent1_300))
+        return if (!active || emission <= 0.01f) this else drawWithCache {
+            val e = (0.45f + 0.55f * emission.coerceIn(0f, 1f))
             // keep the light bloom a touch weaker so it doesnt wash the frosted cards
-            val bloomTop = if (dark) Color(0x8078ACFF) else Color(0x5C3B7BFF)
-            val bloomMid = if (dark) Color(0x403B7BFF) else Color(0x332F63E6)
-            val sheenTop = if (dark) Color(0x1A8CCBFF) else Color(0x148CCBFF)
-            val sheenBottom = if (dark) Color(0x142358DA) else Color(0x102358DA)
+            val bloomTop = softAccent.copy(alpha = if (dark) 0.62f else 0.46f)
+            val bloomMid = accent.copy(alpha = if (dark) 0.34f else 0.26f)
+            val sheenTop = softAccent.copy(alpha = if (dark) 0.15f else 0.11f)
+            val sheenBottom = accent.copy(alpha = if (dark) 0.12f else 0.09f)
             val bloom = Brush.radialGradient(
                 colors = listOf(
                     bloomTop.copy(alpha = bloomTop.alpha * e),
                     bloomMid.copy(alpha = bloomMid.alpha * e),
                     Color.Transparent,
                 ),
-                center = Offset(size.width * 0.38f, size.height * 0.82f),
+                center = Offset(
+                    size.width * 0.38f,
+                    size.height * 0.82f,
+                ),
                 radius = maxOf(size.width * 0.95f, size.height * 1.25f),
             )
             val sheen = Brush.verticalGradient(
@@ -171,33 +182,39 @@ object PetalQsSkin {
                 drawContent()
             }
         }
+    }
 
     // proper see-through glass, nicked from the island renderer
+    @Composable
     internal fun Modifier.liquidGlass(
         cornerRadius: Dp,
         tint: Color,
         dark: Boolean = true,
-    ): Modifier = drawWithCache {
-        val rimTop = if (dark) TileGlassRimTop else TileGlassRimTopLight
-        val rimBottom = if (dark) TileGlassRimBottom else TileGlassRimBottomLight
-        val glass =
-            LiquidGlassDrawable().apply {
-                setCornerRadius(cornerRadius.toPx())
-                setRimWidth(1.1f * density)
-                setTintColor(tint.copy(alpha = GlassFillAlpha).toArgb())
-                setRim(rimTop.toArgb(), rimBottom.toArgb())
-                setGrainAlpha(if (dark) 0x16 else 0x10)
-                // sheen way down and parked near the rim light, that mid band looked fake as hell
-                setSheenStrength(0x55)
-                setSpecularProgress(0.16f)
+        fillAlpha: Float = GlassFillAlpha,
+    ): Modifier {
+        val glassModifier = drawWithCache {
+            val rimTop = if (dark) TileGlassRimTop else TileGlassRimTopLight
+            val rimBottom = if (dark) TileGlassRimBottom else TileGlassRimBottomLight
+            val glass =
+                LiquidGlassDrawable().apply {
+                    setCornerRadius(cornerRadius.toPx())
+                    setRimWidth(1.1f * density)
+                    setTintColor(tint.copy(alpha = fillAlpha).toArgb())
+                    setRim(rimTop.toArgb(), rimBottom.toArgb())
+                    setGrainAlpha(if (dark) 0x16 else 0x10)
+                    // That bright mid-band looked fake as hell.
+                    setSheenStrength(0x55)
+                    setSpecularProgress(0.16f)
+                }
+            onDrawWithContent {
+                drawIntoCanvas { canvas ->
+                    glass.setBounds(0, 0, size.width.toInt(), size.height.toInt())
+                    glass.draw(canvas.nativeCanvas)
+                }
+                drawContent()
             }
-        onDrawWithContent {
-            drawIntoCanvas { canvas ->
-                glass.setBounds(0, 0, size.width.toInt(), size.height.toInt())
-                glass.draw(canvas.nativeCanvas)
-            }
-            drawContent()
         }
+        return glassModifier
     }
 
     // subtle scale pulse on open/close and press
@@ -216,7 +233,7 @@ object PetalQsSkin {
     /** radius for the media and slider cards */
     internal val TileCardCornerRadius = 24.dp
     /** icon box radius, full circle */
-    internal val IconBoxCornerRadius = 24.dp
+    internal val IconBoxCornerRadius = 28.dp
     /** compact tile size */
     internal val IconTileSize = 56.dp
     /** pill size before the shade expands */
@@ -249,7 +266,7 @@ object PetalQsSkin {
     /** one shape for compact, connectivity and media */
     fun tileShape(iconOnly: Boolean, handlesSecondaryClick: Boolean = false): RoundedCornerShape =
         when {
-            iconOnly -> RoundedCornerShape(20.dp)
+            iconOnly -> RoundedCornerShape(22.dp)
             handlesSecondaryClick -> RoundedCornerShape(TileCornerRadius)
             else -> RoundedCornerShape(TileCardCornerRadius)
         }
@@ -257,7 +274,31 @@ object PetalQsSkin {
     /** icon box is always a circle here */
     fun iconShape(): RoundedCornerShape = RoundedCornerShape(IconBoxCornerRadius)
 
+    // monet pastels are watered down by the time they hit the glass, this puts the colour back
+    internal fun punch(accent: Color, dark: Boolean): Color {
+        val hsv = FloatArray(3)
+        android.graphics.Color.colorToHSV(accent.toArgb(), hsv)
+        hsv[1] = (hsv[1] * 1.45f + 0.06f).coerceAtMost(1f)
+        hsv[2] =
+            if (dark) hsv[2] * 0.9f
+            else (hsv[2] * 0.96f).coerceAtMost(0.78f)
+        return Color(android.graphics.Color.HSVToColor(hsv))
+    }
+
+    /** punched accent as an argb int, for the java media player side */
+    @JvmStatic
+    fun mediaAccent(context: Context, dark: Boolean): Int =
+        punch(Color(context.getColor(android.R.color.system_accent1_500)), dark).toArgb()
+
+    /** dark or light glyph for a given background argb, for the java media player side */
+    @JvmStatic
+    fun glyphOnBackground(bgArgb: Int): Int =
+        if (android.graphics.Color.luminance(bgArgb) > 0.42f) GlyphDark.toArgb()
+        else GlyphLight.toArgb()
+
     // colors per tile state
+    @Composable
+    @ReadOnlyComposable
     fun tileColors(
         state: Int,
         handlesSecondaryClick: Boolean,
@@ -265,29 +306,42 @@ object PetalQsSkin {
         emission: Float = 1f,
         dark: Boolean = true,
     ): TileSkinColors {
-        val e = emission.coerceIn(0f, 1f)
+        // ThemeOverlayController supplies this resource from the Hub's Monet seed.
+        val context = LocalContext.current
+        val accent = punch(
+            Color(context.getColor(android.R.color.system_accent1_500)),
+            dark,
+        )
+        val softAccent = punch(Color(context.getColor(android.R.color.system_accent1_300)), dark)
+        // even with the hub slider at zero active tiles keep some colour, full grey looked dead
+        val e = (0.4f + 0.6f * emission.coerceIn(0f, 1f))
         val hasToggleTarget = handlesSecondaryClick && !iconOnly
-        val glyph = if (dark) GlyphLight else GlyphOnLight
         return when (state) {
             STATE_ACTIVE -> {
                 // active tiles used to blend into the dark ones
-                val bg = lerp(if (dark) ActiveGlassDim else ActiveGlassDimLight, ActiveGlassHot, e)
+                val bg = lerp(
+                    if (dark) ActiveGlassDim else ActiveGlassDimLight,
+                    accent,
+                    e.coerceAtLeast(0.55f),
+                )
+                val activeGlyph = if (android.graphics.Color.luminance(bg.toArgb()) > 0.42f) {
+                    GlyphDark
+                } else {
+                    GlyphLight
+                }
                 TileSkinColors(
                     background = bg,
                     iconBackground = if (hasToggleTarget) {
                         lerp(
                             if (dark) Color(0x1FFFFFFF) else Color(0x14000000),
-                            if (dark) Color(0x33FFFFFF) else Color(0x24000000),
+                            if (dark) Color(0x40FFFFFF) else Color(0x2E000000),
                             e,
                         )
                     } else Color.Transparent,
-                    label = glyph,
-                    secondaryLabel = lerp(
-                        if (dark) TileGlyphOnDarkMuted else GlyphOnLightMuted,
-                        if (dark) Color(0xFFDCE6FF) else Color(0xFF1E3E8C),
-                        e,
-                    ),
-                    icon = glyph,
+                    label = activeGlyph,
+                    secondaryLabel = activeGlyph.copy(alpha = 0.76f),
+                    icon = activeGlyph,
+                    glassFill = if (dark) 0.78f else 0.7f,
                 )
             }
             STATE_UNAVAILABLE ->
@@ -319,4 +373,6 @@ data class TileSkinColors(
     val label: Color,
     val secondaryLabel: Color,
     val icon: Color,
+    // how much tint the glass renderer lays down, active tiles need more or the colour dies
+    val glassFill: Float = PetalQsSkin.GlassFillAlpha,
 )

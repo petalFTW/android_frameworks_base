@@ -20,6 +20,7 @@ import com.android.systemui.haptics.msdl.tileHapticsViewModelFactoryProvider
 import com.android.systemui.kosmos.Kosmos
 import com.android.systemui.qs.panels.ui.viewmodel.detailsViewModel
 import com.android.systemui.qs.panels.ui.viewmodel.iconTilesViewModel
+import com.android.systemui.qs.panels.ui.viewmodel.inFirstPageViewModel
 import com.android.systemui.qs.panels.ui.viewmodel.infiniteGridViewModelFactory
 import com.android.systemui.qs.panels.ui.viewmodel.textFeedbackContentViewModelFactory
 
@@ -31,5 +32,6 @@ val Kosmos.infiniteGridLayout by
             infiniteGridViewModelFactory,
             textFeedbackContentViewModelFactory,
             tileHapticsViewModelFactoryProvider,
+            inFirstPageViewModel,
         )
     }

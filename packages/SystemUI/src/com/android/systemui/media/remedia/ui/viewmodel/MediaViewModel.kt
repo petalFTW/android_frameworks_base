@@ -93,6 +93,8 @@ constructor(
                 override val actionButtonLayout = session.actionButtonLayout
                 override val playPauseAction =
                     session.playPauseAction.toPlayPauseActionViewModel(session.state)
+                override val previousAction = session.leftAction.toSecondaryActionViewModel()
+                override val nextAction = session.rightAction.toSecondaryActionViewModel()
                 override val additionalActions: List<MediaSecondaryActionViewModel>
                     get() {
                         return session.additionalActions.map { action ->
@@ -141,6 +143,12 @@ constructor(
                                         formatTimeContentDescription(session.positionMs),
                                         formatTimeContentDescription(session.durationMs),
                                     ),
+                                elapsedTime = android.text.format.DateUtils.formatElapsedTime(
+                                    (if (isCurrentSessionAndScrubbing) {
+                                        (seekProgress * session.durationMs).toLong()
+                                    } else session.positionMs).coerceAtLeast(0L) / 1000L),
+                                duration = android.text.format.DateUtils.formatElapsedTime(
+                                    session.durationMs.coerceAtLeast(0L) / 1000L),
                             )
                         } else {
                             MediaNavigationViewModel.Hidden

@@ -58,6 +58,9 @@ interface IslandPresenter {
     // callback for tint updates, e.g. new artwork
     fun setTintListener(listener: ((IslandTint?) -> Unit)?) {}
 
+    // re-derive any theme-dependent tint when the system light/dark mode changes
+    fun onThemeChanged() {}
+
     // attach or detach the host
     fun setHost(host: Host?) {}
 }

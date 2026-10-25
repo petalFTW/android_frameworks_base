@@ -636,6 +636,10 @@ final class DefaultPermissionGrantPolicy {
         grantSystemFixedPermissionsToSystemPackage(pm, setupWizardPackage, userId,
                 NOTIFICATION_PERMISSIONS);
 
+        grantPermissionsToSystemPackage(pm, "com.android.systemui", userId,
+                Collections.singleton(Manifest.permission.READ_CALENDAR),
+                Collections.singleton(Manifest.permission.READ_MEDIA_AUDIO));
+
         // SearchSelector
         grantPermissionsToSystemPackage(pm, getDefaultSearchSelectorPackage(), userId,
                 NOTIFICATION_PERMISSIONS);
@@ -1013,7 +1017,8 @@ final class DefaultPermissionGrantPolicy {
         }
         grantPermissionsToSystemPackage(pm, dialerPackage, userId,
                 CONTACTS_PERMISSIONS, SMS_PERMISSIONS, MICROPHONE_PERMISSIONS, CAMERA_PERMISSIONS,
-                NOTIFICATION_PERMISSIONS);
+                NOTIFICATION_PERMISSIONS,
+                Collections.singleton(Manifest.permission.READ_MEDIA_AUDIO));
         boolean isAndroidAutomotive =
                 mContext.getPackageManager().hasSystemFeature(PackageManager.FEATURE_AUTOMOTIVE, 0);
         if (isAndroidAutomotive) {

@@ -194,6 +194,32 @@ public class RecentTasksTest extends WindowTestsBase {
     }
 
     @Test
+    public void testSpoofRecentsEligibilityEndsAfterLastTaskRemoval() {
+        final Task first = mTasks.get(0);
+        final Task second = mTasks.get(1);
+        first.effectiveUid = second.effectiveUid = 10023;
+        first.isAvailable = second.isAvailable = true;
+        mRecentTasks.add(first);
+        mRecentTasks.add(second);
+        assertTrue(mRecentTasks.hasRecentTaskForUid(10023));
+        assertFalse(mRecentTasks.hasRecentTaskForUid(1010023));
+        mRecentTasks.remove(first);
+        assertTrue(mRecentTasks.hasRecentTaskForUid(10023));
+        mRecentTasks.remove(second);
+        assertFalse(mRecentTasks.hasRecentTaskForUid(10023));
+    }
+
+    @Test
+    public void testExcludedTasksDoNotKeepSpoofActive() {
+        final Task excluded = createTaskBuilder(".ExcludedSpoofTask")
+                .setFlags(FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS).build();
+        excluded.effectiveUid = 10023;
+        excluded.isAvailable = true;
+        mRecentTasks.add(excluded);
+        assertFalse(mRecentTasks.hasRecentTaskForUid(10023));
+    }
+
+    @Test
     public void testPersister() {
         // Add some tasks, ensure the persister is woken
         mRecentTasks.add(mTasks.get(0));

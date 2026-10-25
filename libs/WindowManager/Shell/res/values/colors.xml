@@ -55,7 +55,9 @@
 
     <!-- Splash screen -->
     <color name="splash_screen_bg_light">#FFFFFF</color>
-    <color name="splash_screen_bg_dark">#000000</color>
+    <!-- petalOS: a dark neutral instead of pure black, so a default dark splash reads as a
+         deliberate surface rather than an uninitialized black screen. -->
+    <color name="splash_screen_bg_dark">#121212</color>
     <color name="splash_window_background_default">@color/splash_screen_bg_light</color>
 
     <!-- Desktop Mode -->

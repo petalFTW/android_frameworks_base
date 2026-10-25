@@ -76,6 +76,9 @@ class NotificationStackSizeCalculatorTest : SysuiTestCase() {
     @Before
     fun setUp() {
         MockitoAnnotations.initMocks(this)
+        whenever(stackLayout.context).thenReturn(mContext)
+        whenever(stackLayout.petalCollectionHeight).thenReturn(-1f)
+        whenever(stackLayout.petalCollectionMinimumHeight).thenReturn(-1f)
 
         sizeCalculator =
             NotificationStackSizeCalculator(
@@ -87,6 +90,48 @@ class NotificationStackSizeCalculatorTest : SysuiTestCase() {
                 seenNotificationsInteractor = seenNotificationsInteractor,
                 scope = testScope,
             )
+    }
+
+    @Test
+    fun shadeNotificationBudget_excludesMediaAndCollectionReservation() {
+        whenever(sysuiStatusBarStateController.state).thenReturn(StatusBarState.KEYGUARD)
+        whenever(stackLayout.petalCollectionHeight).thenReturn(2000f)
+        val row = createMockRow(100f)
+        val media = mock(MediaContainerView::class.java)
+        whenever(media.visibility).thenReturn(VISIBLE)
+        whenever(media.intrinsicHeight).thenReturn(1000)
+        setupChildren(listOf(media, row))
+
+        assertThat(sizeCalculator.computeShadeNotificationHeight(stackLayout)).isEqualTo(100f)
+    }
+
+    @Test
+    fun collectionViewport_doesNotForceRowsIntoZeroHeightShelf() {
+        whenever(sysuiStatusBarStateController.state).thenReturn(StatusBarState.KEYGUARD)
+        whenever(stackLayout.petalCollectionMinimumHeight).thenReturn(800f)
+        val rows = createLockscreenRows(4)
+
+        assertThat(computeMaxKeyguardNotifications(rows, 0f, 0f, 100f)).isEqualTo(4)
+    }
+
+    @Test
+    fun shadeNotificationBudget_noRows_doesNotCountEmptyShadeOrMedia() {
+        val media = mock(MediaContainerView::class.java)
+        whenever(media.visibility).thenReturn(VISIBLE)
+        whenever(media.intrinsicHeight).thenReturn(1000)
+        setupChildren(listOf(media))
+
+        assertThat(sizeCalculator.computeShadeNotificationHeight(stackLayout)).isEqualTo(0f)
+    }
+
+    @Test
+    fun collectionHeight_blendsIntoShadeHeightDuringDrag() {
+        whenever(sysuiStatusBarStateController.state).thenReturn(StatusBarState.KEYGUARD)
+        whenever(stackLayout.petalCollectionHeight).thenReturn(800f)
+        whenever(lockscreenShadeTransitionController.fractionToShade).thenReturn(.5f)
+        setupChildren(listOf(createMockRow(100f)))
+
+        assertThat(sizeCalculator.computeHeight(stackLayout, -1, 0f)).isEqualTo(450f)
     }
 
     @Test

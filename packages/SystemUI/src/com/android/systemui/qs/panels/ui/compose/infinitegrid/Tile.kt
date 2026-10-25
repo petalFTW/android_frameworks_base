@@ -98,6 +98,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.util.trace
@@ -119,6 +120,9 @@ import com.android.systemui.lifecycle.rememberViewModel
 import com.android.systemui.petalos.PetalQsSkin
 import com.android.systemui.petalos.PetalQsSkin.activeTileGlow
 import com.android.systemui.petalos.PetalQsSkin.liquidGlass
+import com.android.systemui.petalos.PetalQsReveal
+import com.android.systemui.petalos.petalQsContentReveal
+import com.android.systemui.petalos.petalQsDetailReveal
 import com.android.systemui.qs.flags.QsDetailedView
 import com.android.systemui.qs.panels.ui.compose.BounceableInfo
 import com.android.systemui.qs.panels.ui.compose.infinitegrid.CommonTileDefaults.InactiveCornerRadius
@@ -179,6 +183,7 @@ fun ContentScope.Tile(
     detailsViewModel: DetailsViewModel?,
     enableRevealEffect: Boolean = false,
     petalExpandToPill: Boolean = false,
+    petalReveal: PetalQsReveal? = null,
 ) {
     trace(tile.traceName) {
         val currentBounceableInfo by rememberUpdatedState(bounceableInfo)
@@ -281,6 +286,7 @@ fun ContentScope.Tile(
                                 cornerRadius = PetalQsSkin.TileCornerRadius,
                                 tint = animatedColor,
                                 dark = dark,
+                                fillAlpha = colors.glassFill,
                             )
                         } else {
                             Modifier
@@ -392,6 +398,7 @@ fun ContentScope.Tile(
                         active = uiState.state == STATE_ACTIVE,
                         dark = dark,
                         accessibilityUiState = uiState.accessibilityUiState,
+                        reveal = petalReveal,
                         modifier =
                             Modifier.align(Alignment.Center).bounceScale {
                                 contentBounceable.iconBounceScale
@@ -429,6 +436,7 @@ fun ContentScope.Tile(
                             toggleClick = secondaryClick.takeIf { isClickable },
                             onLongClick = longClick,
                             accessibilityUiState = uiState.accessibilityUiState,
+                            reveal = petalReveal,
                         )
                     } else {
                         LargeTileContent(
@@ -454,6 +462,37 @@ fun ContentScope.Tile(
     }
 }
 
+// Pin the baseline; shrinking used to leave labels floating all over the place.
+@Composable
+private fun PetalTileCaption(
+    text: String,
+    color: Color,
+    maxFontSize: TextUnit,
+    lineHeight: TextUnit,
+    modifier: Modifier = Modifier,
+    textAlign: TextAlign = TextAlign.Start,
+    fontWeight: FontWeight = FontWeight.Normal,
+) {
+    Box(
+        modifier = modifier.fillMaxWidth().height(with(LocalDensity.current) { lineHeight.toDp() }),
+        contentAlignment = Alignment.Center,
+    ) {
+        BasicText(
+            text = text,
+            style = TextStyle(
+                color = color,
+                fontSize = maxFontSize,
+                textAlign = textAlign,
+                fontWeight = fontWeight,
+            ),
+            autoSize = TextAutoSize.StepBased(minFontSize = 10.sp, maxFontSize = maxFontSize),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.fillMaxWidth(),
+        )
+    }
+}
+
 @Composable
 private fun PetalConnectivityTileContent(
     iconProvider: Context.() -> Icon,
@@ -463,13 +502,15 @@ private fun PetalConnectivityTileContent(
     toggleClick: (() -> Unit)?,
     onLongClick: (() -> Unit)?,
     accessibilityUiState: AccessibilityUiState,
+    reveal: PetalQsReveal? = null,
 ) {
     val focusBorderColor = MaterialTheme.colorScheme.secondary
     Row(
         modifier =
             Modifier.fillMaxWidth()
                 .height(PetalQsSkin.connectivityTileHeight())
-                .padding(horizontal = 8.dp),
+                .padding(horizontal = 8.dp)
+                .petalQsContentReveal(reveal),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // Preserve the stock separate toggle target and its switch semantics.
@@ -498,22 +539,22 @@ private fun PetalConnectivityTileContent(
         }
         Spacer(Modifier.width(8.dp))
         Column(modifier = Modifier.weight(1f)) {
-            BasicText(
+            PetalTileCaption(
                 text = label,
-                style = TextStyle(color = colors.label, fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium, lineHeight = 18.sp),
-                autoSize = TextAutoSize.StepBased(minFontSize = 6.sp, maxFontSize = 14.sp),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+                color = colors.label,
+                maxFontSize = 14.sp,
+                lineHeight = 18.sp,
+                textAlign = TextAlign.Start,
+                fontWeight = FontWeight.Medium,
             )
             if (!secondaryLabel.isNullOrEmpty()) {
-                BasicText(
+                PetalTileCaption(
                     text = secondaryLabel,
-                    style = TextStyle(color = colors.secondaryLabel, fontSize = 12.sp,
-                        lineHeight = 16.sp),
-                    autoSize = TextAutoSize.StepBased(minFontSize = 6.sp, maxFontSize = 12.sp),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                    color = colors.secondaryLabel,
+                    maxFontSize = 12.sp,
+                    lineHeight = 16.sp,
+                    textAlign = TextAlign.Start,
+                    modifier = Modifier.petalQsDetailReveal(reveal),
                 )
             }
         }
@@ -532,6 +573,7 @@ private fun PetalIconTileContent(
     dark: Boolean,
     accessibilityUiState: AccessibilityUiState,
     modifier: Modifier = Modifier,
+    reveal: PetalQsReveal? = null,
 ) {
     if (expandToPill) {
         val shape = PetalQsSkin.tileShape(false, true)
@@ -540,7 +582,12 @@ private fun PetalIconTileContent(
                 modifier
                     .fillMaxWidth()
                     .clip(shape)
-                    .liquidGlass(PetalQsSkin.TileCornerRadius, colors.background, dark)
+                    .liquidGlass(
+                        PetalQsSkin.TileCornerRadius,
+                        colors.background,
+                        dark,
+                        colors.glassFill,
+                    )
                     .activeTileGlow(active, PetalQsSkin.emission(), dark)
                     .border(1.dp, PetalQsSkin.tileGlassBorderBrush(dark), shape)
         ) {
@@ -553,6 +600,7 @@ private fun PetalIconTileContent(
                 toggleClick = null,
                 onLongClick = null,
                 accessibilityUiState = accessibilityUiState,
+                reveal = reveal,
             )
         }
         return
@@ -566,7 +614,7 @@ private fun PetalIconTileContent(
             modifier =
                 Modifier.size(PetalQsSkin.IconTileSize)
                     .clip(shape)
-                    .liquidGlass(20.dp, colors.background, dark)
+                    .liquidGlass(20.dp, colors.background, dark, colors.glassFill)
                     .activeTileGlow(active, PetalQsSkin.emission(), dark)
                     .border(1.dp, PetalQsSkin.tileGlassBorderBrush(dark), shape),
             contentAlignment = Alignment.Center,
@@ -575,16 +623,17 @@ private fun PetalIconTileContent(
                 iconProvider = iconProvider,
                 color = colors.icon,
                 size = { PetalQsSkin.IconTileIconSize },
+                modifier = Modifier.petalQsContentReveal(reveal),
             )
         }
-        BasicText(
+        PetalTileCaption(
             text = label,
-            style = TextStyle(color = PetalQsSkin.glyphOn(dark), fontSize = 12.sp,
-                lineHeight = 16.sp, textAlign = TextAlign.Center),
-            autoSize = TextAutoSize.StepBased(minFontSize = 6.sp, maxFontSize = 12.sp),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.fillMaxWidth().padding(top = 4.dp).clearAndSetSemantics {},
+            color = PetalQsSkin.glyphOn(dark),
+            maxFontSize = 12.sp,
+            lineHeight = 16.sp,
+            modifier = Modifier.padding(top = 4.dp)
+                .petalQsContentReveal(reveal).clearAndSetSemantics {},
+            textAlign = TextAlign.Center,
         )
     }
 }
@@ -692,7 +741,7 @@ fun LargeStaticTile(
                     )
                     .value
             )
-            .liquidGlass(PetalQsSkin.TileCornerRadius, colors.background, dark)
+            .liquidGlass(PetalQsSkin.TileCornerRadius, colors.background, dark, colors.glassFill)
             .height(TileHeight)
             .largeTilePadding()
     ) {
@@ -764,6 +813,8 @@ data class TileColors(
     val label: Color,
     val secondaryLabel: Color,
     val icon: Color,
+    // petalOS: glass tint strength, active tiles need a heavier fill or the accent washes out
+    val glassFill: Float = PetalQsSkin.GlassFillAlpha,
 )
 
 private object TileDefaults {
@@ -854,6 +905,7 @@ private object TileDefaults {
                 label = skin.label,
                 secondaryLabel = skin.secondaryLabel,
                 icon = skin.icon,
+                glassFill = skin.glassFill,
             )
         }
         return when (uiState.state) {

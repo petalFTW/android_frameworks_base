@@ -212,17 +212,49 @@ constructor(
             disposables += notificationScrollViewBinder.bindWhileAttached()
         }
 
-        controller.setOnHeightChangedRunnable { viewModel.notificationStackChanged() }
+        fun updateStackMeasurements() {
+            if (SceneContainerFlag.isEnabled) {
+                viewModel.notificationStackChanged()
+                return
+            }
+            val stack = controller.view
+            val mediaPlayer = (0 until stack.childCount).asSequence()
+                .map { stack.getChildAt(it) }
+                .filterIsInstance<com.android.systemui.statusbar.notification.stack.MediaContainerView>()
+                .firstOrNull { it.visibility != android.view.View.GONE && it.intrinsicHeight > 0 }
+            val ribbon = mediaPlayer?.findViewById<com.android.systemui.util.animation.TransitionLayout>(
+                com.android.systemui.res.R.id.qs_media_controls)
+            if (mediaPlayer != null &&
+                (ribbon?.getTag(com.android.systemui.res.R.id.petal_media_cover) !=
+                    com.android.systemui.petalos.PetalMediaStyle.Lockscreen ||
+                    mediaPlayer.intrinsicHeight < (ribbon?.measureState?.measureHeight ?: 0))) {
+                // QS sizes were stomping the saved lockscreen budget.
+                viewModel.notificationStackChanged()
+                return
+            }
+            // Same budget as the visibility calculator, shelf and all.
+            val mediaHeight = if (mediaPlayer != null) notificationStackSizeCalculator.computeHeight(
+                stack = stack,
+                maxNotifs = 1,
+                shelfHeight = controller.getShelfHeight().toFloat(),
+                reason = "ribbon minimum space",
+            ) else 0f
+            viewModel.notificationStackChanged(mediaHeight, mediaPlayer?.intrinsicHeight?.toFloat() ?: 0f)
+        }
+
+        controller.setOnHeightChangedRunnable { updateStackMeasurements() }
         disposables += DisposableHandle { controller.setOnHeightChangedRunnable(null) }
 
         controller.setOnKeyguardTopLevelNotificationRemovedRunnable {
+            updateStackMeasurements()
             viewModel.notificationStackChangedInstant()
         }
         disposables += DisposableHandle {
             controller.setOnKeyguardTopLevelNotificationRemovedRunnable(null)
         }
 
-        disposables += view.onLayoutChanged { viewModel.notificationStackChanged() }
+        disposables += view.onLayoutChanged { updateStackMeasurements() }
+        updateStackMeasurements()
 
         return disposables
     }

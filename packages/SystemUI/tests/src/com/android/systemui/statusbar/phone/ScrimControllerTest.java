@@ -1658,6 +1658,28 @@ public class ScrimControllerTest extends SysuiTestCase {
     }
 
     @Test
+    @EnableFlags(Flags.FLAG_NOTIFICATION_SHADE_BLUR)
+    public void notificationTransparency_blurredLockscreenHasNoExtraPanel() {
+        mScrimController.setClipsQsScrim(false);
+        mScrimController.legacyTransitionTo(ScrimState.KEYGUARD);
+        finishAnimationsImmediately();
+
+        for (float progress : new float[]{0f, 0.25f, 0.5f, 0.75f, 1f, 0.5f, 0f}) {
+            mScrimController.setRawPanelExpansionFraction(progress);
+            mScrimController.setQsPosition(progress, 500);
+            mScrimController.setTransitionToFullShadeProgress(progress, progress);
+            finishAnimationsImmediately();
+            assertThat(mNotificationsScrim.getViewAlpha()).isEqualTo(0f);
+        }
+
+        mScrimController.legacyTransitionTo(SHADE_LOCKED);
+        mScrimController.setRawPanelExpansionFraction(1f);
+        finishAnimationsImmediately();
+        assertThat(mNotificationsScrim.getViewAlpha()).isEqualTo(0f);
+        assertThat(mScrimBehind.getViewAlpha()).isGreaterThan(0f);
+    }
+
+    @Test
     public void notificationAlpha_qsNotClipped_alphaMatchesNotificationExpansionProgress() {
         mScrimController.setClipsQsScrim(false);
         mScrimController.legacyTransitionTo(ScrimState.KEYGUARD);

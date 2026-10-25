@@ -61,6 +61,13 @@ class MediaSignalSource @Inject constructor(
         override fun onPlaybackStateChanged(state: PlaybackState?) {
             reevaluate()
         }
+
+        override fun onSessionDestroyed() {
+            handler.post {
+                activeControllers = msm.getActiveSessions(null).orEmpty()
+                refreshControllers()
+            }
+        }
     }
 
     private val listener = MediaSessionManager.OnActiveSessionsChangedListener { list ->

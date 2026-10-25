@@ -5,13 +5,13 @@ import android.content.res.Configuration
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
-import android.graphics.RectF
 import android.util.MathUtils.min
 import android.view.View
 import androidx.dynamicanimation.animation.FloatPropertyCompat
 import androidx.dynamicanimation.animation.SpringAnimation
 import androidx.dynamicanimation.animation.SpringForce
 import com.android.internal.util.LatencyTracker
+import com.android.internal.graphics.drawable.PetalGlassDrawable
 import com.android.systemui.navigationbar.gestural.BackPanelController.DelayedOnAnimationEndListener
 
 private const val TAG = "BackPanel"
@@ -32,8 +32,9 @@ class BackPanel(context: Context, private val latencyTracker: LatencyTracker) : 
     private val arrowPaint = Paint()
 
     // Arrow background color and shape
-    private var arrowBackgroundRect = RectF()
     private var arrowBackgroundPaint = Paint()
+    // little back blob gets sheen without the backdrop churn
+    private val glass = PetalGlassDrawable(this, 24f, 0f, false)
 
     // True if the panel is currently on the left of the screen
     var isLeftPanel = false
@@ -48,10 +49,7 @@ class BackPanel(context: Context, private val latencyTracker: LatencyTracker) : 
             minimumVisibleChange = SpringAnimation.MIN_VISIBLE_CHANGE_PIXELS,
         )
 
-    /**
-     * The height of the arrow measured vertically from its center to its top (i.e. half the total
-     * height). Used for animating [arrowPath]
-     */
+    // half the arrow height, springs do the rest
     var arrowHeight =
         AnimatedFloat(
             name = "arrowHeight",
@@ -72,16 +70,10 @@ class BackPanel(context: Context, private val latencyTracker: LatencyTracker) : 
             minimumValue = 0f,
         )
 
-    /**
-     * Corners of the background closer to the edge of the screen (where the arrow appeared from).
-     * Used for animating [arrowBackgroundRect]
-     */
+    // corners nearest the screen edge
     val backgroundEdgeCornerRadius = AnimatedFloat("backgroundEdgeCornerRadius")
 
-    /**
-     * Corners of the background further from the edge of the screens (toward the direction the
-     * arrow is being dragged). Used for animating [arrowBackgroundRect]
-     */
+    // corners on the dragged-out end
     val backgroundFarCornerRadius = AnimatedFloat("backgroundFarCornerRadius")
 
     var scale =
@@ -98,11 +90,7 @@ class BackPanel(context: Context, private val latencyTracker: LatencyTracker) : 
             minimumValue = backgroundWidth.pos / 2,
         )
 
-    /**
-     * Left/right position of the background relative to the canvas. Also corresponds with the
-     * background's margin relative to the screen edge. The arrow will be centered within the
-     * background.
-     */
+    // how far this sucker sticks out from the edge
     var horizontalTranslation = AnimatedFloat(name = "horizontalTranslation")
 
     var arrowAlpha =
@@ -137,10 +125,7 @@ class BackPanel(context: Context, private val latencyTracker: LatencyTracker) : 
             backgroundAlpha,
         )
 
-    /**
-     * Canvas vertical translation. How far up/down the arrow and background appear relative to the
-     * canvas.
-     */
+    // vertical nudge for the whole capsule
     var verticalTranslation = AnimatedFloat("verticalTranslation")
 
     /** Use for drawing debug info. Can only be set if [DEBUG]=true */
@@ -253,12 +238,7 @@ class BackPanel(context: Context, private val latencyTracker: LatencyTracker) : 
             }
         }
 
-        /**
-         * Animates to a new position ([finalPosition]) that is the given fraction ([amount])
-         * between the existing [restingPosition] and the new [finalPosition].
-         *
-         * The [restingPosition] will remain unchanged. Only the animation is updated.
-         */
+        // stretch toward the target without messing with the resting spot
         fun stretchBy(finalPosition: Float?, amount: Float) {
             val stretchedAmount = amount * ((finalPosition ?: 0f) - restingPosition)
             animation.animateToFinalPosition(restingPosition + stretchedAmount)
@@ -458,8 +438,8 @@ class BackPanel(context: Context, private val latencyTracker: LatencyTracker) : 
     override fun hasOverlappingRendering() = false
 
     override fun onDraw(canvas: Canvas) {
-        val edgeCorner = backgroundEdgeCornerRadius.pos
-        val farCorner = backgroundFarCornerRadius.pos
+        val edgeCorner = backgroundEdgeCornerRadius.pos.coerceAtLeast(0f)
+        val farCorner = backgroundFarCornerRadius.pos.coerceAtLeast(0f)
         val halfHeight = backgroundHeight.pos / 2
         val canvasWidth = width
         val backgroundWidth = backgroundWidth.pos
@@ -473,30 +453,16 @@ class BackPanel(context: Context, private val latencyTracker: LatencyTracker) : 
 
         canvas.scale(scale.pos, scale.pos, scalePivotX, 0f)
 
-        val arrowBackground =
-            arrowBackgroundRect
-                .apply {
-                    left = 0f
-                    top = -halfHeight
-                    right = backgroundWidth
-                    bottom = halfHeight
-                }
-                .toPathWithRoundCorners(
-                    topLeft = edgeCorner,
-                    bottomLeft = edgeCorner,
-                    topRight = farCorner,
-                    bottomRight = farCorner,
-                )
-        canvas.drawPath(
-            arrowBackground,
-            arrowBackgroundPaint.apply { alpha = (255 * backgroundAlpha.pos).toInt() },
-        )
+        glass.setBounds(0, -halfHeight.toInt(), backgroundWidth.toInt(), halfHeight.toInt())
+        glass.setGlassCorners(edgeCorner, farCorner)
+        glass.setColor((arrowBackgroundPaint.color and 0x00FFFFFF) or 0xA8000000.toInt())
+        glass.alpha = (255 * backgroundAlpha.pos).toInt().coerceIn(0, 255)
+        glass.draw(canvas)
 
         val dx = arrowLength.pos
         val dy = arrowHeight.pos
 
-        // How far the arrow bounding box should be from the edge of the screen. Measured from
-        // either the tip or the back of the arrow, whichever is closer
+        // keep the arrow centred in this thing
         val arrowOffset = (backgroundWidth - dx) / 2
         canvas.translate(
             /* dx= */ arrowOffset,
@@ -533,24 +499,4 @@ class BackPanel(context: Context, private val latencyTracker: LatencyTracker) : 
         trackingBackArrowLatency = true
     }
 
-    private fun RectF.toPathWithRoundCorners(
-        topLeft: Float = 0f,
-        topRight: Float = 0f,
-        bottomRight: Float = 0f,
-        bottomLeft: Float = 0f,
-    ): Path =
-        Path().apply {
-            val corners =
-                floatArrayOf(
-                    topLeft,
-                    topLeft,
-                    topRight,
-                    topRight,
-                    bottomRight,
-                    bottomRight,
-                    bottomLeft,
-                    bottomLeft,
-                )
-            addRoundRect(this@toPathWithRoundCorners, corners, Path.Direction.CW)
-        }
 }

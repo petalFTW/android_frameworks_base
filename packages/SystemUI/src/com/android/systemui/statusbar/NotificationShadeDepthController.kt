@@ -17,8 +17,6 @@
 package com.android.systemui.statusbar
 
 import android.animation.Animator
-import android.animation.AnimatorListenerAdapter
-import android.animation.ValueAnimator
 import android.app.WindowConfiguration
 import android.os.SystemClock
 import android.util.IndentingPrintWriter
@@ -32,18 +30,17 @@ import androidx.annotation.VisibleForTesting
 import androidx.dynamicanimation.animation.FloatPropertyCompat
 import androidx.dynamicanimation.animation.SpringAnimation
 import androidx.dynamicanimation.animation.SpringForce
-import com.android.app.animation.Interpolators
 import com.android.app.tracing.coroutines.TrackTracer
 import com.android.systemui.Dumpable
 import com.android.systemui.Flags
 import com.android.systemui.Flags.checkDesktopModeForSpacialModelAppPushback
 import com.android.systemui.Flags.spatialModelAppPushback
-import com.android.systemui.animation.ShadeInterpolation
 import com.android.systemui.dagger.SysUISingleton
 import com.android.systemui.dagger.qualifiers.Application
 import com.android.systemui.display.data.repository.FocusedDisplayRepository
 import com.android.systemui.dump.DumpManager
 import com.android.systemui.keyguard.domain.interactor.KeyguardInteractor
+import com.android.systemui.petalos.PetalPatternStyle
 import com.android.systemui.plugins.statusbar.StatusBarStateController
 import com.android.systemui.shade.ShadeExpansionChangeEvent
 import com.android.systemui.shade.ShadeExpansionListener
@@ -51,7 +48,6 @@ import com.android.systemui.shade.data.repository.ShadeDisplaysRepository
 import com.android.systemui.shade.domain.interactor.ShadeModeInteractor
 import com.android.systemui.shade.shared.flag.ShadeWindowGoesAround
 import com.android.systemui.statusbar.phone.BiometricUnlockController
-import com.android.systemui.statusbar.phone.BiometricUnlockController.MODE_WAKE_AND_UNLOCK
 import com.android.systemui.statusbar.phone.DozeParameters
 import com.android.systemui.statusbar.phone.ScrimController
 import com.android.systemui.statusbar.policy.KeyguardStateController
@@ -69,10 +65,7 @@ import kotlin.math.sign
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 
-/**
- * Responsible for blurring the notification shade window, and applying a zoom effect to the
- * wallpaper.
- */
+// Shade blur and wallpaper pushback live here.
 @SysUISingleton
 class NotificationShadeDepthController
 @Inject
@@ -97,12 +90,9 @@ constructor(
     dumpManager: DumpManager,
 ) : ShadeExpansionListener, Dumpable {
     companion object {
-        private const val WAKE_UP_ANIMATION_ENABLED = true
         private const val VELOCITY_SCALE = 100f
         private const val MAX_VELOCITY = 3000f
         private const val MIN_VELOCITY = -MAX_VELOCITY
-        private const val INTERACTION_BLUR_FRACTION = 0.8f
-        private const val ANIMATION_BLUR_FRACTION = 1f - INTERACTION_BLUR_FRACTION
         private const val TRANSITION_THRESHOLD = 0.98f
         private const val PUSHBACK_SCALE_FOR_LAUNCHER = 0.05f
 
@@ -112,7 +102,6 @@ constructor(
     }
 
     lateinit var root: View
-    private var keyguardAnimator: Animator? = null
     private var notificationAnimator: Animator? = null
     private var updateScheduled: Boolean = false
     @VisibleForTesting var shadeExpansion = 0f
@@ -128,9 +117,7 @@ constructor(
     private var prevDozeAmount: Float = 0f
     @VisibleForTesting var wallpaperSupportsAmbientMode: Boolean = false
 
-    // tracks whether app launch transition is in progress. This involves two independent factors
-    // that control blur, shade expansion and app launch animation from outside sysui.
-    // They can complete out of order, this flag will be reset by the animation that finishes later.
+    // Launch and shade finish out of order; the last one clears this flag.
     private var appLaunchTransitionIsInProgress = false
 
     // Only for dumpsys
@@ -144,6 +131,13 @@ constructor(
     var panelPullDownMinFraction = 0f
 
     var existingStatusBarState: Int? = null
+
+    var primaryBouncerShowing = false
+        set(value) {
+            if (field == value) return
+            field = value
+            if (::root.isInitialized) scheduleUpdate()
+        }
 
     var shadeAnimation = DepthAnimation()
 
@@ -167,6 +161,20 @@ constructor(
             scheduleUpdate()
         }
 
+    var lockscreenMediaVisible = false
+        set(value) {
+            if (field == value) return
+            field = value
+            if (::root.isInitialized) scheduleUpdate()
+        }
+
+    private val blurLockscreenMedia: Boolean
+        get() = lockscreenMediaVisible &&
+            statusBarStateController.state == StatusBarState.KEYGUARD &&
+            !statusBarStateController.isDozing &&
+            !keyguardStateController.isKeyguardGoingAway &&
+            !keyguardStateController.isKeyguardFadingAway
+
     /** How much we're transitioning to the full shade */
     var transitionToFullShadeProgress = 0f
         set(value) {
@@ -175,27 +183,19 @@ constructor(
             scheduleUpdate()
         }
 
-    /**
-     * When launching an app from the shade, the animations progress should affect how blurry the
-     * shade is, overriding the expansion amount.
-     *
-     * TODO(b/399617511): remove this once [Flags.notificationShadeBlur] is launched and the Shade
-     *   closing is actually instantaneous.
-     */
+    // App launch owns the blur until the shade gets out of its way.
     var blursDisabledForAppLaunch: Boolean = false
         set(value) {
             if (field == value) {
                 return
             }
-            // Set this to true now, this will be reset when the next shade expansion finishes or
-            // when the app launch finishes, whichever happens later.
+            // Keep the flag until both launch and shade have finished.
             if (value) {
                 appLaunchTransitionIsInProgress = true
             } else {
                 // App was launching and now it has finished launching
                 if (shadeExpansion == 0.0f) {
-                    // this means shade expansion finished before app launch was done.
-                    // reset the flag here
+                    // Shade finished first; the launch can clear it now.
                     appLaunchTransitionIsInProgress = false
                 }
             }
@@ -264,28 +264,37 @@ constructor(
         }
 
     private fun computeBlurAndZoomOut(): Pair<Int, Float> {
-        val animationRadius =
-            MathUtils.constrain(
-                shadeAnimation.radius,
-                blurUtils.minBlurRadius,
-                blurUtils.maxBlurRadius,
-            )
+        val animationRadius = shadeAnimation.radius.coerceIn(0f, blurUtils.maxBlurRadius)
         val expansionRadius =
-            blurUtils.blurRadiusOfRatio(
-                ShadeInterpolation.getNotificationScrimAlpha(
-                    if (shouldApplyShadeBlur()) shadeExpansion else 0f
-                )
-            )
+            if (shouldApplyShadeBlur()) {
+                blurUtils.maxBlurRadius * shadeExpansion
+            } else 0f
+        // The spring was racing ahead of the finger and blurring the whole damn screen.
         var combinedBlur =
-            (expansionRadius * INTERACTION_BLUR_FRACTION +
-                animationRadius * ANIMATION_BLUR_FRACTION)
-        val qsExpandedRatio =
-            ShadeInterpolation.getNotificationScrimAlpha(qsPanelExpansion) * shadeExpansion
-        combinedBlur = max(combinedBlur, blurUtils.blurRadiusOfRatio(qsExpandedRatio))
+            if (shadeExpansion > 0f && shadeExpansion < 1f && shouldApplyShadeBlur()) {
+                expansionRadius
+            } else {
+                max(expansionRadius, animationRadius)
+        }
         combinedBlur = max(combinedBlur, blurUtils.blurRadiusOfRatio(transitionToFullShadeProgress))
+        if (shouldApplyShadeBlur()) {
+            // First pull gets a lighter frost; the second pull fills it in.
+            combinedBlur *= MathUtils.lerp(0.55f, 1f, qsPanelExpansion.coerceIn(0f, 1f))
+        }
+        if (shadeExpansion == 0f && qsPanelExpansion == 0f &&
+            transitionToFullShadeProgress == 0f) {
+            combinedBlur = 0f
+        }
         var shadeRadius = max(combinedBlur, wakeAndUnlockBlurRadius)
+        // Only the wallpaper gets this; the cover stays crisp.
+        if (blurLockscreenMedia) shadeRadius = max(shadeRadius, blurUtils.maxBlurRadius)
+        if (primaryBouncerShowing) {
+            shadeRadius = blurUtils.maxBlurRadius * PetalPatternStyle.BACKGROUND_BLUR_FRACTION
+        }
 
-        if (areBlursDisabledForAppLaunch || blursDisabledForUnlock) {
+        if (areBlursDisabledForAppLaunch || blursDisabledForUnlock ||
+            keyguardStateController.isKeyguardGoingAway ||
+            keyguardStateController.isKeyguardFadingAway) {
             shadeRadius = 0f
         }
 
@@ -300,6 +309,8 @@ constructor(
                 // When the shade is in another display, we don't want to zoom out the background.
                 // Only the default display is supported right now.
                 !isShadeOnDefaultDisplay -> 0f
+                primaryBouncerShowing -> 0f
+                blurLockscreenMedia -> 0f
                 shadeRadius != wakeAndUnlockBlurRadius ->
                     blurRadiusToZoomOut(blurRadius = shadeRadius)
                 else -> 0f
@@ -389,50 +400,37 @@ constructor(
             onZoomOutChanged(zoomOutFromShadeRadius)
         }
 
-    /** Animate blurs when unlocking. */
+    // Don't frost the bloody home screen on the way out.
     private val keyguardStateCallback =
         object : KeyguardStateController.Callback {
             override fun onKeyguardFadingAwayChanged() {
-                if (
-                    !keyguardStateController.isKeyguardFadingAway ||
-                        biometricUnlockController.mode != MODE_WAKE_AND_UNLOCK
-                ) {
-                    return
-                }
+                clearUnlockBlur()
+            }
 
-                keyguardAnimator?.cancel()
-                keyguardAnimator =
-                    ValueAnimator.ofFloat(1f, 0f).apply {
-                        // keyguardStateController.keyguardFadingAwayDuration might be zero when
-                        // unlock by fingerprint due to there is no window container, see
-                        // AppTransition#goodToGo. We use DozeParameters.wallpaperFadeOutDuration as
-                        // an alternative.
-                        duration = dozeParameters.wallpaperFadeOutDuration
-                        startDelay = keyguardStateController.keyguardFadingAwayDelay
-                        interpolator = Interpolators.FAST_OUT_SLOW_IN
-                        addUpdateListener { animation: ValueAnimator ->
-                            wakeAndUnlockBlurRadius =
-                                blurUtils.blurRadiusOfRatioForAod(animation.animatedValue as Float)
-                        }
-                        addListener(
-                            object : AnimatorListenerAdapter() {
-                                override fun onAnimationEnd(animation: Animator) {
-                                    keyguardAnimator = null
-                                    wakeAndUnlockBlurRadius = 0f
-                                }
-                            }
-                        )
-                        start()
-                    }
+            override fun onKeyguardGoingAwayChanged() {
+                clearUnlockBlur()
             }
 
             override fun onKeyguardShowingChanged() {
                 if (keyguardStateController.isShowing) {
-                    keyguardAnimator?.cancel()
                     notificationAnimator?.cancel()
+                } else {
+                    wakeAndUnlockBlurRadius = 0f
                 }
+                scheduleUpdate()
             }
         }
+
+    private fun clearUnlockBlur() {
+        if (keyguardStateController.isKeyguardGoingAway ||
+            keyguardStateController.isKeyguardFadingAway) {
+            wakeAndUnlockBlurRadius = 0f
+            shadeAnimation.skipTo(0)
+            shadeAnimation.radius = 0f
+            isBlurred = false
+        }
+        scheduleUpdate()
+    }
 
     private val statusBarStateCallback =
         object : StatusBarStateController.StateListener {
@@ -463,6 +461,7 @@ constructor(
                     shadeAnimation.finishIfRunning()
                     brightnessMirrorSpring.finishIfRunning()
                 }
+                if (::root.isInitialized) scheduleUpdate()
             }
 
             override fun onDozeAmountChanged(linear: Float, eased: Float) {
@@ -476,7 +475,9 @@ constructor(
     }
 
     private fun getNewWakeBlurRadius(ratio: Float): Float {
-        return if (!wallpaperSupportsAmbientMode) {
+        return if (!wallpaperSupportsAmbientMode || !keyguardStateController.isShowing ||
+            keyguardStateController.isKeyguardGoingAway ||
+            keyguardStateController.isKeyguardFadingAway) {
             0f
         } else {
             blurUtils.blurRadiusOfRatioForAod(ratio)
@@ -485,9 +486,7 @@ constructor(
 
     init {
         dumpManager.registerCriticalDumpable(javaClass.name, this)
-        if (WAKE_UP_ANIMATION_ENABLED) {
-            keyguardStateController.addCallback(keyguardStateCallback)
-        }
+        keyguardStateController.addCallback(keyguardStateCallback)
         statusBarStateController.addCallback(statusBarStateCallback)
         notificationShadeWindowController.setScrimsVisibilityListener {
             // Stop blur effect when scrims is opaque to avoid unnecessary GPU composition.
@@ -583,8 +582,7 @@ constructor(
         val shadeVelocity =
             MathUtils.constrain(VELOCITY_SCALE * diff / deltaTime, MIN_VELOCITY, MAX_VELOCITY)
         if (expansion == 0.0f && appLaunchTransitionIsInProgress && !blursDisabledForAppLaunch) {
-            // Shade expansion finished but the app launch is already done, then this should mark
-            // the transition as done.
+            // Launch finished first, now the shade can clear the flag.
             Log.d(TAG, "appLaunchTransitionIsInProgress is now false from shade expansion event")
             appLaunchTransitionIsInProgress = false
         }
@@ -602,10 +600,7 @@ constructor(
 
     fun onTransitionAnimationProgress(progress: Float) {
         if (!Flags.notificationShadeBlur() || !Flags.moveTransitionAnimationLayer()) return
-        // Because the Shade takes a few frames to actually trigger the unblur after a transition
-        // has ended, we need to disable it manually, or the opening window itself will be blurred
-        // for a few frames due to relative ordering. We do this towards the end, so that the
-        // window is already covering the background and the unblur is not visible.
+        // Clear blur under the opening window before those laggy shade frames catch up.
         if (progress >= TRANSITION_THRESHOLD && shadeAnimation.radius > 0) {
             blursDisabledForAppLaunch = true
         }
@@ -714,13 +709,11 @@ constructor(
         choreographer.postFrameCallback(updateBlurCallback)
     }
 
-    /**
-     * Should blur be applied to the shade currently. This is mainly used to make sure that on the
-     * lockscreen, the wallpaper isn't blurred.
-     */
+    // Ordinary shade blur stays off the lockscreen.
     private fun shouldApplyShadeBlur(): Boolean {
         val state = statusBarStateController.state
         return (state == StatusBarState.SHADE || state == StatusBarState.SHADE_LOCKED) &&
+            !keyguardStateController.isKeyguardGoingAway &&
             !keyguardStateController.isKeyguardFadingAway
     }
 

@@ -121,6 +121,7 @@ public class PetalPowerMenuView extends View implements Choreographer.FrameCallb
     private final Runnable mLongPressRunnable = this::fireLongPress;
 
     private final Paint mBodyPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final PetalDialogGlass mDialogGlass = new PetalDialogGlass(this);
     private final Paint mSquirclePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final AccessibilityHelper mAccessibilityHelper;
     private final Paint mFocusPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -347,10 +348,12 @@ public class PetalPowerMenuView extends View implements Choreographer.FrameCallb
         mBodyPaint.setStyle(Paint.Style.FILL);
         mBodyPaint.setAlpha((int) (255f * opacity));
         mBodyPaint.setShadowLayer(24f * mDensity, 0f, 10f * mDensity, 0x6B000000);
-        canvas.drawPath(
-                PetalUtils.jointPath(edgeLeft, cy, w * scX, h * scY, cRad * scX, jointDepth,
-                        xTail, edgeX),
-                mBodyPaint);
+        Path body = PetalUtils.jointPath(edgeLeft, cy, w * scX, h * scY, cRad * scX,
+                jointDepth, xTail, edgeX);
+        if (!mDialogGlass.draw(canvas, body, edgeLeft, edgeX, cy,
+                w * scX, h * scY, cRad * scX, opacity)) {
+            canvas.drawPath(body, mBodyPaint);
+        }
         mBodyPaint.clearShadowLayer();
 
         // buttons are in container space, scaled with the body

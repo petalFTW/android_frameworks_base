@@ -53,10 +53,14 @@ final class PetalHapticsEngine implements VibrationSegmentsAdapter {
     }
 
     static VibrationEffect feedback(int effectId) {
+        return feedback(effectId, VibratorInfo.EMPTY_VIBRATOR_INFO);
+    }
+
+    static VibrationEffect feedback(int effectId, VibratorInfo info) {
         return switch (effectId) {
             case HapticFeedbackConstants.VIRTUAL_KEY,
                     HapticFeedbackConstants.CONTEXT_CLICK,
-                    HapticFeedbackConstants.CALENDAR_DATE -> defaultTap();
+                    HapticFeedbackConstants.CALENDAR_DATE -> defaultTap(info);
             case HapticFeedbackConstants.TOGGLE_ON -> primitive(PRIMITIVE_TICK, 0.65f);
             case HapticFeedbackConstants.TOGGLE_OFF -> primitive(PRIMITIVE_LOW_TICK, 0.4f);
             case HapticFeedbackConstants.SEGMENT_FREQUENT_TICK,
@@ -86,6 +90,18 @@ final class PetalHapticsEngine implements VibrationSegmentsAdapter {
 
     static VibrationEffect defaultTap() {
         return new VibrationEffect.Composed(new ArrayList<>(pattern(DEFAULT_TAP)), -1);
+    }
+
+    static VibrationEffect defaultTap(VibratorInfo info) {
+        // Use the actuator's calibrated attack/braking for a firm, short tap.
+        // A longer generic waveform adds buzz rather than a sharper response.
+        if (info.isEffectSupported(VibrationEffect.EFFECT_HEAVY_CLICK)
+                == Vibrator.VIBRATION_EFFECT_SUPPORT_YES) {
+            return new VibrationEffect.Composed(new ArrayList<>(List.of(new PrebakedSegment(
+                    VibrationEffect.EFFECT_HEAVY_CLICK, true,
+                    VibrationEffect.EFFECT_STRENGTH_STRONG))), -1);
+        }
+        return defaultTap();
     }
 
     private static VibrationEffect primitive(int id, float scale) {

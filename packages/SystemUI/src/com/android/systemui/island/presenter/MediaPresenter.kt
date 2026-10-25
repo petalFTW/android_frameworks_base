@@ -44,6 +44,8 @@ import com.android.systemui.island.IslandGeometry
 import com.android.systemui.island.render.RecordView
 import com.android.systemui.island.render.GlassSeekBar
 import com.android.systemui.island.render.PaletteTinter
+import com.android.systemui.island.render.EqualizerView
+import com.android.systemui.res.R
 
 // spins while the track is playing
 class MediaPresenter(
@@ -57,11 +59,17 @@ class MediaPresenter(
     private var playing = false
     private var playPause: ImageView? = null
     private var record: RecordView? = null
+    private var equalizer: EqualizerView? = null
+    private var expanded = false
+    private var previousButton: ImageView? = null
+    private var nextButton: ImageView? = null
     private var seekBar: GlassSeekBar? = null
     private var titleView: TextView? = null
     private var artistView: TextView? = null
     private var artView: ImageView? = null
     private var artOverlay: ImageView? = null
+    private var artFadeGeneration = 0
+    private var artFadeActive = false
     private var accentButtonBg: GradientDrawable? = null
     private var automixPill: TextView? = null
     private var automixDecision: Boolean? = null
@@ -119,6 +127,13 @@ class MediaPresenter(
     }
 
     override fun bindCollapsed(container: ViewGroup): Int {
+        expanded = false
+        equalizer?.stop()
+        equalizer = null
+        previousButton = null
+        nextButton = null
+        accentButtonBg = null
+        automixPill = null
         stopProgressTicker()
         cancelArtFade()
         seekBar = null
@@ -152,27 +167,38 @@ class MediaPresenter(
         row.addView(playPause, ppLp)
         container.addView(row)
         updateTransport()
+        tintListener?.invoke(tint())
 
         return geometry.dp(10f) + geometry.iconSize + geometry.dp(8f) +
             geometry.iconSize + geometry.dp(12f)
     }
 
     override fun bindExpanded(container: ViewGroup) {
+        expanded = true
+        stopProgressTicker()
+        equalizer?.stop()
         val dark = isDarkTheme()
         val primary = if (dark) Color.WHITE else 0xFF101012.toInt()
         val secondary = if (dark) 0xB3FFFFFF.toInt() else 0xB3101012.toInt()
-        val accent = cachedTint?.accent ?: primary
+        val accent = context.getColor(android.R.color.system_accent1_500)
         val onAccent = if (Color.luminance(accent) > 0.5f) 0xFF101012.toInt() else Color.WHITE
         val chipFill = if (dark) 0x14FFFFFF.toInt() else 0x14101012.toInt()
         val chipStroke = if (dark) 0x33FFFFFF.toInt() else 0x2A101012.toInt()
 
         val root = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(geometry.expandedPadding, geometry.expandedPadding,
-                geometry.expandedPadding, geometry.expandedPadding)
+            setPadding(geometry.dp(12f), geometry.dp(12f), geometry.dp(12f), geometry.dp(12f))
         }
 
-        // album art, text, then the record
+        val artAndControls = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val details = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+
+        // Sleeve on the left, the useful stuff alongside it.
         val topRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -197,9 +223,14 @@ class MediaPresenter(
         }
         artOverlay = overlay
         val artSlot = FrameLayout(context)
-        artSlot.addView(artView, FrameLayout.LayoutParams(geometry.artSize, geometry.artSize))
-        artSlot.addView(overlay, FrameLayout.LayoutParams(geometry.artSize, geometry.artSize))
-        topRow.addView(artSlot, LinearLayout.LayoutParams(geometry.artSize, geometry.artSize))
+        artSlot.addView(artView, FrameLayout.LayoutParams(geometry.dp(76f), geometry.dp(80f)))
+        artSlot.addView(overlay, FrameLayout.LayoutParams(geometry.dp(76f), geometry.dp(80f)))
+        artAndControls.addView(artSlot,
+            LinearLayout.LayoutParams(geometry.dp(76f), geometry.dp(80f)))
+        artAndControls.addView(details,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginStart = geometry.dp(12f)
+            })
 
         val textColumn = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -222,17 +253,20 @@ class MediaPresenter(
         topRow.addView(
             textColumn,
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
-                marginStart = geometry.dp(12f)
+                marginStart = 0
             },
         )
 
         record?.stop()
-        record = RecordView(context).apply {
-            setRecordColor(accent)
+        record = null
+        equalizer = EqualizerView(context).apply {
+            barCount = 4
+            setMetrics(geometry.dp(2f).toFloat(), geometry.dp(3f).toFloat(), geometry.dp(20f).toFloat())
+            setBarColor(primary)
             active = playing
         }
-        topRow.addView(record, LinearLayout.LayoutParams(
-            geometry.dp(28f), geometry.dp(28f),
+        topRow.addView(equalizer, LinearLayout.LayoutParams(
+            geometry.dp(20f), geometry.dp(20f),
         ).apply { marginStart = geometry.dp(10f) })
 
         // automix button, only when the bridge says so
@@ -248,7 +282,7 @@ class MediaPresenter(
             }
             automixPill = pill
             paintAutomixPill(accent, onAccent, chipFill, chipStroke, primary)
-            topRow.addView(pill, LinearLayout.LayoutParams(
+            details.addView(pill, LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT,
             ).apply { marginStart = geometry.dp(8f) })
@@ -257,11 +291,12 @@ class MediaPresenter(
             automixDecision = null
         }
 
-        root.addView(topRow)
+        details.addView(topRow, 0)
+        root.addView(artAndControls)
 
         // seek bar
         seekBar = GlassSeekBar(context).apply {
-            setMetrics(geometry.dp(4f).toFloat(), geometry.dp(5f).toFloat())
+            setMetrics(geometry.dp(2f).toFloat(), 0f)
             trackColor = if (dark) 0x40FFFFFF.toInt() else 0x33101012.toInt()
             progressColor = accent
             thumbColor = primary
@@ -277,8 +312,8 @@ class MediaPresenter(
             seekBar,
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = geometry.dp(6f) },
+                geometry.dp(6f),
+            ).apply { topMargin = geometry.dp(4f) },
         )
 
         // skip, play/pause, skip
@@ -295,58 +330,88 @@ class MediaPresenter(
                 setImageResource(glyph)
                 setColorFilter(if (filled) onAccent else primary)
                 scaleType = ImageView.ScaleType.CENTER_INSIDE
-                background = GradientDrawable().apply {
-                    shape = GradientDrawable.OVAL
+                setPadding(geometry.dp(12f), geometry.dp(12f), geometry.dp(12f), geometry.dp(12f))
+                // Play gets a disc. Skips don't need a bloody plate.
+                background =
                     if (filled) {
-                        setColor(accent)
+                        GradientDrawable().apply {
+                            shape = GradientDrawable.RECTANGLE
+                            cornerRadius = geometry.dp(24f).toFloat()
+                            setColor(accent)
+                            setStroke(geometry.dp(1f), chipStroke)
+                        }
                     } else {
-                        setColor(chipFill)
-                        setStroke(geometry.dp(1f), chipStroke)
+                        null
                     }
-                }
                 setOnClickListener { onClick() }
             }
 
-        val previous = transportButton(false, android.R.drawable.ic_media_previous) { prev() }
+        val previous = transportButton(false, R.drawable.ic_media_prev) { prev() }
+        previous.contentDescription = context.getString(R.string.keyboard_key_media_previous)
+        previousButton = previous
         transport.addView(
             previous,
-            LinearLayout.LayoutParams(geometry.dp(36f), geometry.dp(36f)).apply {
-                marginEnd = geometry.dp(16f)
-            },
+            LinearLayout.LayoutParams(0, geometry.dp(48f), 1f),
         )
 
         playPause = transportButton(
             true,
-            if (playing) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
+            if (playing) R.drawable.ic_media_pause_button else R.drawable.ic_media_play_button,
         ) { togglePlayback() }
         accentButtonBg = playPause?.background as? GradientDrawable
         transport.addView(
             playPause,
-            LinearLayout.LayoutParams(geometry.dp(44f), geometry.dp(44f)),
+            LinearLayout.LayoutParams(geometry.dp(48f), geometry.dp(48f)),
         )
 
-        val next = transportButton(false, android.R.drawable.ic_media_next) { next() }
+        val next = transportButton(false, R.drawable.ic_media_next) { next() }
+        next.contentDescription = context.getString(R.string.controls_media_button_next)
+        nextButton = next
         transport.addView(
             next,
-            LinearLayout.LayoutParams(geometry.dp(36f), geometry.dp(36f)).apply {
-                marginStart = geometry.dp(16f)
-            },
+            LinearLayout.LayoutParams(0, geometry.dp(48f), 1f),
         )
 
-        root.addView(transport)
+        details.addView(transport)
 
         container.addView(root)
         updateContent()
         updateSeekProgress()
         if (playing) startProgressTicker()
+        tintListener?.invoke(tint())
     }
 
-    override fun expandedHeightPx(): Int = geometry.expandedHeightMedia
+    override fun expandedHeightPx(): Int = geometry.dp(
+        (if (automixAvailable()) 148f else 124f) *
+            context.resources.configuration.fontScale.coerceIn(1f, 1.4f))
 
-    override fun tint(): IslandTint? = cachedTint
+    override fun tint(): IslandTint? = if (expanded) {
+        IslandTint(context.getColor(android.R.color.system_accent1_500))
+    } else cachedTint
 
     override fun setTintListener(listener: ((IslandTint?) -> Unit)?) {
         tintListener = listener
+    }
+
+    // the tint is derived from the art but its light/dark treatment follows the system theme
+    override fun onThemeChanged() {
+        if (expanded) {
+            applyAccentToContent()
+            tintListener?.invoke(tint())
+        }
+        val art = controller.metadata?.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
+            ?: controller.metadata?.getBitmap(MediaMetadata.METADATA_KEY_ART)
+            ?: return
+        val down = downscale(art)
+        val dark = isDarkTheme()
+        Thread {
+            val tint = PaletteTinter.extract(down, dark)
+            mainHandler.post {
+                if (destroyed) return@post
+                cachedTint = tint
+                onTintReady()
+            }
+        }.start()
     }
 
     // automix helpers
@@ -393,8 +458,7 @@ class MediaPresenter(
     ) {
         val on = !(automixDecision == true)
         automixDecision = on
-        // Remembered in memory only, so a collapse keeps the choice but a
-        // SystemUI restart defaults the app back to Automix off.
+        // Collapse keeps the choice, a restart bins it.
         automixDecisions[controller.packageName] = on
         sendAutomix(on)
         paintAutomixPill(accent, onAccent, chipFill, chipStroke, primary)
@@ -433,6 +497,10 @@ class MediaPresenter(
         automixDecision = null
         record?.stop()
         record = null
+        equalizer?.stop()
+        equalizer = null
+        previousButton = null
+        nextButton = null
     }
 
     private fun trackIdentity(metadata: MediaMetadata?): List<String?> = listOf(
@@ -460,13 +528,17 @@ class MediaPresenter(
     // same feel as the app: incoming cover fades in over the old one, slight grow
     private fun startArtFade(cover: String, durationMs: Long) {
         val overlay = artOverlay ?: return
-        val current = controller.metadata?.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)
-            ?: controller.metadata?.getString(MediaMetadata.METADATA_KEY_ART_URI)
-        if (cover == current) return
+        val generation = ++artFadeGeneration
+        artFadeActive = true
         Thread {
-            val bitmap = decodeArtwork(Uri.parse(cover)) ?: return@Thread
+            val bitmap = decodeArtwork(Uri.parse(cover))
             mainHandler.post {
-                if (destroyed || artOverlay !== overlay) return@post
+                if (destroyed || artOverlay !== overlay || generation != artFadeGeneration) return@post
+                if (bitmap == null) {
+                    artFadeActive = false
+                    loadArtwork(controller.metadata)
+                    return@post
+                }
                 overlay.animate().cancel()
                 overlay.setImageBitmap(bitmap)
                 overlay.alpha = 0f
@@ -478,8 +550,9 @@ class MediaPresenter(
                     .scaleY(1.06f)
                     .setDuration(durationMs)
                     .withEndAction {
-                        if (destroyed) return@withEndAction
+                        if (destroyed || generation != artFadeGeneration) return@withEndAction
                         artView?.setImageBitmap(bitmap)
+                        artFadeActive = false
                         resetArtOverlay()
                     }
                     .start()
@@ -488,8 +561,11 @@ class MediaPresenter(
     }
 
     private fun cancelArtFade() {
+        artFadeGeneration++
+        artFadeActive = false
         artOverlay?.animate()?.cancel()
         resetArtOverlay()
+        loadArtwork(controller.metadata)
     }
 
     private fun resetArtOverlay() {
@@ -504,7 +580,7 @@ class MediaPresenter(
         val embedded = metadata?.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
             ?: metadata?.getBitmap(MediaMetadata.METADATA_KEY_ART)
         if (embedded != null) {
-            cachedTint = PaletteTinter.extract(downscale(embedded))
+            cachedTint = PaletteTinter.extract(downscale(embedded), isDarkTheme())
             onTintReady()
             return
         }
@@ -515,19 +591,20 @@ class MediaPresenter(
             val bitmap = decodeArtwork(uri) ?: return@Thread
             mainHandler.post {
                 if (destroyed) return@post
-                cachedTint = PaletteTinter.extract(downscale(bitmap))
+                cachedTint = PaletteTinter.extract(downscale(bitmap), isDarkTheme())
                 onTintReady()
             }
         }.start()
     }
 
     private fun onTintReady() {
-        tintListener?.invoke(cachedTint)
+        tintListener?.invoke(tint())
         applyAccentToContent()
     }
 
     // accent, or the theme foreground if there's no tint
     private fun currentAccent(): Int {
+        if (expanded) return context.getColor(android.R.color.system_accent1_500)
         val primary = if (isDarkTheme()) Color.WHITE else 0xFF101012.toInt()
         return cachedTint?.accent ?: primary
     }
@@ -550,9 +627,10 @@ class MediaPresenter(
                 ?: metadata?.getString(MediaMetadata.METADATA_KEY_ALBUM_ARTIST)
                 ?: ""
 
-        loadArtwork(metadata)
+        if (!artFadeActive) loadArtwork(metadata)
         val duration = metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L
-        seekBar?.isEnabled = duration > 0
+        seekBar?.isEnabled = duration > 0 &&
+            ((controller.playbackState?.actions ?: 0L) and PlaybackState.ACTION_SEEK_TO) != 0L
         updateTransport()
         record?.active = playing
     }
@@ -607,10 +685,22 @@ class MediaPresenter(
     }
 
     private fun updateTransport() {
-        val glyph =
+        val glyph = if (expanded) {
+            if (playing) R.drawable.ic_media_pause_button else R.drawable.ic_media_play_button
+        } else {
             if (playing) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play
+        }
         playPause?.setImageResource(glyph)
+        playPause?.contentDescription = context.getString(
+            if (playing) R.string.controls_media_button_pause else R.string.controls_media_button_play)
+        val actions = controller.playbackState?.actions ?: 0L
+        previousButton?.isEnabled = actions and PlaybackState.ACTION_SKIP_TO_PREVIOUS != 0L
+        nextButton?.isEnabled = actions and PlaybackState.ACTION_SKIP_TO_NEXT != 0L
+        previousButton?.alpha = if (previousButton?.isEnabled == true) 1f else .35f
+        nextButton?.alpha = if (nextButton?.isEnabled == true) 1f else .35f
         record?.active = playing
+        equalizer?.active = playing
+        updateSeekProgress()
         if (playing) startProgressTicker() else stopProgressTicker()
     }
 
@@ -643,7 +733,10 @@ class MediaPresenter(
     private fun updateSeekProgress() {
         if (seekBar?.isDragging == true) return
         val duration = controller.metadata?.getLong(MediaMetadata.METADATA_KEY_DURATION) ?: 0L
-        if (duration <= 0) return
+        if (duration <= 0) {
+            seekBar?.progress = 0f
+            return
+        }
         val state = controller.playbackState ?: return
         val position = if (state.state == PlaybackState.STATE_PLAYING) {
             // speed 0 breaks the math, clamp it to 1x
@@ -669,7 +762,7 @@ class MediaPresenter(
         val art = controller.metadata?.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
             ?: controller.metadata?.getBitmap(MediaMetadata.METADATA_KEY_ART)
             ?: return
-        cachedTint = PaletteTinter.extract(downscale(art))
+        cachedTint = PaletteTinter.extract(downscale(art), isDarkTheme())
     }
 
     private fun downscale(bitmap: Bitmap): Bitmap {
@@ -693,10 +786,7 @@ class MediaPresenter(
         const val EXTRA_DURATION = "duration"
         const val EXTRA_ACTIVE = "active"
 
-        // AutoMix is opt-in per app and defaults to off. The choice is kept in
-        // memory only, so it survives an island collapse but a SystemUI restart
-        // starts every app back at "Automix off" instead of reviving a stale
-        // approval the user made in an earlier session.
+        // Don't drag yesterday's automix approval into a fresh session.
         val automixDecisions = HashMap<String, Boolean>()
     }
 }

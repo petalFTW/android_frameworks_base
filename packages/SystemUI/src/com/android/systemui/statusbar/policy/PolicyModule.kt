@@ -38,6 +38,7 @@ import com.android.systemui.qs.tiles.MicrophoneToggleTile
 import com.android.systemui.qs.tiles.ModesDndTile
 import com.android.systemui.qs.tiles.ModesTile
 import com.android.systemui.qs.tiles.UiModeNightTile
+import com.android.systemui.qs.tiles.PetalWorkModeTile
 import com.android.systemui.qs.tiles.WorkModeTile
 import com.android.systemui.qs.tiles.base.domain.interactor.QSTileAvailabilityInteractor
 import com.android.systemui.qs.tiles.base.shared.model.QSTileConfig
@@ -95,6 +96,12 @@ interface PolicyModule {
     @StringKey(WorkModeTile.TILE_SPEC)
     fun bindWorkModeTile(workModeTile: WorkModeTile): QSTileImpl<*>
 
+    /** petalOS work mode redaction tile, same map as the stock lot */
+    @Binds
+    @IntoMap
+    @StringKey(PetalWorkModeTile.TILE_SPEC)
+    fun bindPetalWorkModeTile(tile: PetalWorkModeTile): QSTileImpl<*>
+
     @Binds
     @IntoMap
     @StringKey(FLASHLIGHT_TILE_SPEC)
@@ -140,6 +147,21 @@ interface PolicyModule {
         const val MIC_TOGGLE_TILE_SPEC = "mictoggle"
         const val MODES_TILE_SPEC = "dnd" // Value is "DND" to replace the old DND tile.
         const val MODES_DND_TILE_SPEC = "modes_dnd"
+
+        // The Compose picker needs a proper label too, not a raw tile spec.
+        @Provides
+        @IntoMap
+        @StringKey(PetalWorkModeTile.TILE_SPEC)
+        fun providePetalWorkModeTileConfig(uiEventLogger: QsEventLogger): QSTileConfig =
+            QSTileConfig(
+                tileSpec = TileSpec.create(PetalWorkModeTile.TILE_SPEC),
+                uiConfig = QSTileUIConfig.Resource(
+                    iconRes = R.drawable.qs_petal_work_mode_icon_off,
+                    labelRes = R.string.petal_work_mode_label,
+                ),
+                instanceId = uiEventLogger.getNewInstanceId(),
+                category = TileCategory.PRIVACY,
+            )
 
         /** Inject ModesTile into tileMap in QSModule */
         @Provides

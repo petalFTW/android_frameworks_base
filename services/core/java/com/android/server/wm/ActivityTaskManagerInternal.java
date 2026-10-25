@@ -573,6 +573,7 @@ public abstract class ActivityTaskManagerInternal implements ActiveUids.Observer
             Runnable killCrashingAppCallback);
 
     public abstract void removeRecentTasksByPackageName(String packageName, int userId);
+    public abstract boolean hasRecentTaskForUid(int uid);
     public abstract void cleanupRecentTasksForUser(int userId);
     public abstract void loadRecentTasksForUser(int userId);
     public abstract void onPackagesSuspendedChanged(String[] packages, boolean suspended,

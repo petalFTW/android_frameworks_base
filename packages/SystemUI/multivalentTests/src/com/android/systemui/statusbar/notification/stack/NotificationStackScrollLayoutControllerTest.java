@@ -33,6 +33,7 @@ import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.reset;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
 import static org.mockito.Mockito.when;
@@ -808,6 +809,47 @@ public class NotificationStackScrollLayoutControllerTest extends SysuiTestCase {
 
         assertThat(touchIntercepted).isTrue();
         verify(mNotificationStackScrollLayout, never()).onInterceptTouchEventScroll(event);
+    }
+
+    @Test
+    @DisableSceneContainer
+    public void collectionIntercept_doesNotStartNativeVerticalGestures() {
+        initController(true);
+        when(mNotificationStackScrollLayout.ownsPetalCollectionTouch()).thenReturn(true);
+        MotionEvent event = MotionEvent.obtain(0, 10, MotionEvent.ACTION_MOVE, 100, 200, 0);
+        try {
+            when(mNotificationSwipeHelper.onInterceptTouchEvent(event)).thenReturn(true);
+
+            assertThat(mController.getTouchHandler().onInterceptTouchEvent(event)).isTrue();
+
+            verify(mNotificationSwipeHelper).onInterceptTouchEvent(event);
+            verify(mDragDownHelper, never()).onInterceptTouchEvent(any());
+            verify(mExpandHelper, never()).onInterceptTouchEvent(any());
+            verify(mNotificationStackScrollLayout, never()).onInterceptTouchEventScroll(any());
+        } finally {
+            event.recycle();
+        }
+    }
+
+    @Test
+    @DisableSceneContainer
+    public void collectionTouch_keepsUpAndCancelAwayFromNativeDragHelper() {
+        initController(true);
+        when(mNotificationStackScrollLayout.ownsPetalCollectionTouch()).thenReturn(true);
+        int[] actions = {MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE,
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL};
+        for (int action : actions) {
+            MotionEvent event = MotionEvent.obtain(0, 10, action, 100, 200, 0);
+            try {
+                assertThat(mController.getTouchHandler().onTouchEvent(event)).isTrue();
+            } finally {
+                event.recycle();
+            }
+        }
+        verify(mNotificationSwipeHelper, times(actions.length)).onTouchEvent(any());
+        verify(mDragDownHelper, never()).onTouchEvent(any());
+        verify(mExpandHelper, never()).onTouchEvent(any());
+        verify(mNotificationStackScrollLayout, never()).onScrollTouch(any());
     }
 
     private LogMaker logMatcher(int category, int type) {

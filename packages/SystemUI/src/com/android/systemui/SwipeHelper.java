@@ -103,6 +103,7 @@ public class SwipeHelper implements Gefingerpoken, Dumpable {
     private boolean mMenuRowIntercepting;
     private final long mLongPressTimeout;
     private boolean mLongPressSent;
+    private ExpandableNotificationRow mRedactionPeekRow;
     private final float[] mDownLocation = new float[2];
     private final Runnable mPerformLongPress = new Runnable() {
 
@@ -117,6 +118,12 @@ public class SwipeHelper implements Gefingerpoken, Dumpable {
                     final int x = (int) mDownLocation[0] - mViewOffset[0];
                     final int y = (int) mDownLocation[1] - mViewOffset[1];
                     mTouchedView.sendAccessibilityEvent(AccessibilityEvent.TYPE_VIEW_LONG_CLICKED);
+                    if (com.android.systemui.petalos.PetalWorkRedaction.beginPeek(
+                            (ExpandableNotificationRow) mTouchedView)) {
+                        mRedactionPeekRow = (ExpandableNotificationRow) mTouchedView;
+                        mCallback.onLongPressSent(mTouchedView);
+                        return;
+                    }
                     ((ExpandableNotificationRow) mTouchedView).doLongClickCallback(x, y);
 
                     if (isAvailableToDragAndDrop(mTouchedView)) {
@@ -334,6 +341,7 @@ public class SwipeHelper implements Gefingerpoken, Dumpable {
 
         switch (action) {
             case MotionEvent.ACTION_DOWN:
+                finishRedactionPeek(true);
                 mTouchAboveFalsingThreshold = false;
                 mIsSwiping = false;
                 mSnappingChild = false;
@@ -394,6 +402,7 @@ public class SwipeHelper implements Gefingerpoken, Dumpable {
 
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL:
+                finishRedactionPeek(false);
                 final boolean captured = (mIsSwiping || mLongPressSent || mMenuRowIntercepting);
                 mLongPressSent = false;
                 mCallback.onLongPressSent(null);
@@ -696,6 +705,21 @@ public class SwipeHelper implements Gefingerpoken, Dumpable {
 
     @Override
     public boolean onTouchEvent(MotionEvent ev) {
+        if (mRedactionPeekRow != null) {
+            int action = ev.getActionMasked();
+            if (action == MotionEvent.ACTION_POINTER_DOWN || action == MotionEvent.ACTION_OUTSIDE) {
+                com.android.systemui.petalos.PetalWorkRedaction.endPeek(mRedactionPeekRow, false);
+                return true;
+            }
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                finishRedactionPeek(false);
+                mLongPressSent = false;
+                mCallback.onLongPressSent(null);
+                resetSwipeState();
+                cancelLongPress();
+            }
+            return true;
+        }
         if (!mIsSwiping && !mMenuRowIntercepting && !mLongPressSent) {
             View childAtPosition = mCallback.getChildAtPosition(ev);
             if (childAtPosition != null) {
@@ -895,6 +919,7 @@ public class SwipeHelper implements Gefingerpoken, Dumpable {
 
     /** This method resets the swipe state, and if `resetAll` is true, also resets the snap state */
     private void resetSwipeStates(boolean resetAll) {
+        finishRedactionPeek(false);
         final View touchedView = mTouchedView;
         final boolean wasSnapping = mSnappingChild;
         final boolean wasSwiping = mIsSwiping;
@@ -919,6 +944,12 @@ public class SwipeHelper implements Gefingerpoken, Dumpable {
         if (wasSwiping || snapNeedsReset) {
             onChildSnappedBack(touchedView, 0);
         }
+    }
+
+    private void finishRedactionPeek(boolean immediate) {
+        if (mRedactionPeekRow == null) return;
+        com.android.systemui.petalos.PetalWorkRedaction.endPeek(mRedactionPeekRow, immediate);
+        mRedactionPeekRow = null;
     }
 
     private float getTouchSlop(MotionEvent event) {

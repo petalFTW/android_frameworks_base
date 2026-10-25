@@ -236,6 +236,8 @@ public class MediaControlPanelTest : SysuiTestCase() {
         mainExecutor = FakeExecutor(clock)
         whenever(mediaViewController.expandedLayout).thenReturn(expandedSet)
         whenever(mediaViewController.collapsedLayout).thenReturn(collapsedSet)
+        whenever(mediaViewController.deviceNameVisibility(true)).thenReturn(View.VISIBLE)
+        whenever(mediaViewController.deviceNameVisibility(false)).thenReturn(View.GONE)
         whenever(mediaCarouselController.mediaCarouselScrollHandler)
             .thenReturn(mediaCarouselScrollHandler)
 

@@ -20,6 +20,7 @@ import android.content.Context
 import android.graphics.Rect
 import android.util.TypedValue
 import android.view.View
+import android.view.ViewTreeObserver
 import com.android.systemui.dagger.SysUISingleton
 import com.android.systemui.dagger.qualifiers.Application
 import com.android.systemui.res.R
@@ -41,51 +42,53 @@ class StatusBarIconHider @Inject constructor(
         private val changeVisibility: Boolean = true,
     ) {
         var covered = false
+        private var hiddenByIsland = false
+        private var hostWasHidden = false
 
-        // always animate to target, a half-faded view can't get stuck
-        fun applyCovered(covered: Boolean) {
-            this.covered = covered
-            // already where we want it, nothing to do
-            if (covered && (!changeVisibility || view.visibility == View.INVISIBLE) &&
-                view.alpha == 0f) return
-            if (!covered && (!changeVisibility || view.visibility == View.VISIBLE) &&
-                view.alpha == 1f) return
-            // cancel first, or an old end action fires late
-            view.animate().cancel()
-            if (covered) {
-                // stay visible while fading, bounds have to be real
-                if (changeVisibility) view.visibility = View.VISIBLE
-                if (view.alpha > 0f) {
-                    view.animate()
-                        .alpha(0f)
-                        .setDuration(fadeDuration(view.alpha))
-                        .withEndAction {
-                            if (this.covered && changeVisibility) {
-                                view.visibility = View.INVISIBLE
-                            }
-                        }
-                        .start()
-                } else {
-                    if (changeVisibility) view.visibility = View.INVISIBLE
-                }
-            } else {
-                if (changeVisibility && view.visibility != View.VISIBLE) {
-                    view.visibility = View.VISIBLE
-                    view.alpha = 0f
-                }
-                if (view.alpha < 1f) {
-                    view.animate()
-                        .alpha(1f)
-                        .setDuration(fadeDuration(view.alpha))
-                        .start()
-                }
+        // progress: 0 = island isn't over this side, 1 = fully covered. Applied every frame
+        // from the island's own appearance, so the icons move in lockstep with the blob.
+        fun applyProgress(progress: Float) {
+            val p = progress.coerceIn(0f, 1f)
+            val covered = p > 0.001f
+            if (changeVisibility && view.visibility == View.GONE) {
+                hiddenByIsland = false
+                hostWasHidden = true
+                this.covered = covered
+                return
             }
-        }
-
-        // shorter fade when there's less distance to cover
-        private fun fadeDuration(currentAlpha: Float): Long {
-            val remaining = if (covered) currentAlpha else 1f - currentAlpha
-            return (FADE_MS * remaining.coerceIn(0f, 1f)).toLong().coerceAtLeast(16L)
+            // A fullscreen app owns GONE/INVISIBLE independently of the island.
+            // Never force its container visible merely because the blob moved away.
+            if (changeVisibility && view.visibility != View.VISIBLE && !hiddenByIsland) {
+                hostWasHidden = true
+                this.covered = covered
+                return
+            }
+            if (covered && hostWasHidden && changeVisibility) {
+                // Status bar just returned from fullscreen: hide on this first frame.
+                view.alpha = 0f
+                view.visibility = View.INVISIBLE
+                this.covered = true
+                hiddenByIsland = true
+                hostWasHidden = false
+                return
+            }
+            hostWasHidden = false
+            this.covered = covered
+            if (p >= 1f && changeVisibility) {
+                // fully covered: take the host out so it can't peek or eat touches
+                view.alpha = 0f
+                view.visibility = View.INVISIBLE
+                hiddenByIsland = true
+                return
+            }
+            if (changeVisibility && hiddenByIsland && p < 1f) {
+                view.visibility = View.VISIBLE
+                hiddenByIsland = false
+            }
+            if (!changeVisibility) {
+                hiddenByIsland = false
+            }
+            view.alpha = 1f - p
         }
 
         fun intersects(island: Rect?): Boolean {
@@ -101,19 +104,29 @@ class StatusBarIconHider @Inject constructor(
     private var endSide: SideContainer? = null
     private var keyguardStartSide: SideContainer? = null
     private var keyguardEndSide: SideContainer? = null
+    private var statusBarView: View? = null
+    private val preDrawListener = ViewTreeObserver.OnPreDrawListener {
+        updateCoverage(lastLeft, lastLeftProgress, lastRight, lastRightProgress)
+        true
+    }
 
     // kept so we can re-apply it when keyguard goes away
     private var lastLeft: Rect? = null
     private var lastRight: Rect? = null
+    private var lastLeftProgress = 0f
+    private var lastRightProgress = 0f
 
     private val keyguardCallback = object : KeyguardStateController.Callback {
         override fun onKeyguardShowingChanged() {
-            updateCoverage(lastLeft, lastRight)
+            updateCoverage(lastLeft, lastLeftProgress, lastRight, lastRightProgress)
         }
     }
 
     override fun onStatusBarViewInitialized(component: HomeStatusBarComponent) {
         val view = component.getPhoneStatusBarView()
+        statusBarView = view
+        view.viewTreeObserver.addOnPreDrawListener(preDrawListener)
+        notificationShadeWindowView.viewTreeObserver.addOnPreDrawListener(preDrawListener)
         startSide = view.findViewById<View?>(R.id.status_bar_start_side_content)?.let {
             SideContainer(it).apply { covered = it.visibility != View.VISIBLE }
         }
@@ -124,19 +137,26 @@ class StatusBarIconHider @Inject constructor(
     }
 
     override fun onStatusBarViewDestroyed(component: HomeStatusBarComponent) {
+        statusBarView?.viewTreeObserver?.takeIf { it.isAlive }
+            ?.removeOnPreDrawListener(preDrawListener)
+        notificationShadeWindowView.viewTreeObserver.takeIf { it.isAlive }
+            ?.removeOnPreDrawListener(preDrawListener)
+        statusBarView = null
         keyguardStateController.removeCallback(keyguardCallback)
-        keyguardStartSide?.applyCovered(false)
-        keyguardEndSide?.applyCovered(false)
+        keyguardStartSide?.applyProgress(0f)
+        keyguardEndSide?.applyProgress(0f)
         startSide = null
         endSide = null
         keyguardStartSide = null
         keyguardEndSide = null
     }
 
-    // hide a side if either island covers it
-    fun updateCoverage(left: Rect?, right: Rect?) {
+    // hide a side by the blob's own appearance progress; larger island wins a side
+    fun updateCoverage(left: Rect?, leftProgress: Float, right: Rect?, rightProgress: Float) {
         lastLeft = left
         lastRight = right
+        lastLeftProgress = leftProgress
+        lastRightProgress = rightProgress
         if (keyguardStateController.isShowing) {
             // keyguard has its own bar, only fade it, don't toggle visibility
             val keyguardStart = keyguardSide(R.id.keyguard_carrier_text, keyguardStartSide).also {
@@ -145,28 +165,30 @@ class StatusBarIconHider @Inject constructor(
             val keyguardEnd = keyguardSide(R.id.status_icon_area, keyguardEndSide).also {
                 keyguardEndSide = it
             }
-            keyguardStart?.let {
-                it.applyCovered(it.intersects(left) || it.intersects(right))
-            }
-            keyguardEnd?.let {
-                it.applyCovered(it.intersects(left) || it.intersects(right))
-            }
+            keyguardStart?.applyProgress(
+                progressFor(keyguardStart, left, leftProgress, right, rightProgress))
+            keyguardEnd?.applyProgress(
+                progressFor(keyguardEnd, left, leftProgress, right, rightProgress))
             return
         }
-        keyguardStartSide?.applyCovered(false)
-        keyguardEndSide?.applyCovered(false)
+        keyguardStartSide?.applyProgress(0f)
+        keyguardEndSide?.applyProgress(0f)
         val start = startSide ?: return
         val end = endSide ?: return
-        start.applyCovered(start.intersects(left) || start.intersects(right))
-        end.applyCovered(end.intersects(left) || end.intersects(right))
+        start.applyProgress(progressFor(start, left, leftProgress, right, rightProgress))
+        end.applyProgress(progressFor(end, left, leftProgress, right, rightProgress))
+    }
+
+    private fun progressFor(side: SideContainer, left: Rect?, leftProgress: Float,
+            right: Rect?, rightProgress: Float): Float {
+        var progress = 0f
+        if (side.intersects(left)) progress = maxOf(progress, leftProgress)
+        if (side.intersects(right)) progress = maxOf(progress, rightProgress)
+        return progress
     }
 
     private fun keyguardSide(id: Int, current: SideContainer?): SideContainer? {
         val view = notificationShadeWindowView.findViewById<View?>(id) ?: return null
         return if (current?.view === view) current else SideContainer(view, changeVisibility = false)
-    }
-
-    companion object {
-        private const val FADE_MS = 120L
     }
 }

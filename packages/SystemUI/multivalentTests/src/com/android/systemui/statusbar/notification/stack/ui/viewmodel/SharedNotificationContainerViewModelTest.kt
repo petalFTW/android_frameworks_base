@@ -17,6 +17,8 @@
 
 package com.android.systemui.statusbar.notification.stack.ui.viewmodel
 
+import android.content.applicationContext
+import android.content.res.Configuration
 import android.platform.test.annotations.EnableFlags
 import android.platform.test.flag.junit.FlagsParameterization
 import androidx.test.filters.SmallTest
@@ -67,6 +69,7 @@ import com.android.systemui.kosmos.runTest
 import com.android.systemui.kosmos.testScope
 import com.android.systemui.kosmos.useUnconfinedTestDispatcher
 import com.android.systemui.media.controls.domain.pipeline.legacyMediaDataManagerImpl
+import com.android.systemui.petalos.depth.PetalDepthNotificationPosition
 import com.android.systemui.res.R
 import com.android.systemui.scene.data.repository.Idle
 import com.android.systemui.scene.data.repository.Transition
@@ -745,6 +748,41 @@ class SharedNotificationContainerViewModelTest(flags: FlagsParameterization) : S
                 stateTransition = TransitionStep(from = LOCKSCREEN, to = GLANCEABLE_HUB),
             )
             assertThat(isOnGlanceableHubWithoutShade).isTrue()
+        }
+
+    @Test
+    @DisableSceneContainer
+    fun depthNotificationPosition_updatesLiveAndReleasesTheShade() =
+        kosmos.runTest {
+            val configuration = applicationContext.resources.configuration
+            val previousOrientation = configuration.orientation
+            try {
+                configuration.orientation = Configuration.ORIENTATION_PORTRAIT
+                overrideResource(R.bool.config_use_split_notification_shade, false)
+                PetalDepthNotificationPosition.update(false, -1)
+                val bounds by collectLastValue(underTest.bounds)
+                showLockscreen()
+                val height = applicationContext.resources.displayMetrics.heightPixels.toFloat()
+                keyguardInteractor.setNotificationContainerBounds(
+                    NotificationContainerBounds(top = 100f, bottom = height * 2f)
+                )
+
+                PetalDepthNotificationPosition.update(true, 40)
+                assertThat(bounds!!.top).isWithin(0.01f).of(height * 0.4f)
+                PetalDepthNotificationPosition.update(true, 60)
+                assertThat(bounds!!.top).isWithin(0.01f).of(height * 0.6f)
+
+                PetalDepthNotificationPosition.update(false, 60)
+                assertThat(bounds!!.top).isEqualTo(100f)
+
+                PetalDepthNotificationPosition.update(true, 60)
+                showLockscreenWithShadeExpanded()
+                sharedNotificationContainerInteractor.setTopPosition(10f)
+                assertThat(bounds!!.top).isEqualTo(10f)
+            } finally {
+                PetalDepthNotificationPosition.update(false, -1)
+                configuration.orientation = previousOrientation
+            }
         }
 
     @Test

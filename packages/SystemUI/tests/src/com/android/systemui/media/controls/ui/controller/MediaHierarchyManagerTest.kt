@@ -341,6 +341,106 @@ class MediaHierarchyManagerTest : SysuiTestCase() {
     }
 
     @Test
+    fun qsDrag_appliesLayoutImmediately() {
+        mediaHierarchyManager.qsExpansion = 0.2f
+        clearInvocations(mediaCarouselController)
+
+        mediaHierarchyManager.qsExpansion = 0.3f
+
+        verify(mediaCarouselController).setCurrentState(
+            MediaHierarchyManager.LOCATION_QQS,
+            MediaHierarchyManager.LOCATION_QS,
+            0.3f,
+            true,
+        )
+    }
+
+    @Test
+    fun qsHeightUpdated_reappliesCurrentDragState() {
+        mediaHierarchyManager.qsExpansion = 0.3f
+        clearInvocations(mediaCarouselController)
+
+        mediaHierarchyManager.onQsHeightUpdated()
+
+        verify(mediaCarouselController).setCurrentState(
+            MediaHierarchyManager.LOCATION_QQS,
+            MediaHierarchyManager.LOCATION_QS,
+            0.3f,
+            true,
+        )
+    }
+
+    @Test
+    fun qsHeightUpdated_afterExpansion_reappliesExpandedState() {
+        mediaHierarchyManager.qsExpansion = 0.3f
+        mediaHierarchyManager.qsExpansion = 1f
+        clearInvocations(mediaCarouselController)
+
+        mediaHierarchyManager.onQsHeightUpdated()
+
+        verify(mediaCarouselController).setCurrentState(
+            MediaHierarchyManager.LOCATION_QQS,
+            MediaHierarchyManager.LOCATION_QS,
+            1f,
+            true,
+        )
+    }
+
+    @Test
+    fun ribbon_firstQsMovementSwitchesToQsImmediately() {
+        goToLockscreen()
+
+        mediaHierarchyManager.qsExpansion = 0.001f
+
+        verify(mediaCarouselController).onDesiredLocationChanged(
+            eq(MediaHierarchyManager.LOCATION_QS), any<MediaHostState>(), eq(false), anyLong(), anyLong())
+        verify(mediaCarouselController).setCurrentState(
+            MediaHierarchyManager.LOCATION_UNKNOWN, MediaHierarchyManager.LOCATION_QS, 1f, true)
+    }
+
+    @Test
+    fun ribbon_firstShadeMovementSwitchesToQqsImmediately() {
+        goToLockscreen()
+
+        mediaHierarchyManager.setTransitionToFullShadeAmount(1f)
+
+        verify(mediaCarouselController).onDesiredLocationChanged(
+            eq(MediaHierarchyManager.LOCATION_QQS), any<MediaHostState>(), eq(false), anyLong(), anyLong())
+        verify(mediaCarouselController).setCurrentState(
+            MediaHierarchyManager.LOCATION_UNKNOWN, MediaHierarchyManager.LOCATION_QQS, 1f, true)
+    }
+
+    @Test
+    fun ribbon_returnFromQsRestoresLockscreenImmediately() {
+        goToLockscreen()
+        mediaHierarchyManager.qsExpansion = 1f
+        clearInvocations(mediaCarouselController)
+
+        mediaHierarchyManager.qsExpansion = 0f
+
+        verify(mediaCarouselController).onDesiredLocationChanged(
+            eq(MediaHierarchyManager.LOCATION_LOCKSCREEN), any<MediaHostState>(),
+            eq(false), anyLong(), anyLong())
+        verify(mediaCarouselController).setCurrentState(
+            MediaHierarchyManager.LOCATION_UNKNOWN, MediaHierarchyManager.LOCATION_LOCKSCREEN, 1f, true)
+    }
+
+    @Test
+    fun ribbon_returnFromShadeRestoresLockscreenImmediately() {
+        goToLockscreen()
+        mediaHierarchyManager.setTransitionToFullShadeAmount(1f)
+        clearInvocations(mediaCarouselController)
+
+        mediaHierarchyManager.setTransitionToFullShadeAmount(0f)
+
+        verify(mediaCarouselController).onDesiredLocationChanged(
+            eq(MediaHierarchyManager.LOCATION_LOCKSCREEN), any<MediaHostState>(),
+            eq(false), anyLong(), anyLong())
+        verify(mediaCarouselController).setCurrentState(
+            MediaHierarchyManager.LOCATION_UNKNOWN, MediaHierarchyManager.LOCATION_LOCKSCREEN, 1f, true)
+    }
+
+    @Test
     fun testTransformationOnLockScreenIsFading() {
         goToLockscreen()
         expandQS()

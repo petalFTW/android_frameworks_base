@@ -121,6 +121,8 @@ public class PipDismissTargetHandler implements ViewTreeObserver.OnPreDrawListen
         mTargetViewContainer = new DismissView(mContext);
         DismissViewUtils.setup(mTargetViewContainer);
         mTargetView = mTargetViewContainer.getCircle();
+        mTargetViewContainer.getCircle().setCustomBackground(
+                new com.android.internal.graphics.drawable.PetalGlassDrawable(mTargetView, 100f, 0f));
         mTargetViewContainer.setOnApplyWindowInsetsListener((view, windowInsets) -> {
             if (!windowInsets.equals(mWindowInsets)) {
                 mWindowInsets = windowInsets;

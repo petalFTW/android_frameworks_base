@@ -114,16 +114,11 @@ constructor(
             val openingValid = opening.orEmpty().filter { it.leash.isValid }
             val closingValid = closing.orEmpty().filter { it.leash.isValid }
             openingValid.forEach { applySurface(transaction, it, wScale, 1f) }
-            val hasHome = openingValid.any { o ->
-                closingValid.any { !it.leash.isSameSurface(o.leash) }
-            }
             closingValid.forEach { wallpaper ->
                 val shared =
                     openingValid.any { it.leash.isSameSurface(wallpaper.leash) }
-                val alpha =
-                    if (shared) 1f
-                    else if (hasHome) 1f - t
-                    else 1f - wallpaperProgress
+                // app unlocks have no opening wallpaper; the lock still has to fade out
+                val alpha = if (shared) 1f else 1f - t
                 applySurface(transaction, wallpaper, wScale, alpha.coerceIn(0f, 1f))
                 // put the lock wallpaper above home
                 openingValid.firstOrNull { o -> !o.leash.isSameSurface(wallpaper.leash) }
@@ -231,17 +226,38 @@ constructor(
         applyUnlockTransforms(t, null, openingWallpapers, closingWallpapers)
     }
 
+    fun finishWallpaperTransition(
+        openingWallpapers: Array<RemoteAnimationTarget>?,
+        closingWallpapers: Array<RemoteAnimationTarget>?,
+    ) {
+        resolvePivot()
+        applyUnlockTransforms(1f, null, openingWallpapers, closingWallpapers)
+    }
+
     fun cancel(showKeyguard: Boolean = true) {
+        val hadAnimator = animator != null
         restoreOnCancel = showKeyguard
         animator?.cancel()
         animator = null
+        if (!hadAnimator) {
+            // swipes and already-finished animators need a terminal frame too
+            if (showKeyguard) {
+                wallpaperProgress = 0f
+                restoreIdentity()
+            } else {
+                applyUnlockTransforms(1f, lastTargets, lastOpening, lastClosing)
+            }
+        }
         fadingView?.alpha = 1f
         fadingView = null
+        lastTargets = null
+        lastOpening = null
+        lastClosing = null
         restoreOnCancel = true
     }
 
     companion object {
-        private const val MASTER_DURATION_MS = 480L
+        const val MASTER_DURATION_MS = 480L
 
         /** lock ui is gone by this point in the animation */
         private const val KEYGUARD_FADE_FRACTION = 0.625f

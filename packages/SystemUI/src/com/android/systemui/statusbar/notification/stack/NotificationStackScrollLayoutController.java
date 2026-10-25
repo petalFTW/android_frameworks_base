@@ -2152,6 +2152,9 @@ public class NotificationStackScrollLayoutController implements Dumpable {
         @Override
         public boolean onInterceptTouchEvent(MotionEvent ev) {
             mView.initDownStates(ev);
+            if (mView.ownsPetalCollectionTouch()) {
+                return mSwipeHelper.onInterceptTouchEvent(ev);
+            }
             mView.handleEmptySpaceClick(ev);
 
             boolean skipForDragging = SceneContainerFlag.isEnabled() && mView.isBeingDragged()
@@ -2222,6 +2225,10 @@ public class NotificationStackScrollLayoutController implements Dumpable {
 
         @Override
         public boolean onTouchEvent(MotionEvent ev) {
+            if (mView.ownsPetalCollectionTouch()) {
+                mSwipeHelper.onTouchEvent(ev);
+                return true;
+            }
             NotificationGuts guts = mNotificationGutsManager.getExposedGuts();
             boolean isCancelOrUp = ev.getActionMasked() == MotionEvent.ACTION_CANCEL
                     || ev.getActionMasked() == MotionEvent.ACTION_UP;

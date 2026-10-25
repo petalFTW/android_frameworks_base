@@ -864,6 +864,11 @@ public class AmbientState implements Dumpable {
                 && mStatusBarKeyguardViewManager.isPrimaryBouncerInTransit();
     }
 
+    public boolean isBouncerShowing() {
+        return mStatusBarKeyguardViewManager != null
+                && mStatusBarKeyguardViewManager.isBouncerShowing();
+    }
+
     /**
      * @param isClosing Whether the shade is currently closing.
      */

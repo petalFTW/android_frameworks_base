@@ -23,6 +23,7 @@ import android.content.Context
 import android.content.res.Configuration
 import android.graphics.Typeface
 import android.view.View
+import android.view.ViewGroup
 import android.view.animation.Interpolator
 import androidx.annotation.VisibleForTesting
 import androidx.constraintlayout.widget.ConstraintSet
@@ -50,11 +51,9 @@ import com.android.systemui.util.animation.TransitionViewState
 import java.lang.Float.max
 import java.lang.Float.min
 import javax.inject.Inject
+import org.petalos.config.PetalConfig
 
-/**
- * A class responsible for controlling a single instance of a media player handling interactions
- * with the view instance and keeping the media view states up to date.
- */
+// Keeps one player view lined up with its host and playback state.
 open class MediaViewController
 @Inject
 constructor(
@@ -77,15 +76,40 @@ constructor(
     private var animationDelay: Long = 0
     private var animationDuration: Long = 0
     private var animateNextStateChange: Boolean = false
+    private var lastPetalStyle = com.android.systemui.petalos.PetalMediaStyle.Stock
+    private var petalButtonAccent: Int? = null
+    // same recipe as the qs tiles, so the player reads as the same glass
+    private val petalCardBackgroundDelegate = lazy {
+        val density = context.resources.displayMetrics.density
+        val glass = com.android.systemui.island.render.LiquidGlassDrawable().apply {
+            setCornerRadius(24f * density)
+            setTintColor(
+                android.graphics.Color.argb(
+                    kotlin.math.round(255f * com.android.systemui.petalos.PetalQsSkin.GlassFillAlpha).toInt(),
+                    0x33, 0x33, 0x3D,
+                )
+            )
+            setRim(0x99FFFFFF.toInt(), 0x14FFFFFF.toInt())
+            setRimWidth(1.1f * density)
+            setGrainAlpha(0x16)
+            setSheenStrength(0x55)
+            setSpecularProgress(0.16f)
+        }
+        com.android.systemui.petalos.PetalMediaPaintDrawable(glass) {
+            transitionLayout?.findViewById<android.widget.ImageView>(R.id.petal_media_cover)
+        }
+    }
+    private val petalCardBackground by petalCardBackgroundDelegate
+    private val petalRibbonBackground by lazy {
+        com.android.systemui.petalos.PetalMediaRibbonDrawable(context.resources.displayMetrics.density)
+    }
+    private var petalRibbonBackdrop: com.android.systemui.petalos.PetalMediaRibbonBackdrop? = null
     private val measurement = MeasurementOutput(0, 0)
 
     /** A map containing all viewStates for all locations of this mediaState */
     private val viewStates: MutableMap<CacheKey, TransitionViewState?> = mutableMapOf()
 
-    /**
-     * The ending location of the view where it ends when all animations and transitions have
-     * finished
-     */
+    // Where the player lands once the animation settles.
     @MediaLocation
     var currentEndLocation: Int = MediaHierarchyManager.LOCATION_UNKNOWN
         set(value) {
@@ -112,15 +136,9 @@ constructor(
     /** A temporary cache key to be used to look up cache entries */
     private val tmpKey = CacheKey()
 
-    /**
-     * The current width of the player. This might not factor in case the player is animating to the
-     * current state, but represents the end state
-     */
+    // Target width; the animation might still be catching up.
     var currentWidth: Int = 0
-    /**
-     * The current height of the player. This might not factor in case the player is animating to
-     * the current state, but represents the end state
-     */
+    // Target height, same deal as the width.
     var currentHeight: Int = 0
 
     /** Get the translationX of the layout */
@@ -140,14 +158,7 @@ constructor(
     /** Whether font family should be updated. */
     private var isFontUpdateAllowed: Boolean = true
 
-    /**
-     * Sets the listening state of the player.
-     *
-     * Should be set to true when the QS panel is open. Otherwise, false. This is a signal to avoid
-     * unnecessary work when the QS panel is closed.
-     *
-     * @param listening True when player should be active. Otherwise, false.
-     */
+    // Stop the extra work when QS is shut.
     fun setListening(listening: Boolean) {
         if (!SceneContainerFlag.isEnabled) return
         seekBarViewModel.listening = listening
@@ -159,12 +170,7 @@ constructor(
             var lastOrientation = -1
 
             override fun onConfigChanged(newConfig: Configuration?) {
-                // Because the TransitionLayout is not always attached (and calculates/caches layout
-                // results regardless of attach state), we have to force the layoutDirection of the
-                // view
-                // to the correct value for the user's current locale to ensure correct
-                // recalculation
-                // when/after calling refreshState()
+                // Detached layouts still cache geometry, so push the locale direction ourselves.
                 newConfig?.apply {
                     if (transitionLayout?.rawLayoutDirection != layoutDirection) {
                         transitionLayout?.layoutDirection = layoutDirection
@@ -172,11 +178,9 @@ constructor(
                     }
                     val newOrientation = newConfig.orientation
                     if (lastOrientation != newOrientation) {
-                        // Layout dimensions are possibly changing, so we need to update them. (at
-                        // least on large screen devices)
+                        // Rotation can change the player height.
                         lastOrientation = newOrientation
-                        // Update the height of media controls for the expanded layout. it is needed
-                        // for large screen devices.
+                        // Expanded geometry needs the new resource height too.
                         setBackgroundHeights(
                             context.resources.getDimensionPixelSize(
                                 R.dimen.qs_media_session_height_expanded
@@ -206,17 +210,11 @@ constructor(
             }
         }
 
-    /**
-     * The expanded constraint set used to render a expanded player. If it is modified, make sure to
-     * call [refreshState]
-     */
+    // Collapsed geometry; call refreshState after messing with it.
     var collapsedLayout = ConstraintSet()
         @VisibleForTesting set
 
-    /**
-     * The expanded constraint set used to render a collapsed player. If it is modified, make sure
-     * to call [refreshState]
-     */
+    // Expanded geometry, also needs refreshState after edits.
     var expandedLayout = ConstraintSet()
         @VisibleForTesting set
 
@@ -239,10 +237,12 @@ constructor(
         configurationController.addCallback(configurationListener)
     }
 
-    /**
-     * Notify this controller that the view has been removed and all listeners should be destroyed
-     */
+    // Player's gone; bin its listeners too.
     fun onDestroy() {
+        petalRibbonBackdrop?.destroy()
+        petalRibbonBackdrop = null
+        petalRibbonBackground.backdrop = null
+        if (petalCardBackgroundDelegate.isInitialized()) petalCardBackground.stop()
         mediaHostStatesManager.removeController(this)
         configurationController.removeCallback(configurationListener)
     }
@@ -331,8 +331,7 @@ constructor(
         val squishedViewState = viewState.copy()
         val squishedHeight = (squishedViewState.measureHeight * squishFraction).toInt()
         squishedViewState.height = squishedHeight
-        // We are not overriding the squishedViewStates height but only the children to avoid
-        // them remeasuring the whole view. Instead it just remains as the original size
+        // Shrink the background without kicking off another full measure.
         MediaViewHolder.backgroundIds.forEach { id ->
             squishedViewState.widgetStates.get(id)?.let { state -> state.height = squishedHeight }
         }
@@ -352,36 +351,7 @@ constructor(
         return squishedViewState
     }
 
-    /**
-     * This function is to make each widget in UMO disappear before being clipped by squished UMO
-     *
-     * The general rule is that widgets in UMO has been divided into several groups, and widgets in
-     * one group have the same alpha during squishing It will change from alpha 0.0 when the visible
-     * bottom of UMO reach the bottom of this group It will change to alpha 1.0 when the visible
-     * bottom of UMO reach the top of the group below e.g.Album title, artist title and play-pause
-     * button will change alpha together.
-     *
-     * ```
-     *     And their alpha becomes 1.0 when the visible bottom of UMO reach the top of controls,
-     *     including progress bar, next button, previous button
-     * ```
-     *
-     * widgetGroupIds: a group of widgets have same state during UMO is squished,
-     * ```
-     *     e.g. Album title, artist title and play-pause button
-     * ```
-     *
-     * groupEndPosition: the height of UMO, when the height reaches this value,
-     * ```
-     *     widgets in this group should have 1.0 as alpha
-     *     e.g., the group of album title, artist title and play-pause button will become fully
-     *         visible when the height of UMO reaches the top of controls group
-     *         (progress bar, previous button and next button)
-     * ```
-     *
-     * squishedViewState: hold the widgetState of each widget, which will be modified
-     * squishFraction: the squishFraction of UMO
-     */
+    // Fade each group before the shrinking card chops its bottom off.
     private fun calculateWidgetGroupAlphaForSquishiness(
         widgetGroupIds: Set<Int>,
         groupEndPosition: Float,
@@ -397,12 +367,7 @@ constructor(
                 groupBottom = max(groupBottom, state.y + state.height)
             }
         }
-        // startPosition means to the height of squished UMO where the widget alpha should start
-        // changing from 0.0
-        // generally, it equals to the bottom of widgets, so that we can meet the requirement that
-        // widget should not go beyond the bounds of background
-        // endPosition means to the height of squished UMO where the widget alpha should finish
-        // changing alpha to 1.0
+        // Fade between the group's bottom and the next group's edge.
         var startPosition = groupBottom
         val endPosition = groupEndPosition
         if (startPosition == endPosition) {
@@ -469,10 +434,22 @@ constructor(
                 setBackgroundHeights(height)
             }
 
+            val concept = state.petalStyle == com.android.systemui.petalos.PetalMediaStyle.Lockscreen ||
+                (PetalConfig.isQsSkinEnabled(context) &&
+                    state.petalStyle != com.android.systemui.petalos.PetalMediaStyle.Stock)
+            val constraints = petalConstraintSet(state)
+            val measurementInput = state.measurementInput!!.copy()
+            if (concept && !state.expandedMatchesParentHeight) {
+                // Wrap-content stopped at the artist and chopped the rest off.
+                measurementInput.heightMeasureSpec = View.MeasureSpec.makeMeasureSpec(
+                    constraints.getConstraint(R.id.album_art).layout.mHeight,
+                    View.MeasureSpec.EXACTLY,
+                )
+            }
             result =
                 transitionLayout!!.calculateViewState(
-                    state.measurementInput!!,
-                    constraintSetForExpansion(state.expansion),
+                    measurementInput,
+                    constraints,
                     TransitionViewState(),
                 )
 
@@ -500,20 +477,121 @@ constructor(
         return result
     }
 
+    private fun petalConstraintSet(state: MediaHostState): ConstraintSet {
+        val original = constraintSetForExpansion(state.expansion)
+        val style = state.petalStyle
+        if (style == com.android.systemui.petalos.PetalMediaStyle.Lockscreen ||
+            (PetalConfig.isQsSkinEnabled(context) &&
+                style != com.android.systemui.petalos.PetalMediaStyle.Stock)) {
+            return com.android.systemui.petalos.PetalMediaConstraints.create(context, original, state)
+        }
+        val density = context.resources.displayMetrics.density
+        val widthDp = (state.measurementInput?.width ?: 0) / density
+        if (!PetalConfig.isQsSkinEnabled(context) || state.expansion != 1f ||
+            widthDp !in 180f..260f || context.resources.configuration.fontScale > 1.3f) {
+            return original
+        }
+        // Clone geometry, keep the actions' live visibility and alpha.
+        val layout = ConstraintSet().apply { clone(original) }
+        fun px(dp: Int) = (dp * density).toInt()
+        fun clearAnchors(id: Int) {
+            listOf(ConstraintSet.LEFT, ConstraintSet.RIGHT, ConstraintSet.START, ConstraintSet.END,
+                ConstraintSet.TOP, ConstraintSet.BOTTOM, ConstraintSet.BASELINE).forEach {
+                layout.clear(id, it)
+            }
+        }
+        fun fullWidth(id: Int) {
+            layout.constrainWidth(id, MATCH_CONSTRAINT)
+            layout.connect(id, ConstraintSet.START, ConstraintSet.PARENT_ID, ConstraintSet.START, px(12))
+            layout.connect(id, ConstraintSet.END, ConstraintSet.PARENT_ID, ConstraintSet.END, px(12))
+        }
+        clearAnchors(R.id.icon)
+        layout.constrainWidth(R.id.icon, px(20))
+        layout.constrainHeight(R.id.icon, px(20))
+        layout.connect(R.id.icon, ConstraintSet.START,
+            ConstraintSet.PARENT_ID, ConstraintSet.START, px(12))
+        layout.connect(R.id.icon, ConstraintSet.TOP,
+            ConstraintSet.PARENT_ID, ConstraintSet.TOP, px(12))
+        clearAnchors(R.id.media_seamless)
+        layout.connect(R.id.media_seamless, ConstraintSet.START, R.id.icon, ConstraintSet.END, px(8))
+        layout.connect(R.id.media_seamless, ConstraintSet.END, ConstraintSet.PARENT_ID, ConstraintSet.END)
+        layout.connect(R.id.media_seamless, ConstraintSet.TOP, ConstraintSet.PARENT_ID, ConstraintSet.TOP)
+        layout.constrainWidth(R.id.media_seamless, MATCH_CONSTRAINT)
+        layout.setHorizontalBias(R.id.media_seamless, 1f)
+
+        clearAnchors(R.id.header_title)
+        fullWidth(R.id.header_title)
+        // output switcher can be gone, so it can't hold the title below the app icon
+        layout.connect(R.id.header_title, ConstraintSet.TOP,
+            ConstraintSet.PARENT_ID, ConstraintSet.TOP, px(48))
+        clearAnchors(R.id.header_artist)
+        fullWidth(R.id.header_artist)
+        layout.connect(R.id.header_artist, ConstraintSet.TOP, R.id.header_title, ConstraintSet.BOTTOM)
+        clearAnchors(R.id.media_explicit_indicator)
+        layout.connect(R.id.media_explicit_indicator, ConstraintSet.START,
+            ConstraintSet.PARENT_ID, ConstraintSet.START, px(12))
+        layout.connect(R.id.media_explicit_indicator, ConstraintSet.TOP,
+            R.id.header_artist, ConstraintSet.TOP)
+        if (layout.getVisibility(R.id.media_explicit_indicator) != View.GONE) {
+            layout.connect(R.id.header_artist, ConstraintSet.START,
+                R.id.media_explicit_indicator, ConstraintSet.END, px(4))
+        }
+
+        val play = R.id.actionPlayPause
+        clearAnchors(play)
+        layout.constrainWidth(play, px(48))
+        layout.constrainHeight(play, px(48))
+        layout.connect(play, ConstraintSet.LEFT, ConstraintSet.PARENT_ID, ConstraintSet.LEFT)
+        layout.connect(play, ConstraintSet.RIGHT, ConstraintSet.PARENT_ID, ConstraintSet.RIGHT)
+        layout.connect(play, ConstraintSet.TOP, R.id.header_artist, ConstraintSet.BOTTOM, px(4))
+        for ((id, side) in listOf(R.id.actionPrev to ConstraintSet.RIGHT, R.id.actionNext to ConstraintSet.LEFT)) {
+            clearAnchors(id)
+            layout.connect(id, ConstraintSet.TOP, play, ConstraintSet.TOP)
+            layout.connect(id, side, play,
+                if (side == ConstraintSet.RIGHT) ConstraintSet.LEFT else ConstraintSet.RIGHT, px(8))
+        }
+
+        val generic = MediaViewHolder.genericButtonIds.filter { layout.getVisibility(it) != View.GONE }
+        val hasPrimary = layout.getVisibility(play) != View.GONE
+        val extraRows = (generic.size + 2) / 3
+        for ((index, id) in generic.withIndex()) {
+            clearAnchors(id)
+            val row = index / 3
+            val column = index % 3
+            layout.connect(id, ConstraintSet.START, ConstraintSet.PARENT_ID, ConstraintSet.START,
+                px(12 + column * 56))
+            layout.connect(id, ConstraintSet.TOP, R.id.header_artist, ConstraintSet.BOTTOM,
+                px((if (hasPrimary) 52 else 4) + row * 48))
+        }
+        clearAnchors(R.id.media_progress_bar)
+        fullWidth(R.id.media_progress_bar)
+        layout.connect(R.id.media_progress_bar, ConstraintSet.BOTTOM,
+            ConstraintSet.PARENT_ID, ConstraintSet.BOTTOM)
+        for ((id, side) in listOf(R.id.media_scrubbing_elapsed_time to ConstraintSet.LEFT,
+            R.id.media_scrubbing_total_time to ConstraintSet.RIGHT)) {
+            clearAnchors(id)
+            layout.connect(id, side, ConstraintSet.PARENT_ID, side, px(12))
+            layout.connect(id, ConstraintSet.BOTTOM, ConstraintSet.PARENT_ID,
+                ConstraintSet.BOTTOM, px(48))
+        }
+        val height = 232 + (if (hasPrimary) extraRows else (extraRows - 1).coerceAtLeast(0)) * 48
+        MediaViewHolder.backgroundIds.forEach { layout.constrainHeight(it, px(height)) }
+        return layout
+    }
+
     private fun getKey(state: MediaHostState, guts: Boolean, result: CacheKey): CacheKey {
         result.apply {
             heightMeasureSpec = state.measurementInput?.heightMeasureSpec ?: 0
             widthMeasureSpec = state.measurementInput?.widthMeasureSpec ?: 0
             expansion = state.expansion
             gutsVisible = guts
+            petalStyle = state.petalStyle
+            expandedMatchesParentHeight = state.expandedMatchesParentHeight
         }
         return result
     }
 
-    /**
-     * Attach a view to this controller. This may perform measurements if it's not available yet and
-     * should therefore be done carefully.
-     */
+    // New player, fresh measurements.
     fun attach(transitionLayout: TransitionLayout) =
         traceSection("MediaViewController#attach") {
             MediaControlsInComposeFlag.assertInLegacyMode()
@@ -521,6 +599,9 @@ constructor(
             loadLayoutConstraints()
             logger.logMediaLocation("attach", currentStartLocation, currentEndLocation)
             this.transitionLayout = transitionLayout
+            petalRibbonBackdrop?.destroy()
+            petalRibbonBackdrop = com.android.systemui.petalos.PetalMediaRibbonBackdrop(transitionLayout)
+            petalRibbonBackground.backdrop = petalRibbonBackdrop
             layoutController.attach(transitionLayout)
             if (currentEndLocation == MediaHierarchyManager.LOCATION_UNKNOWN) {
                 return
@@ -534,11 +615,7 @@ constructor(
             )
         }
 
-    /**
-     * Obtain a measurement for a given location. This makes sure that the state is up to date and
-     * all widgets know their location. Calling this method may create a measurement if we don't
-     * have a cached value available already.
-     */
+    // Measure this host, cache or no cache.
     fun getMeasurementsForState(hostState: MediaHostState): MeasurementOutput? =
         traceSection("MediaViewController#getMeasurementsForState") {
             // measurements should never factor in the squish fraction
@@ -548,10 +625,7 @@ constructor(
             return measurement
         }
 
-    /**
-     * Set a new state for the controlled view which can be an interpolation between multiple
-     * locations.
-     */
+    // Move the player between hosts, including the half-dragged mess.
     fun setCurrentState(
         @MediaLocation startLocation: Int,
         @MediaLocation endLocation: Int,
@@ -566,14 +640,189 @@ constructor(
             currentStartLocation = startLocation
             currentTransitionProgress = transitionProgress
 
-            val shouldAnimate = animateNextStateChange && !applyImmediately
-
             val endHostState = mediaHostStatesManager.mediaHostStates[endLocation] ?: return
             val startHostState = mediaHostStatesManager.mediaHostStates[startLocation]
+            val styleChanged = lastPetalStyle != endHostState.petalStyle
+            val applyLayoutImmediately = applyImmediately || styleChanged
+            if (styleChanged) {
+                // Old-style measurements never get to poison the morph.
+                viewStates.clear()
+            }
+            val shouldAnimate = animateNextStateChange && !applyLayoutImmediately
+            val oldStyle = transitionLayout?.getTag(R.id.petal_media_cover)
+            transitionLayout?.setTag(R.id.petal_media_cover, endHostState.petalStyle)
+            val concept = endHostState.petalStyle == com.android.systemui.petalos.PetalMediaStyle.Lockscreen ||
+                (PetalConfig.isQsSkinEnabled(context) &&
+                    endHostState.petalStyle != com.android.systemui.petalos.PetalMediaStyle.Stock)
+            val startStyle = startHostState?.petalStyle ?: endHostState.petalStyle
+            val startStrength = petalGlassStrength(startStyle)
+            val endStrength = petalGlassStrength(endHostState.petalStyle)
+            val progress = if (transitionProgress.isFinite()) transitionProgress.coerceIn(0f, 1f) else 1f
+            val strength = startStrength + (endStrength - startStrength) * progress
+            val startFlow = petalArtworkFlowStrength(startStyle)
+            val endFlow = petalArtworkFlowStrength(endHostState.petalStyle)
+            // Follow the drag both ways; the destination style doesn't get to kill the smear early.
+            val artworkFlow = startFlow + (endFlow - startFlow) * progress
+            val lock = endHostState.petalStyle == com.android.systemui.petalos.PetalMediaStyle.Lockscreen
+            petalRibbonBackdrop?.setEnabled(lock)
+            val blurRadius = 12f + (28f - 12f) * strength
+            transitionLayout?.let {
+                it.setLayerType(if (concept) View.LAYER_TYPE_NONE else View.LAYER_TYPE_HARDWARE, null)
+                // The ribbon has its own paper; don't blur the whole window again.
+                com.android.systemui.petalos.PetalMediaBackdrop.setEnabled(it, concept && !lock, blurRadius)
+                it.findViewById<com.android.systemui.petalos.PetalMediaArtworkView>(R.id.petal_media_cover)
+                    ?.setFeatherBottom(
+                        if (concept) artworkFlow else 0f
+                    )
+            }
+            if (concept) {
+                petalCardBackground.setStyle(endHostState.petalStyle, artworkFlow)
+                val fillAlpha = 0.28f +
+                    (com.android.systemui.petalos.PetalQsSkin.GlassFillAlpha - 0.28f) * strength
+                petalCardBackground.setTintColor(android.graphics.Color.argb(
+                    kotlin.math.round(255f * fillAlpha).toInt(), 0x33, 0x33, 0x3D))
+                val accent = if (lock) com.android.systemui.petalos.PetalMediaRibbonDrawable.ACCENT
+                    else context.getColor(android.R.color.system_accent1_500)
+                val background = if (lock) petalRibbonBackground else petalCardBackground
+                if (oldStyle != endHostState.petalStyle || petalButtonAccent != accent ||
+                    transitionLayout?.background !== background) {
+                    petalButtonAccent = accent
+                    transitionLayout?.background = background
+                    transitionLayout?.apply {
+                        outlineProvider = object : android.view.ViewOutlineProvider() {
+                            // The live background would call straight back into this bloody outline.
+                            private val ribbonOutline = com.android.systemui.petalos.PetalMediaRibbonDrawable(
+                                context.resources.displayMetrics.density
+                            )
 
-            // Obtain the view state that we'd want to be at the end
-            // The view might not be bound yet or has never been measured and in that case will be
-            // reset once the state is fully available
+                            override fun getOutline(view: View, outline: android.graphics.Outline) {
+                                if (lock) {
+                                    ribbonOutline.setBounds(0, 0, view.width, view.height)
+                                    ribbonOutline.getOutline(outline)
+                                } else {
+                                    outline.setRoundRect(0, 0, view.width, view.height,
+                                        24f * view.resources.displayMetrics.density)
+                                }
+                            }
+                        }
+                        clipToOutline = true
+                        foreground = if (lock) null else android.graphics.drawable.GradientDrawable().apply {
+                            cornerRadius = 24f * resources.displayMetrics.density
+                            setColor(android.graphics.Color.TRANSPARENT)
+                            setStroke(resources.displayMetrics.density.toInt().coerceAtLeast(1), 0x33FFFFFF)
+                        }
+                    }
+                    // flush artwork takes the card's own corners, inset art stays cosy
+                    val insetArt =
+                        endHostState.petalStyle != com.android.systemui.petalos.PetalMediaStyle.LargeProgress
+                    val coverRadius =
+                        (if (lock) 10f else if (insetArt) 16f else 0f) * context.resources.displayMetrics.density
+                    transitionLayout?.findViewById<android.widget.ImageView>(R.id.petal_media_cover)
+                        ?.apply {
+                            clipToOutline = true
+                            foreground = if (lock) android.graphics.drawable.GradientDrawable().apply {
+                                cornerRadius = coverRadius
+                                setColor(android.graphics.Color.TRANSPARENT)
+                                setStroke(context.resources.displayMetrics.density.toInt().coerceAtLeast(1), 0x70FFFFFF)
+                            } else null
+                            outlineProvider = object : android.view.ViewOutlineProvider() {
+                                override fun getOutline(
+                                    view: View,
+                                    outline: android.graphics.Outline,
+                                ) {
+                                    outline.setRoundRect(
+                                        0, 0, view.width, view.height, coverRadius
+                                    )
+                                }
+                            }
+                        }
+                    val play = transitionLayout?.findViewById<android.widget.ImageButton>(R.id.actionPlayPause)
+                    play?.background = com.android.systemui.petalos.PetalMediaBubbleDrawable(
+                        true, true, context.resources.displayMetrics.density, accent)
+                    play?.backgroundTintList = null
+                    play?.imageTintList = android.content.res.ColorStateList.valueOf(
+                        if (lock) android.graphics.Color.WHITE else
+                            com.android.systemui.petalos.PetalQsSkin.glyphOnBackground(accent))
+                    val sideColor = if (lock || com.android.systemui.petalos.PetalQsSkin.isDark(context)) {
+                        0xFFF5F5F8.toInt()
+                    } else 0xFF202127.toInt()
+                    (MediaViewHolder.genericButtonIds + setOf(R.id.actionPrev, R.id.actionNext)).forEach { id ->
+                        transitionLayout?.findViewById<android.widget.ImageButton>(id)?.imageTintList =
+                            android.content.res.ColorStateList.valueOf(sideColor)
+                    }
+                    val seek = transitionLayout?.findViewById<android.widget.SeekBar>(R.id.media_progress_bar)
+                    seek?.apply {
+                        setPadding(paddingLeft, if (lock) 0 else context.resources.getDimensionPixelSize(
+                            R.dimen.qs_media_session_enabled_seekbar_vertical_padding), paddingRight,
+                            if (lock) 0 else (12f * context.resources.displayMetrics.density).toInt())
+                    }
+                    val mini = endHostState.petalStyle == com.android.systemui.petalos.PetalMediaStyle.Mini
+                    (seek?.progressDrawable as? com.android.systemui.media.controls.ui.drawable.SquigglyProgress)?.apply {
+                        lineAmplitude = 0f
+                        strokeWidth = (if (mini) 2f else 6f) * context.resources.displayMetrics.density
+                        animate = false
+                    }
+                    val seekAvailable = seekBarViewModel.progress.value?.seekAvailable == true
+                    seek?.thumb?.alpha = if (seekAvailable && !mini) 255 else 0
+                    seek?.isEnabled = seekAvailable && !mini
+                    seek?.progressTintList = android.content.res.ColorStateList.valueOf(
+                        if (lock) com.android.systemui.petalos.PetalMediaRibbonDrawable.TRACK_ACCENT else accent)
+                    seek?.progressBackgroundTintList = android.content.res.ColorStateList.valueOf(0x40FFFFFF)
+                    seek?.thumb = android.graphics.drawable.GradientDrawable().apply {
+                        shape = android.graphics.drawable.GradientDrawable.OVAL
+                        val diameter = ((if (lock) 14f else 10f) * context.resources.displayMetrics.density).toInt()
+                        setSize(diameter, diameter)
+                        setColor(android.graphics.Color.WHITE)
+                        alpha = if (seekAvailable && !mini) 255 else 0
+                    }
+                    transitionLayout?.findViewById<android.widget.TextView>(R.id.header_title)?.apply {
+                        textSize = if (lock) 20f else 16f
+                        typeface = if (lock) Typeface.create("sans-serif", Typeface.BOLD) else titleMediumEmphasizedTF
+                    }
+                    transitionLayout?.findViewById<android.widget.TextView>(R.id.header_artist)?.apply {
+                        textSize = if (lock) 18f else 14f
+                        typeface = if (lock) Typeface.create("sans-serif", Typeface.NORMAL) else bodyMediumTF
+                    }
+                    listOf(R.id.petal_media_elapsed, R.id.petal_media_duration).forEach { id ->
+                        transitionLayout?.findViewById<android.widget.TextView>(id)?.textSize =
+                            if (lock) 14f else 11f
+                    }
+                    updatePetalOutputControls(endHostState.petalStyle == com.android.systemui.petalos.PetalMediaStyle.Split)
+                    // equalizer and label swap every expand, so let them crossfade
+                    transitionLayout?.findViewById<android.widget.TextView>(R.id.media_seamless_text)?.visibility =
+                        deviceNameVisibility(true)
+                    fadeSeamless(endHostState.petalStyle == com.android.systemui.petalos.PetalMediaStyle.Split,
+                        shouldAnimate)
+                    transitionLayout?.findViewById<android.widget.TextView>(R.id.header_title)?.setTextColor(android.graphics.Color.WHITE)
+                    transitionLayout?.findViewById<android.widget.TextView>(R.id.header_artist)?.setTextColor(0xBFFFFFFF.toInt())
+                }
+            } else {
+                if (petalButtonAccent != null) {
+                    petalCardBackground.stop()
+                    transitionLayout?.setBackgroundResource(R.drawable.qs_media_outline_layout_bg)
+                    transitionLayout?.outlineProvider = android.view.ViewOutlineProvider.BACKGROUND
+                    transitionLayout?.foreground = null
+                    transitionLayout?.findViewById<android.widget.ImageView>(R.id.petal_media_cover)?.foreground = null
+                    transitionLayout?.findViewById<android.widget.TextView>(R.id.header_title)?.apply {
+                        textSize = 16f
+                        typeface = titleMediumEmphasizedTF
+                    }
+                    transitionLayout?.findViewById<android.widget.TextView>(R.id.header_artist)?.apply {
+                        textSize = 14f
+                        typeface = bodyMediumTF
+                    }
+                }
+                petalButtonAccent = null
+                transitionLayout?.findViewById<android.widget.TextView>(R.id.media_seamless_text)?.visibility = View.VISIBLE
+                transitionLayout?.findViewById<View>(R.id.petal_media_equalizer)?.visibility = View.GONE
+                transitionLayout?.findViewById<View>(R.id.media_seamless_image)?.visibility = View.VISIBLE
+                transitionLayout?.findViewById<View>(R.id.media_seamless_button)?.animate()?.cancel()
+                transitionLayout?.findViewById<View>(R.id.media_seamless_button)?.alpha = 1f
+                transitionLayout?.findViewById<View>(R.id.petal_media_equalizer)?.animate()?.cancel()
+                transitionLayout?.findViewById<View>(R.id.petal_media_equalizer)?.alpha = 1f
+            }
+
+            // No measurement yet? It'll catch up once the view exists.
             var endViewState = obtainViewState(endHostState, isGutsAnimation) ?: return
             endViewState = updateViewStateSize(endViewState, endLocation, tmpState2)!!
             layoutController.setMeasureState(endViewState)
@@ -639,9 +888,16 @@ constructor(
                 result.width,
                 result.height,
             )
+            // Missing measurements don't count as switching the live layout.
+            result.widgetStates[R.id.petal_media_ribbon_waveform]?.apply {
+                gone = true
+                alpha = 0f
+            }
+            lastPetalStyle = endHostState.petalStyle
             layoutController.setState(
                 result,
-                applyImmediately,
+                // The host owns the morph; bin any tween left running by the previous style.
+                applyLayoutImmediately,
                 shouldAnimate,
                 animationDuration,
                 animationDelay,
@@ -656,9 +912,13 @@ constructor(
     ): TransitionViewState? {
         var result = viewState?.copy(outState) ?: return null
         val state = mediaHostStatesManager.mediaHostStates[location]
+        val style = state?.petalStyle ?: com.android.systemui.petalos.PetalMediaStyle.Stock
+        val concept = style == com.android.systemui.petalos.PetalMediaStyle.Lockscreen ||
+            (PetalConfig.isQsSkinEnabled(context) && style != com.android.systemui.petalos.PetalMediaStyle.Stock)
         val overrideSize = mediaHostStatesManager.carouselSizes[location]
         var overridden = false
-        overrideSize?.let {
+        // Concept layouts size themselves; a stale carousel height just clips the morph.
+        overrideSize?.takeIf { !concept }?.let {
             if (
                 result.measureHeight != it.measuredHeight || result.measureWidth != it.measuredWidth
             ) {
@@ -695,21 +955,113 @@ constructor(
     }
 
     private fun loadLayoutConstraints() {
-        // These XML resources contain ConstraintSets that will apply to this player's layout
+        // Stock geometry starts here; Petal shoves it around later.
         collapsedLayout.load(context, R.xml.media_session_collapsed)
         expandedLayout.load(context, R.xml.media_session_expanded)
+        listOf(collapsedLayout, expandedLayout).forEach { layout ->
+            listOf(R.id.petal_media_cover, R.id.petal_media_elapsed, R.id.petal_media_duration,
+                R.id.petal_media_output, R.id.petal_media_ribbon_waveform)
+                .forEach { layout.setVisibility(it, View.GONE); layout.setAlpha(it, 0f) }
+        }
         refreshState()
     }
 
-    /**
-     * Retrieves the [TransitionViewState] and [MediaHostState] of a [@MediaLocation]. In the event
-     * of [location] not being visible, [locationWhenHidden] will be used instead.
-     *
-     * @param location Target
-     * @param locationWhenHidden Location that will be used when the target is not
-     *   [MediaHost.visible]
-     * @return State require for executing a transition, and also the respective [MediaHost].
-     */
+    fun setPetalPaintArtwork(bitmap: android.graphics.Bitmap?) {
+        petalCardBackground.setArtwork(bitmap)
+    }
+
+    fun deviceNameVisibility(stockVisible: Boolean): Int {
+        val fallback = if (stockVisible) View.VISIBLE else View.GONE
+        val style = transitionLayout?.getTag(R.id.petal_media_cover) as? com.android.systemui.petalos.PetalMediaStyle
+            ?: com.android.systemui.petalos.PetalMediaStyle.Stock
+        return when (style) {
+            com.android.systemui.petalos.PetalMediaStyle.Stock -> fallback
+            com.android.systemui.petalos.PetalMediaStyle.Lockscreen -> View.GONE
+            com.android.systemui.petalos.PetalMediaStyle.LargeProgress,
+            com.android.systemui.petalos.PetalMediaStyle.Mini ->
+                if (PetalConfig.isQsSkinEnabled(context)) View.GONE else fallback
+            com.android.systemui.petalos.PetalMediaStyle.Split ->
+                if (PetalConfig.isQsSkinEnabled(context)) View.VISIBLE else fallback
+        }
+    }
+
+    // pill swaps equalizer <-> label on expand; fade the outgoing piece instead of teleporting it
+    private fun fadeSeamless(toSplit: Boolean, animate: Boolean) {
+        val root = transitionLayout ?: return
+        val button = root.findViewById<View>(R.id.media_seamless_button)
+        val equalizer = root.findViewById<View>(R.id.petal_media_equalizer)
+        button?.animate()?.cancel()
+        equalizer?.animate()?.cancel()
+        if (!animate) {
+            button?.alpha = 1f
+            equalizer?.alpha = 1f
+            return
+        }
+        val fadeOutIn = { v: View? ->
+            v?.animate()?.setDuration(120L)?.alpha(0f)?.withEndAction {
+                v?.animate()?.setDuration(180L)?.alpha(1f)?.start()
+            }?.start()
+        }
+        // one of the two is GONE depending on split; fade the visible piece only
+        fadeOutIn(if (toSplit) equalizer else button)
+    }
+
+    private fun petalArtworkFlowStrength(style: com.android.systemui.petalos.PetalMediaStyle): Float = when (style) {
+        com.android.systemui.petalos.PetalMediaStyle.LargeProgress -> 1f
+        com.android.systemui.petalos.PetalMediaStyle.Lockscreen,
+        com.android.systemui.petalos.PetalMediaStyle.Stock,
+        com.android.systemui.petalos.PetalMediaStyle.Split,
+        com.android.systemui.petalos.PetalMediaStyle.Mini -> 0f
+    }
+
+    private fun petalGlassStrength(style: com.android.systemui.petalos.PetalMediaStyle): Float = when (style) {
+        com.android.systemui.petalos.PetalMediaStyle.LargeProgress,
+        com.android.systemui.petalos.PetalMediaStyle.Mini -> 0f
+        com.android.systemui.petalos.PetalMediaStyle.Stock,
+        com.android.systemui.petalos.PetalMediaStyle.Split,
+        com.android.systemui.petalos.PetalMediaStyle.Lockscreen -> 1f
+    }
+
+    private fun updatePetalOutputControls(split: Boolean) {
+        val root = transitionLayout ?: return
+        val density = context.resources.displayMetrics.density
+        fun px(dp: Int) = (dp * density).toInt()
+        root.findViewById<android.widget.LinearLayout>(R.id.media_seamless)?.apply {
+            setPadding(0, 0, 0, 0)
+            gravity = android.view.Gravity.CENTER
+        }
+        root.findViewById<android.widget.LinearLayout>(R.id.media_seamless_button)?.apply {
+            gravity = android.view.Gravity.CENTER
+            setPadding(px(6), 0, px(6), 0)
+            layoutParams?.width = ViewGroup.LayoutParams.MATCH_PARENT
+            layoutParams?.height = ViewGroup.LayoutParams.MATCH_PARENT
+            backgroundTintList = android.content.res.ColorStateList.valueOf(0x22FFFFFF)
+        }
+        root.findViewById<android.widget.ImageView>(R.id.media_seamless_image)?.apply {
+            layoutParams?.width = px(16)
+            layoutParams?.height = px(16)
+            alpha = 1f
+            visibility = if (split) View.VISIBLE else View.GONE
+        }
+        root.findViewById<com.android.systemui.island.render.EqualizerView>(R.id.petal_media_equalizer)?.apply {
+            visibility = if (split) View.GONE else View.VISIBLE
+            alpha = 1f
+            active = seekBarViewModel.progress.value?.playing == true
+        }
+        root.findViewById<android.widget.TextView>(R.id.media_seamless_text)?.apply {
+            textSize = 11f
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            alpha = 1f
+            visibility = View.VISIBLE
+            layoutParams = android.widget.LinearLayout.LayoutParams(
+                if (split) 0 else ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                if (split) 1f else 0f,
+            ).apply { marginStart = px(4) }
+        }
+    }
+
+    // Grab the host's state with its actual size override.
     private fun obtainViewStateForLocation(@MediaLocation location: Int): TransitionViewState? {
         val mediaHostState = mediaHostStatesManager.mediaHostStates[location] ?: return null
         MediaControlsInComposeFlag.assertInLegacyMode()
@@ -725,6 +1077,9 @@ constructor(
 
     private fun updateFontPerLocation(viewHolder: MediaViewHolder?, location: Int) {
         when (location) {
+            MediaHierarchyManager.LOCATION_LOCKSCREEN ->
+                viewHolder?.updateFontFamily(Typeface.create("sans-serif", Typeface.BOLD),
+                    Typeface.create("sans-serif", Typeface.NORMAL), labelMediumTF)
             MediaHierarchyManager.LOCATION_COMMUNAL_HUB ->
                 viewHolder?.updateFontFamily(headlineSmallTF, titleMediumTF, labelMediumTF)
             else ->
@@ -818,4 +1173,7 @@ private data class CacheKey(
     var heightMeasureSpec: Int = -1,
     var expansion: Float = 0.0f,
     var gutsVisible: Boolean = false,
+    var expandedMatchesParentHeight: Boolean = false,
+    var petalStyle: com.android.systemui.petalos.PetalMediaStyle =
+        com.android.systemui.petalos.PetalMediaStyle.Stock,
 )

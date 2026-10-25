@@ -62,6 +62,9 @@ public final class BackgroundBlurDrawable extends Drawable {
     // Confined to UiThread. The values are copied into a BlurRegion, which lives on
     // RenderThread to avoid interference with UiThread updates.
     private int mBlurRadius;
+    private float mRefractionStrength;
+    private float mRefractionBand;
+    private float mRefractionChromatic;
     private float mCornerRadiusTL;
     private float mCornerRadiusTR;
     private float mCornerRadiusBL;
@@ -144,6 +147,21 @@ public final class BackgroundBlurDrawable extends Drawable {
     public void setBlurRadius(int blurRadius) {
         if (mBlurRadius != blurRadius) {
             mBlurRadius = blurRadius;
+            invalidateSelf();
+            mAggregator.onBlurDrawableUpdated(this);
+        }
+    }
+
+    /** Sets the backdrop lens displacement, rim width and chromatic split, in pixels. */
+    public void setRefraction(float strength, float band, float chromatic) {
+        strength = Float.isFinite(strength) ? Math.max(0f, strength) : 0f;
+        band = Float.isFinite(band) ? Math.max(0f, band) : 0f;
+        chromatic = Float.isFinite(chromatic) ? Math.max(0f, chromatic) : 0f;
+        if (mRefractionStrength != strength || mRefractionBand != band
+                || mRefractionChromatic != chromatic) {
+            mRefractionStrength = strength;
+            mRefractionBand = band;
+            mRefractionChromatic = chromatic;
             invalidateSelf();
             mAggregator.onBlurDrawableUpdated(this);
         }
@@ -260,7 +278,9 @@ public final class BackgroundBlurDrawable extends Drawable {
         @UiThread
         void onBlurDrawableUpdated(BackgroundBlurDrawable drawable) {
             final boolean shouldBeDrawn =
-                    drawable.mAlpha != 0 && drawable.mBlurRadius > 0 && drawable.mVisible;
+                    drawable.mAlpha != 0 && drawable.mVisible
+                    && (drawable.mBlurRadius > 0
+                            || (drawable.mRefractionStrength > 0 && drawable.mRefractionBand > 0));
             final boolean isDrawn = mDrawables.contains(drawable);
             if (shouldBeDrawn) {
                 mHasUiUpdates = true;
@@ -431,6 +451,9 @@ public final class BackgroundBlurDrawable extends Drawable {
      */
     public static final class BlurRegion {
         public final int blurRadius;
+        public final float refractionStrength;
+        public final float refractionBand;
+        public final float refractionChromatic;
         public final float cornerRadiusTL;
         public final float cornerRadiusTR;
         public final float cornerRadiusBL;
@@ -441,6 +464,9 @@ public final class BackgroundBlurDrawable extends Drawable {
         BlurRegion(BackgroundBlurDrawable drawable) {
             alpha = drawable.mAlpha;
             blurRadius = drawable.mBlurRadius;
+            refractionStrength = drawable.mRefractionStrength;
+            refractionBand = drawable.mRefractionBand;
+            refractionChromatic = drawable.mRefractionChromatic;
             cornerRadiusTL = drawable.mCornerRadiusTL;
             cornerRadiusTR = drawable.mCornerRadiusTR;
             cornerRadiusBL = drawable.mCornerRadiusBL;
@@ -452,7 +478,7 @@ public final class BackgroundBlurDrawable extends Drawable {
          * Serializes this class into a float array that's more JNI friendly.
          */
         float[] toFloatArray() {
-            final float[] floatArray = new float[10];
+            final float[] floatArray = new float[13];
             floatArray[0] = blurRadius;
             floatArray[1] = alpha;
             floatArray[2] = rect.left;
@@ -463,6 +489,9 @@ public final class BackgroundBlurDrawable extends Drawable {
             floatArray[7] = cornerRadiusTR;
             floatArray[8] = cornerRadiusBL;
             floatArray[9] = cornerRadiusBR;
+            floatArray[10] = refractionStrength;
+            floatArray[11] = refractionBand;
+            floatArray[12] = refractionChromatic;
             return floatArray;
         }
 

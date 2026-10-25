@@ -259,6 +259,7 @@ public class KeyguardPatternView extends KeyguardInputView
     }
 
     public void startAppearAnimation() {
+        PetalPatternStyle.resetGlass(mLockPatternView);
         enableClipping(false);
         setAlpha(0f);
         setTranslationY(mAppearAnimationUtils.getStartTranslation());
@@ -287,6 +288,7 @@ public class KeyguardPatternView extends KeyguardInputView
 
     public boolean startDisappearAnimation(boolean needsSlowUnlockTransition,
             final Runnable finishRunnable) {
+        PetalPatternStyle.fadeOutGlass(mLockPatternView);
         float durationMultiplier = needsSlowUnlockTransition ? DISAPPEAR_MULTIPLIER_LOCKED : 1f;
         mLockPatternView.clearPattern();
         enableClipping(false);

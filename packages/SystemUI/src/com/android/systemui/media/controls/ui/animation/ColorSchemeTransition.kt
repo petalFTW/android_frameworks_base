@@ -140,6 +140,10 @@ internal constructor(
 
     private val primaryColor: AnimatingColorTransition by lazy {
         animatingColorTransitionFactory(primaryDefault, ::primaryFromScheme) { primaryColor ->
+            val style = mediaViewHolder.player.getTag(com.android.systemui.res.R.id.petal_media_cover)
+            val concept = style == com.android.systemui.petalos.PetalMediaStyle.Lockscreen ||
+                (com.android.systemui.petalos.PetalQsSkin.isEnabled(context) &&
+                    style != null && style != com.android.systemui.petalos.PetalMediaStyle.Stock)
             val petalSkin = com.android.systemui.petalos.PetalQsSkin.isEnabled(context)
             val dark = com.android.systemui.petalos.PetalQsSkin.isDark(context)
             val petalPrimary = if (dark) 0xffe1e5ed.toInt() else 0xff2c2e36.toInt()
@@ -147,7 +151,8 @@ internal constructor(
             val primaryColorList = ColorStateList.valueOf(
                 if (petalSkin) petalPrimary else primaryColor
             )
-            mediaViewHolder.actionPlayPause.backgroundTintList = primaryColorList
+            mediaViewHolder.actionPlayPause.backgroundTintList =
+                if (petalSkin) null else primaryColorList
             mediaViewHolder.seamlessButton.backgroundTintList =
                 if (petalSkin) ColorStateList.valueOf(petalChip) else primaryColorList
             (mediaViewHolder.seamlessButton.background as? RippleDrawable)?.let {
@@ -155,14 +160,25 @@ internal constructor(
                 it.effectColor = primaryColorList
             }
             mediaViewHolder.seekBar.progressBackgroundTintList = primaryColorList
+            if (concept) {
+                mediaViewHolder.actionPlayPause.backgroundTintList = null
+                mediaViewHolder.seamlessButton.backgroundTintList = ColorStateList.valueOf(0x22FFFFFF)
+                mediaViewHolder.seekBar.progressTintList = ColorStateList.valueOf(
+                    context.getColor(android.R.color.system_accent1_500))
+                mediaViewHolder.seekBar.progressBackgroundTintList = ColorStateList.valueOf(0x40FFFFFF)
+            }
         }
     }
 
     private val onPrimaryColor: AnimatingColorTransition by lazy {
         animatingColorTransitionFactory(onPrimaryDefault, ::onPrimaryFromScheme) { onPrimaryColor ->
+            val style = mediaViewHolder.player.getTag(com.android.systemui.res.R.id.petal_media_cover)
+            val concept = style == com.android.systemui.petalos.PetalMediaStyle.Lockscreen ||
+                (com.android.systemui.petalos.PetalQsSkin.isEnabled(context) &&
+                    style != null && style != com.android.systemui.petalos.PetalMediaStyle.Stock)
             val petalSkin = com.android.systemui.petalos.PetalQsSkin.isEnabled(context)
             val dark = com.android.systemui.petalos.PetalQsSkin.isDark(context)
-            val petalOnPrimary = if (dark) 0xff202127.toInt() else 0xfff5f5f8.toInt()
+            val petalOnPrimary = if (dark) 0xfff5f5f8.toInt() else 0xff202127.toInt()
             val petalChipContent = if (dark) 0xfff5f5f8.toInt() else 0xff202127.toInt()
             val onPrimaryColorList = ColorStateList.valueOf(
                 if (petalSkin) petalOnPrimary else onPrimaryColor
@@ -171,6 +187,12 @@ internal constructor(
             mediaViewHolder.actionPlayPause.imageTintList = onPrimaryColorList
             mediaViewHolder.seamlessText.setTextColor(chipColor)
             mediaViewHolder.seamlessIcon.imageTintList = ColorStateList.valueOf(chipColor)
+            if (concept) {
+                mediaViewHolder.actionPlayPause.imageTintList = ColorStateList.valueOf(
+                    com.android.systemui.petalos.PetalQsSkin.glyphOnBackground(
+                        context.getColor(android.R.color.system_accent1_500)))
+                mediaViewHolder.seamlessIcon.imageTintList = ColorStateList.valueOf(android.graphics.Color.WHITE)
+            }
         }
     }
 
