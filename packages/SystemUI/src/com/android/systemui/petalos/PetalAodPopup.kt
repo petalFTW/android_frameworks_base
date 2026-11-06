@@ -105,10 +105,10 @@ class PetalAodPopup @Inject constructor(
         dozeTransitions.addCallback(dozeCallback)
     }
 
-    private fun enabled() = Settings.Secure.getInt(context.contentResolver, KEY_ENABLED, 0) != 0
+    private fun enabled() = Settings.Secure.getInt(context.contentResolver, KEY_ENABLED, 1) != 0
 
     // 0 = pure black, 1 = follow the notification look
-    private fun styled() = Settings.Secure.getInt(context.contentResolver, KEY_STYLE, 0) == 1
+    private fun styled() = Settings.Secure.getInt(context.contentResolver, KEY_STYLE, 1) == 1
 
     // just remembers the notif. the actual pulse comes from DozeTriggers, which does the prox check
     private fun maybeQueue(entry: NotificationEntry) {

@@ -117,7 +117,7 @@ public class AmbientDisplayConfiguration {
      * @hide
      */
     public boolean petalAodPopupEnabled(int user) {
-        return boolSetting("petal_aod_popup_enabled", user, 0)
+        return boolSetting("petal_aod_popup_enabled", user, 1)
                 && pulseOnNotificationAvailable();
     }
 

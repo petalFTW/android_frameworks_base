@@ -24,7 +24,7 @@ public final class NotificationStyleController implements TunerService.Tunable {
     private final WindowManager mWindowManager;
     private final PowerManager mPowerManager;
     private final ArrayList<Runnable> mListeners = new ArrayList<>();
-    private int mStyle;
+    private int mStyle = PetalConfig.DEFAULT_NOTIFICATION_STYLE;
     private boolean mLegacyGlass = true;
     private boolean mBlurEnabled;
     private boolean mInteractive;
@@ -93,7 +93,9 @@ public final class NotificationStyleController implements TunerService.Tunable {
         notifyChanged();
     }
 
+    // unset = silk now, garbage still falls back to the stock look
     static int parseStyle(String value) {
+        if (value == null) return PetalConfig.DEFAULT_NOTIFICATION_STYLE;
         try {
             int style = Integer.parseInt(value);
             return style >= 0 && style <= 2 ? style : 0;
