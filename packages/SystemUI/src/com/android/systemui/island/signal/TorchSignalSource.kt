@@ -22,31 +22,46 @@ import android.hardware.camera2.CameraManager
 import android.os.Handler
 import android.os.Looper
 import com.android.systemui.dagger.qualifiers.Application
+import com.android.systemui.dagger.qualifiers.Background
 import com.android.systemui.island.Cluster
 import com.android.systemui.island.Form
 import com.android.systemui.island.IslandSignal
 import com.android.systemui.island.SignalKind
-import com.android.systemui.island.presenter.SystemChipPayload
+import com.android.systemui.island.presenter.TorchPayload
 import com.android.systemui.island.settings.IslandSettings
+import java.util.concurrent.Executor
 import javax.inject.Inject
 
 private const val ACCENT_TORCH = 0xFFFFD60A.toInt()
 
-// torch on shows a chip, tapping it turns the torch off
+// torch on shows a chip, it opens into a brightness meter if the flash can dim
 class TorchSignalSource @Inject constructor(
     @Application private val context: Context,
     private val settings: IslandSettings,
     private val router: SignalRouter,
+    @Background private val bgExecutor: Executor,
 ) {
     private val cameraManager = context.getSystemService(CameraManager::class.java)
     private val handler = Handler(Looper.getMainLooper())
     private val signalId = "torch"
 
+    // already showing this camera, turning the level re-fires the mode callback
+    @Volatile private var litCamera: String? = null
+    @Volatile private var wantedLevel = 0
+
     private val torchCallback =
         object : CameraManager.TorchCallback() {
             override fun onTorchModeChanged(cameraId: String, enabled: Boolean) {
-                if (enabled && isBackFlash(cameraId)) emitTorch(cameraId)
-                else if (!enabled) router.removeSignal(signalId)
+                if (enabled && isBackFlash(cameraId)) {
+                    emitTorch(cameraId)
+                } else if (!enabled) {
+                    litCamera = null
+                    router.removeSignal(signalId)
+                }
+            }
+
+            override fun onTorchStrengthLevelChanged(cameraId: String, newStrengthLevel: Int) {
+                if (cameraId == litCamera) wantedLevel = newStrengthLevel
             }
         }
 
@@ -55,7 +70,13 @@ class TorchSignalSource @Inject constructor(
     }
 
     private fun emitTorch(cameraId: String) {
-        if (!settings.torchEnabled()) return
+        if (!settings.torchEnabled() || litCamera == cameraId) return
+        litCamera = cameraId
+        wantedLevel = runCatching { cameraManager.getTorchStrengthLevel(cameraId) }.getOrDefault(1)
+        val maxLevel = runCatching {
+            cameraManager.getCameraCharacteristics(cameraId)
+                .get(CameraCharacteristics.FLASH_INFO_STRENGTH_MAXIMUM_LEVEL)
+        }.getOrNull() ?: 1
         router.emit(
             IslandSignal(
                 id = signalId,
@@ -64,15 +85,27 @@ class TorchSignalSource @Inject constructor(
                 priority = 80,
                 initialForm = Form.CAPSULE,
                 ttlMs = 0L,
-                payload = SystemChipPayload(
-                    label = "Torch",
+                payload = TorchPayload(
                     accent = ACCENT_TORCH,
-                    toggleAction = {
+                    maxLevel = maxLevel,
+                    currentLevel = { wantedLevel },
+                    setLevel = { level -> setLevel(cameraId, level) },
+                    turnOff = {
                         runCatching { cameraManager.setTorchMode(cameraId, false) }
                     },
                 ),
             ),
         )
+    }
+
+    // binder call, a drag on the main thread would stutter. stale levels just get skipped
+    private fun setLevel(cameraId: String, level: Int) {
+        wantedLevel = level
+        bgExecutor.execute {
+            if (wantedLevel == level && litCamera == cameraId) {
+                runCatching { cameraManager.turnOnTorchWithStrengthLevel(cameraId, level) }
+            }
+        }
     }
 
     private fun isBackFlash(cameraId: String): Boolean {

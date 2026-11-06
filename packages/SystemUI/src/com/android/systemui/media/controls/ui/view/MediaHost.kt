@@ -142,10 +142,18 @@ class MediaHost(
                 override fun onViewAttachedToWindow(v: View) {
                     setListeningToMediaData(true)
                     updateViewVisibility()
+                    // the style may have changed while detached
+                    hostView.requestLayout()
                 }
 
                 override fun onViewDetachedFromWindow(v: View) {
-                    setListeningToMediaData(false)
+                    // QS hosts are singletons detached whenever the shade closes. Missing a
+                    // player load while closed left them GONE, so the first open laid out a
+                    // zero-height slot (the sliver) until the attach caught up a frame later.
+                    if (location != MediaHierarchyManager.LOCATION_QQS &&
+                        location != MediaHierarchyManager.LOCATION_QS) {
+                        setListeningToMediaData(false)
+                    }
                 }
             }
         )
@@ -175,8 +183,13 @@ class MediaHost(
             val styleChanged = mediaHostStatesManager.mediaHostStates[location]?.petalStyle !=
                 state.petalStyle
             mediaHostStatesManager.updateHostState(location, state)
-            // the player shrank, don't leave its old bloody parking space behind
-            if (styleChanged) hostView.requestLayout()
+            // the player shrank, don't leave its old bloody parking space behind. A request made
+            // mid-layout or while detached (lock screen -> shade) can be dropped, which left QQS
+            // sized for the large player around a slim one; ask again on the next frame.
+            if (styleChanged) {
+                hostView.requestLayout()
+                hostView.post { hostView.requestLayout() }
+            }
         }
 
         mediaHostStatesManager.updateHostState(location, state)

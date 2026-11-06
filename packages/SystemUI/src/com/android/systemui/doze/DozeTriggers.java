@@ -256,7 +256,10 @@ public class DozeTriggers implements DozeMachine.Part {
             return;
         }
         mNotificationPulseTime = SystemClock.elapsedRealtime();
-        if (!mConfig.pulseOnNotificationEnabled(mSelectedUserInteractor.getSelectedUserId())) {
+        final int pulseUser = mSelectedUserInteractor.getSelectedUserId();
+        // petal popup draws its card on top of this pulse instead of waking the whole phone
+        if (!mConfig.pulseOnNotificationEnabled(pulseUser)
+                && !mConfig.petalAodPopupEnabled(pulseUser)) {
             runIfNotNull(onPulseSuppressedListener);
             mDozeLog.tracePulseDropped("pulseOnNotificationsDisabled");
             return;

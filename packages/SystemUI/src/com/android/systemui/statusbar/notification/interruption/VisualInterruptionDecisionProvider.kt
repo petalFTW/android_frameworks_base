@@ -148,6 +148,9 @@ interface VisualInterruptionDecisionProvider : CoreStartable {
      */
     fun makeAndLogHeadsUpDecision(entry: NotificationEntry): Decision
 
+    // aod popup uses this, legacy wrapper just falls back to heads-up
+    fun makeUnloggedPopupDecision(entry: NotificationEntry): Decision = makeUnloggedHeadsUpDecision(entry)
+
     /**
      * Decides whether a [notification][entry] should launch a full-screen intent or not, but does
      * not log that decision.

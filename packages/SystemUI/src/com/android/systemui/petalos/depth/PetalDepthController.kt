@@ -170,7 +170,8 @@ class PetalDepthController @Inject constructor(
 
     // --- tilt --------------------------------------------------------------------------
 
-    private var parallaxEnabled = true
+    // off till settings say otherwise, same default as PetalConfig
+    private var parallaxEnabled = false
     // tilt strength in dp, set in depth studio
     private var tiltMaxDp = DEFAULT_TILT_DP
     private var tiltX = 0f
@@ -214,7 +215,7 @@ class PetalDepthController @Inject constructor(
             if (event.sensor.type != Sensor.TYPE_ROTATION_VECTOR &&
                 event.sensor.type != Sensor.TYPE_GAME_ROTATION_VECTOR) return
             // turn rotation vector into small px offsets
-            if (!sensorRegistered || event.values.any { !it.isFinite() }) return
+            if (!sensorRegistered || !parallaxEnabled || event.values.any { !it.isFinite() }) return
             SensorManager.getRotationMatrixFromVector(tiltMatrix, event.values)
             val rotation = subjectView.display?.rotation ?: android.view.Surface.ROTATION_0
             val axes = when (rotation) {

@@ -50,6 +50,8 @@ class IslandRootView(
     }
     private val shadowPath = Path()
     private val shadowRect = RectF()
+    private val bodyPath = Path()
+    private val bodyRect = RectF()
     private var dark = true
 
     init {
@@ -113,6 +115,16 @@ class IslandRootView(
         val save = canvas.save()
         canvas.translate(island.left.toFloat(), island.top.toFloat())
         canvas.concat(island.matrix)
+        // chip's see-through now, so cut the island out of the shadow. done as a path op on the
+        // cpu, NOT clipOutPath. clip + blur mask on vulkan is the prime suspect for the v58 gpu hangs
+        bodyRect.set(0f, 0f, island.width.toFloat(), island.height.toFloat())
+        bodyPath.reset()
+        bodyPath.addRoundRect(bodyRect, r, r, Path.Direction.CW)
+        if (!shadowPath.op(bodyPath, Path.Op.DIFFERENCE)) {
+            // op failed, skip the shadow this frame rather than risk the old route
+            canvas.restoreToCount(save)
+            return
+        }
         canvas.drawPath(shadowPath, shadowPaint)
         canvas.restoreToCount(save)
     }

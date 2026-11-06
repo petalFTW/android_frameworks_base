@@ -99,6 +99,7 @@ constructor(
     private val statusBarNotificationChipsInteractor: StatusBarNotificationChipsInteractor,
     private val statusBarChipsUiEventLogger: StatusBarChipsUiEventLogger,
     private val islandSettings: com.android.systemui.island.settings.IslandSettings,
+    private val statusBarStateController: com.android.systemui.plugins.statusbar.StatusBarStateController,
     @IncomingHeader private val mIncomingHeaderController: NodeController,
     @Main private val mExecutor: DelayableExecutor,
 ) : Coordinator {
@@ -424,8 +425,11 @@ constructor(
      * Island replacement owns banner presentation, including group summaries and notifications
      * filtered by the island. Per-key tracking lets those stock banners slip through.
      */
+    // not while dozing tho. doze pulses ride on HUNs and the island isn't even on screen,
+    // suppressing here killed every notif pulse (and the petal aod popup that rides them)
     private fun shouldSuppressHeadsUpForIsland(): Boolean =
-        islandSettings.isEnabled() && islandSettings.replaceHeadsUp()
+        islandSettings.isEnabled() && islandSettings.replaceHeadsUp() &&
+            !statusBarStateController.isDozing
 
     private fun isDisqualifiedChild(entry: NotificationEntry): Boolean {
         if (entry.channel == null || entry.channel.id == null) {

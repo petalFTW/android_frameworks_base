@@ -92,6 +92,7 @@ public class AmbientDisplayConfiguration {
     /** @hide */
     public boolean enabled(int user) {
         return pulseOnNotificationEnabled(user)
+                || petalAodPopupEnabled(user)
                 || pulseOnLongPressEnabled(user)
                 || alwaysOnEnabled(user)
                 || wakeLockScreenGestureEnabled(user)
@@ -107,6 +108,16 @@ public class AmbientDisplayConfiguration {
     public boolean pulseOnNotificationEnabled(int user) {
         return boolSetting(Settings.Secure.DOZE_ENABLED, user,
                 mDozeEnabledByDefault ? 1 : 0)
+                && pulseOnNotificationAvailable();
+    }
+
+    /**
+     * petal aod popup rides the doze pulse, so the doze dream has to run for it.
+     * own key so the stock "new notifications" toggle doesn't flip itself on
+     * @hide
+     */
+    public boolean petalAodPopupEnabled(int user) {
+        return boolSetting("petal_aod_popup_enabled", user, 0)
                 && pulseOnNotificationAvailable();
     }
 

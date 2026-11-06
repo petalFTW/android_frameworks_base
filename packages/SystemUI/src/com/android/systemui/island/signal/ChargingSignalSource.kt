@@ -27,6 +27,7 @@ import com.android.systemui.island.Form
 import com.android.systemui.island.IslandSignal
 import com.android.systemui.island.SignalKind
 import com.android.systemui.island.presenter.SystemChipPayload
+import com.android.systemui.island.render.IslandGlyph
 import com.android.systemui.island.settings.IslandSettings
 import javax.inject.Inject
 
@@ -65,7 +66,12 @@ class ChargingSignalSource @Inject constructor(
                 priority = 50,
                 initialForm = Form.CAPSULE,
                 ttlMs = 1L,
-                payload = SystemChipPayload("$level% \u00b7 Charging", ACCENT_CHARGING),
+                payload = SystemChipPayload(
+                    label = "$level% \u00b7 Charging",
+                    accent = ACCENT_CHARGING,
+                    glyph = IslandGlyph.CHARGING,
+                    expandable = false,
+                ),
             ),
         )
     }

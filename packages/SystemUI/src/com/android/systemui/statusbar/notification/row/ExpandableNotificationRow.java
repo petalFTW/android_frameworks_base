@@ -1794,8 +1794,7 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
 
     /** Whether the petalOS notification glass restyle is enabled via the petal hub. */
     private boolean glassNotificationsEnabled() {
-        return Settings.Secure.getInt(getContext().getContentResolver(),
-                IslandSettings.KEY_GLASS_NOTIFICATIONS, 1) != 0;
+        return mBackgroundNormal != null && mBackgroundNormal.hasPetalFinish();
     }
 
     public void closeRemoteInput() {
@@ -4203,6 +4202,11 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
      * Updates the parent and children backgrounds in a group based on the expansion state.
      */
     public void updateBackgroundForGroupState() {
+        boolean usesParentMaterial = isChildInGroup()
+                && mNotificationParent.ownsPetalGroupMaterial();
+        if (mBackgroundNormal != null) {
+            mBackgroundNormal.setUsesParentMaterial(usesParentMaterial);
+        }
         if (mIsSummaryWithChildren && isBundle()) {
             // For Bundles we let the BundleHeader show its background permanently. This is
             // possible because collapsed Bundles don't preview their children unlike summaries.
@@ -4211,7 +4215,10 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
             mShowNoBackground = true;
             mChildrenContainer.updateHeaderForExpansion(mShowNoBackground);
         } else if (mIsSummaryWithChildren) {
-            mShowNoBackground = !mShowGroupBackgroundWhenExpanded && isGroupExpanded()
+            // Keep one continuous surface behind both the app header and every child. Handing
+            // the surface to each child resets the sheen and leaves a mismatched header strip.
+            mShowNoBackground = !ownsPetalGroupMaterial()
+                    && !mShowGroupBackgroundWhenExpanded && isGroupExpanded()
                     && !isGroupExpansionChanging() && !isUserLocked();
             mChildrenContainer.updateHeaderForExpansion(mShowNoBackground);
             List<ExpandableNotificationRow> children = mChildrenContainer.getAttachedChildren();
@@ -4220,7 +4227,14 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
             }
         } else if (isChildInGroup()) {
             final int childColor = getShowingLayout().getBackgroundColorForExpansionState();
-            if ((Flags.notificationRowTransparency() || notificationsRedesignTemplates())
+            if (usesParentMaterial) {
+                // Preserve explicit app colorization while avoiding another blur/rim/sheened card
+                // for ordinary children. The summary owns the material throughout expansion.
+                boolean showCustomSurface = childColor != Color.TRANSPARENT
+                        && (isGroupExpanded() || mNotificationParent.isGroupExpansionChanging()
+                        || mNotificationParent.isUserLocked());
+                mShowNoBackground = !showCustomSurface;
+            } else if ((Flags.notificationRowTransparency() || notificationsRedesignTemplates())
                     && childColor == Color.TRANSPARENT) {
                 // If child is not customizing its background color, switch from the parent to
                 // the child background when the expansion finishes.
@@ -4239,6 +4253,11 @@ public class ExpandableNotificationRow extends ActivatableNotificationView
         }
         updateOutline();
         updateBackground();
+    }
+
+    private boolean ownsPetalGroupMaterial() {
+        // Bundles have a distinct header/background contract; this applies to one app's group.
+        return mIsSummaryWithChildren && !isBundle() && glassNotificationsEnabled();
     }
 
     @Override

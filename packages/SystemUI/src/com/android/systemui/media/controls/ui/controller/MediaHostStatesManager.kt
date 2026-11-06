@@ -35,6 +35,16 @@ private val TAG = "MediaHostStatesManager"
 @SysUISingleton
 class MediaHostStatesManager @Inject constructor(dumpManager: DumpManager) : Dumpable {
 
+    companion object {
+        /**
+         * Bumped whenever a player view attaches or QQS flips style. Compose hosts key their
+         * AndroidView on it: with the shade closed a host's requestLayout never reaches Compose,
+         * so a 0x0 first measure or a stale style height sticks until a recompose measures it.
+         */
+        @JvmStatic
+        val playersAttached = kotlinx.coroutines.flow.MutableStateFlow(0)
+    }
+
     private val callbacks: MutableSet<Callback> = mutableSetOf()
     private val controllers: MutableSet<MediaViewController> = mutableSetOf()
 
@@ -100,7 +110,10 @@ class MediaHostStatesManager @Inject constructor(dumpManager: DumpManager) : Dum
             }
             // Set carousel size if result measurements changed. This avoids setting carousel
             // size when this method gets called before the addition of media view controllers
-            if (!carouselSizes.contains(location) || changed) {
+            // Only cache a real measurement: caching 0x0 from a state change that carried no
+            // measurement left the QQS slot sized 0x0 (its host always reports the cached size).
+            if (changed || (!carouselSizes.contains(location) &&
+                    hostState.measurementInput != null)) {
                 carouselSizes[location] = result
             }
             return carouselSizes[location] ?: result

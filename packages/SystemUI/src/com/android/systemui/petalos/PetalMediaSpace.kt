@@ -20,4 +20,23 @@ object PetalMediaSpace {
     fun setAvailableShadeHeight(pixels: Int) {
         shadeHeight.value = pixels.coerceAtLeast(0)
     }
+
+    // Set when the QQS player flips slim <-> large; the stack's next top-padding change then
+    // animates over the same 360ms the player morphs in, instead of jumping or lagging.
+    @Volatile private var styleFlipPendingUntil = 0L
+
+    @JvmStatic
+    fun onPlayerStyleFlip() {
+        styleFlipPendingUntil = android.os.SystemClock.uptimeMillis() + FLIP_WINDOW_MS
+    }
+
+    /** True once per flip, if the padding change arrives within a frame or two of it. */
+    @JvmStatic
+    fun consumeStyleFlip(): Boolean {
+        val pending = android.os.SystemClock.uptimeMillis() <= styleFlipPendingUntil
+        styleFlipPendingUntil = 0L
+        return pending
+    }
+
+    private const val FLIP_WINDOW_MS = 250L
 }

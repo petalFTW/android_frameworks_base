@@ -43,6 +43,15 @@ interface IslandPresenter {
     // wanted height, -1 means use the type default
     fun expandedHeightPx(): Int = -1
 
+    // wanted width, -1 means the usual full-width card
+    fun expandedWidthPx(): Int = -1
+
+    // false keeps it a pill, taps and pulls don't open anything
+    fun canExpand(): Boolean = true
+
+    // little clock and battery row across the top of the card
+    fun showsMiniStatus(): Boolean = true
+
     // accent tint, null for the theme default
     fun tint(): IslandTint? = null
 

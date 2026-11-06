@@ -148,6 +148,12 @@ public final class PetalUtils {
     // path that joins the capsule to the bezel
     public static Path jointPath(boolean left, float cy, float w, float h, float r0, float d,
             float xTail, float edgeX) {
+        return jointPath(left, cy, w, h, r0, d, xTail, edgeX, 0f);
+    }
+
+    // same but the front edge can belly out (+) or cave in (-), for the goo wobble
+    public static Path jointPath(boolean left, float cy, float w, float h, float r0, float d,
+            float xTail, float edgeX, float bulge) {
         float r = Math.max(0f, Math.min(r0, Math.min(w * 0.7f, h / 2f)));
         float yT = cy - h / 2f;
         float yB = cy + h / 2f;
@@ -158,7 +164,11 @@ public final class PetalUtils {
             p.lineTo(0f, yT - d);
             p.quadTo(0f, yT, wr, yT);
             p.quadTo(w, yT, w, yT + r);
-            p.lineTo(w, yB - r);
+            if (bulge != 0f) {
+                p.quadTo(w + bulge, cy, w, yB - r);
+            } else {
+                p.lineTo(w, yB - r);
+            }
             p.quadTo(w, yB, wr, yB);
             p.quadTo(0f, yB, 0f, yB + d);
             p.lineTo(-xTail, yB + d);
@@ -171,7 +181,11 @@ public final class PetalUtils {
             p.lineTo(e, yT - d);
             p.quadTo(e, yT, lr, yT);
             p.quadTo(l, yT, l, yT + r);
-            p.lineTo(l, yB - r);
+            if (bulge != 0f) {
+                p.quadTo(l - bulge, cy, l, yB - r);
+            } else {
+                p.lineTo(l, yB - r);
+            }
             p.quadTo(l, yB, lr, yB);
             p.quadTo(e, yB, e, yB + d);
             p.lineTo(e + xTail, yB + d);

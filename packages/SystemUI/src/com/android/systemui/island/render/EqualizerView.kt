@@ -16,6 +16,7 @@
 
 package com.android.systemui.island.render
 
+import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
@@ -40,6 +41,8 @@ class EqualizerView @JvmOverloads constructor(
     private var gapPx = 0f
     private var maxHeightPx = 0f
     private var running = false
+    private var animationRequested = true
+    private var visibleToUser = false
     private var t = 0f
     private var lastFrameNanos = 0L
 
@@ -51,6 +54,12 @@ class EqualizerView @JvmOverloads constructor(
 
     /** false freezes the bars at 30%. */
     var active: Boolean = true
+        set(value) {
+            if (field == value) return
+            field = value
+            updateAnimation()
+            invalidate()
+        }
 
     fun setBarColor(@ColorInt color: Int) {
         barColor = color
@@ -65,13 +74,31 @@ class EqualizerView @JvmOverloads constructor(
     }
 
     fun start() {
-        if (running || !isAttachedToWindow) return
+        animationRequested = true
+        updateAnimation()
+    }
+
+    private fun canAnimate(): Boolean =
+        animationRequested && active && visibleToUser && isAttachedToWindow &&
+            ValueAnimator.areAnimatorsEnabled()
+
+    private fun updateAnimation() {
+        if (!canAnimate()) {
+            cancelFrames()
+            return
+        }
+        if (running) return
         running = true
         lastFrameNanos = 0L
         Choreographer.getInstance().postFrameCallback(this)
     }
 
     fun stop() {
+        animationRequested = false
+        cancelFrames()
+    }
+
+    private fun cancelFrames() {
         if (!running) return
         running = false
         Choreographer.getInstance().removeFrameCallback(this)
@@ -79,28 +106,35 @@ class EqualizerView @JvmOverloads constructor(
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        if (visibility == VISIBLE) start()
+        updateAnimation()
     }
 
     override fun onDetachedFromWindow() {
+        visibleToUser = false
+        cancelFrames()
         super.onDetachedFromWindow()
-        stop()
     }
 
-    override fun onVisibilityChanged(changedView: View, visibility: Int) {
-        super.onVisibilityChanged(changedView, visibility)
-        if (visibility == VISIBLE) start() else stop()
+    override fun onVisibilityAggregated(isVisible: Boolean) {
+        super.onVisibilityAggregated(isVisible)
+        visibleToUser = isVisible
+        updateAnimation()
     }
 
     override fun doFrame(frameTimeNanos: Long) {
-        if (!running || !isAttachedToWindow) return
+        if (!running) return
+        if (!canAnimate()) {
+            cancelFrames()
+            return
+        }
         if (lastFrameNanos != 0L) {
             val dt = (frameTimeNanos - lastFrameNanos) / 1_000_000_000f
             t += dt
         }
         lastFrameNanos = frameTimeNanos
         invalidate()
-        Choreographer.getInstance().postFrameCallback(this)
+        // ~30fps. every-vsync bars pinned the panel at 120hz the whole song
+        Choreographer.getInstance().postFrameCallbackDelayed(this, FRAME_MS)
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
@@ -128,5 +162,9 @@ class EqualizerView @JvmOverloads constructor(
             canvas.drawRoundRect(barRect, radius, radius, paint)
             x += barWidthPx + gapPx
         }
+    }
+
+    private companion object {
+        const val FRAME_MS = 33L
     }
 }

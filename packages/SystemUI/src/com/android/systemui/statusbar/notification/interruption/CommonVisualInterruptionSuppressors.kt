@@ -118,8 +118,10 @@ class PulseDisabledSuppressor(
     private val ambientDisplayConfiguration: AmbientDisplayConfiguration,
     private val userTracker: UserTracker,
 ) : VisualInterruptionCondition(types = setOf(PULSE), reason = "pulse disabled by user setting") {
+    // petal aod popup piggybacks on the pulse, so it counts as pulse on too
     override fun shouldSuppress(): Boolean =
-        !ambientDisplayConfiguration.pulseOnNotificationEnabled(userTracker.userId)
+        !ambientDisplayConfiguration.pulseOnNotificationEnabled(userTracker.userId) &&
+            !ambientDisplayConfiguration.petalAodPopupEnabled(userTracker.userId)
 }
 
 class PulseBatterySaverSuppressor(private val batteryController: BatteryController) :

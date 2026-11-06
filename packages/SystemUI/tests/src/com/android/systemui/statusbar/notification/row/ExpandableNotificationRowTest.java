@@ -69,6 +69,7 @@ import com.android.systemui.flags.Flags;
 import com.android.systemui.kosmos.KosmosJavaAdapter;
 import com.android.systemui.plugins.statusbar.NotificationMenuRowPlugin;
 import com.android.systemui.plugins.statusbar.StatusBarStateController;
+import com.android.systemui.petalos.NotificationStyleController;
 import com.android.systemui.statusbar.SysuiStatusBarStateController;
 import com.android.systemui.statusbar.notification.AboveShelfChangedListener;
 import com.android.systemui.statusbar.notification.FeedbackIcon;
@@ -130,6 +131,30 @@ public class ExpandableNotificationRowTest extends SysuiTestCase {
         row.setOnKeyguard(false);
 
         assertTrue(row.canShowHeadsUp());
+    }
+
+    @Test
+    @DisableFlags(NotificationBundleUi.FLAG_NAME)
+    public void expandedAppGroup_hasOneMaterialAndNoSeparateHeaderFill() throws Exception {
+        NotificationStyleController styles = NotificationStyleController.get(mContext);
+        int previous = styles.getStyle();
+        try {
+            styles.onTuningChanged(org.petalos.config.PetalConfig.KEY_NOTIFICATION_STYLE, "2");
+            ExpandableNotificationRow group = mKosmos.createRowGroup();
+            mKosmos.getGroupExpansionManager().setGroupExpanded(group.getEntryAdapter(), true);
+            group.updateBackgroundForGroupState();
+
+            // The summary owns one continuous material behind header and children; ordinary
+            // children must not relaunch their own backdrop/sheen per card.
+            assertEquals(View.VISIBLE, group.mBackgroundNormal.getVisibility());
+            assertEquals(View.INVISIBLE,
+                    group.getChildNotificationAt(0).mBackgroundNormal.getVisibility());
+            assertEquals(View.INVISIBLE,
+                    group.getChildNotificationAt(1).mBackgroundNormal.getVisibility());
+        } finally {
+            styles.onTuningChanged(org.petalos.config.PetalConfig.KEY_NOTIFICATION_STYLE,
+                    Integer.toString(previous));
+        }
     }
 
     @Test

@@ -102,6 +102,14 @@ public class PetalPowerMenuView extends View implements Choreographer.FrameCallb
 
     private final PetalSpring[] mSprings = new PetalSpring[3];
     private final PetalSpring[] mPop = new PetalSpring[3];
+    // the body is its own goo now, used to just copy the busiest button
+    private final PetalSpring mBody = new PetalSpring(0f);
+    private final PetalSpring mBodySpread = new PetalSpring(0f);
+    private final PetalLiquid mLiquid = new PetalLiquid();
+    private boolean mDraining = false;
+    // body splat runs a bit after the buttons duck
+    private boolean mBodySplat = false;
+    private float mExitT = 0f;
     private final float[] mGold = new float[3];
     private final float[] mGoldTarget = new float[3];
     private boolean mShowing = false;
@@ -201,6 +209,16 @@ public class PetalPowerMenuView extends View implements Choreographer.FrameCallb
     public void show() {
         mHandler.removeCallbacksAndMessages(null);
         mShowing = true;
+        if (mBodySplat) {
+            // reopened mid splat, grab the goo where it is
+            mBody.snap(mLiquid.reach);
+            mBodySpread.snap(Math.min(mLiquid.spread, 1f));
+            mLiquid.cancelExit();
+            mBodySplat = false;
+        }
+        mDraining = false;
+        mBody.set(1f);
+        mBodySpread.set(1f);
         updateHitRects();
         mAccessibilityHelper.invalidateRoot();
         requestFocus();
@@ -225,6 +243,7 @@ public class PetalPowerMenuView extends View implements Choreographer.FrameCallb
     public void dismiss() {
         mHandler.removeCallbacksAndMessages(null);
         mShowing = false;
+        mDraining = true;
         mAccessibilityHelper.invalidateRoot();
         for (int i = 0; i < 3; i++) {
             final int idx = i;
@@ -233,6 +252,14 @@ public class PetalPowerMenuView extends View implements Choreographer.FrameCallb
                 ensureFrame();
             }, (2 - idx) * 45L);
         }
+        // buttons duck in first, then the body gets slurped back into the frame
+        mHandler.postDelayed(() -> {
+            // double dismiss would restart the splat, dont
+            if (mBodySplat) return;
+            mLiquid.beginExit(System.nanoTime(), mBody.value);
+            mBodySplat = true;
+            ensureFrame();
+        }, 60L);
         ensureFrame();
     }
 
@@ -255,7 +282,20 @@ public class PetalPowerMenuView extends View implements Choreographer.FrameCallb
         dt = Math.min(dt, MAX_DT);
 
         for (PetalSpring s : mSprings) {
-            s.step(dt, SPRING_STIFFNESS, SPRING_DAMPING);
+            // no bounce on the way out, they were flicking past zero and popping
+            s.step(dt, SPRING_STIFFNESS, mDraining ? 0.9f : SPRING_DAMPING);
+        }
+        boolean splatting = false;
+        if (mBodySplat) {
+            mExitT = mLiquid.exitT(frameTimeNanos);
+            splatting = mExitT < 1f;
+            if (!splatting) {
+                mBody.snap(0f);
+                mBodySpread.snap(0f);
+            }
+        } else {
+            // waiting on the splat delay, hold the body still
+            if (!mDraining) PetalLiquid.stepOpen(mBody, mBodySpread, dt);
         }
         for (PetalSpring p : mPop) {
             p.step(dt, POP_STIFFNESS, POP_DAMPING);
@@ -267,7 +307,8 @@ public class PetalPowerMenuView extends View implements Choreographer.FrameCallb
 
         invalidate();
 
-        boolean anyMoving = false;
+        boolean anyMoving = splatting || (mDraining && !mBodySplat)
+                || !mBody.resting() || !mBodySpread.resting();
         for (PetalSpring s : mSprings) {
             if (!s.resting()) {
                 anyMoving = true;
@@ -301,11 +342,12 @@ public class PetalPowerMenuView extends View implements Choreographer.FrameCallb
 
     @Override
     protected void onDraw(Canvas canvas) {
-        float maxo = 0f;
+        float maxo = mBody.value;
         for (PetalSpring s : mSprings) {
             maxo = Math.max(maxo, s.value);
         }
-        boolean settled = true;
+        boolean settled = mBody.resting() && mBodySpread.resting()
+                && !(mBodySplat && mExitT < 1f) && !(mDraining && !mBodySplat);
         for (PetalSpring s : mSprings) {
             if (!s.resting()) {
                 settled = false;
@@ -337,11 +379,18 @@ public class PetalPowerMenuView extends View implements Choreographer.FrameCallb
         float cRad = (RAD + 6f) * mDensity;
         float sqRadius = RAD * 0.66f * mDensity;
 
-        float opacity = PetalUtils.clamp(maxo * 2f, 0f, 1f);
-        float scX = PetalUtils.lerp(0f, 1f, PetalUtils.clamp(maxo, 0f, 1.15f));
-        float scY = PetalUtils.lerp(0.5f, 1f, PetalUtils.clamp(maxo, 0f, 1f));
-        float jointDepth = JOINT * mDensity * scX;
-        float xTail = (JOINT * 0.5f + 10f) * mDensity * scX;
+        if (mBodySplat) {
+            // full screen window, it can smear properly here
+            mLiquid.solveExit(mExitT, w, 1.7f);
+        } else {
+            mLiquid.solve(mBody, mBodySpread, false, w, h);
+        }
+        float opacity = mLiquid.opacity;
+        float scX = mLiquid.reach;
+        float scY = mLiquid.spread;
+        float bulge = mLiquid.bulge;
+        float jointDepth = JOINT * mDensity * mLiquid.joint;
+        float xTail = (JOINT * 0.5f + 10f) * mDensity * mLiquid.joint;
 
         // body and joint share one path, flipped on the left
         mBodyPaint.setColor(PetalUtils.COLOR_DIALOG);
@@ -349,9 +398,9 @@ public class PetalPowerMenuView extends View implements Choreographer.FrameCallb
         mBodyPaint.setAlpha((int) (255f * opacity));
         mBodyPaint.setShadowLayer(24f * mDensity, 0f, 10f * mDensity, 0x6B000000);
         Path body = PetalUtils.jointPath(edgeLeft, cy, w * scX, h * scY, cRad * scX,
-                jointDepth, xTail, edgeX);
+                jointDepth, xTail, edgeX, bulge);
         if (!mDialogGlass.draw(canvas, body, edgeLeft, edgeX, cy,
-                w * scX, h * scY, cRad * scX, opacity)) {
+                w * scX + Math.max(0f, bulge) * 0.5f, h * scY, cRad * scX, opacity)) {
             canvas.drawPath(body, mBodyPaint);
         }
         mBodyPaint.clearShadowLayer();

@@ -2980,8 +2980,10 @@ public class NotificationStackScrollLayout
 
     private void updateContentHeight() {
         // Headers and the footer eat space too, not just the bloody rows.
-        int mediaNotificationHeight = (int) Math.ceil(getScrimTopPaddingOrZero()
-                + mNotificationStackSizeCalculator.computeShadeNotificationHeight(this));
+        // The QQS height already includes the media panel. Counting its scrim/top padding here
+        // makes compact selection depend on its own previous height and can flip the mode back.
+        int mediaNotificationHeight = (int) Math.ceil(
+                mNotificationStackSizeCalculator.computeShadeNotificationHeight(this));
         com.android.systemui.petalos.PetalMediaSpace.setNotificationHeight(mediaNotificationHeight);
         com.android.systemui.petalos.PetalMediaSpace.setAvailableShadeHeight(
                 getHeight() - mBottomPadding);
@@ -3204,7 +3206,9 @@ public class NotificationStackScrollLayout
         }
         if (mAmbientState.getTopPadding() != topPadding) {
             mAmbientState.setTopPadding(topPadding);
-            onTopPaddingChanged(/* animate = */ animate && !mKeyguardBypassEnabled);
+            // A slim <-> large player flip glides the stack with the player's own morph.
+            boolean playerFlip = com.android.systemui.petalos.PetalMediaSpace.consumeStyleFlip();
+            onTopPaddingChanged(/* animate = */ (animate || playerFlip) && !mKeyguardBypassEnabled);
         }
         setExpandedHeight(mExpandedHeight);
     }

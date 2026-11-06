@@ -382,6 +382,10 @@ public class DeviceIdleController extends SystemService
     private boolean mBatterySaverEnabled;
     @GuardedBy("this")
     private boolean mModeManagerRequestedQuickDoze;
+    // petal: set by PetalPower while its deep restricted profile is applied
+    private boolean mPetalDeepIdle;
+    private boolean mPetalCpuCapApplied;
+    private static final String PETAL_DEEP_IDLE_KEY = "petal_idle_deep_active";
     @GuardedBy("this")
     private boolean mIsOffBody;
     @GuardedBy("this")
@@ -2853,6 +2857,18 @@ public class DeviceIdleController extends SystemService
                         });
                 mBatterySaverEnabled = mLocalPowerManager.getLowPowerState(
                         ServiceType.QUICK_DOZE).batterySaverEnabled;
+                getContext().getContentResolver().registerContentObserver(
+                        Settings.Global.getUriFor(PETAL_DEEP_IDLE_KEY), false,
+                        new ContentObserver(mHandler) {
+                            @Override
+                            public void onChange(boolean selfChange) {
+                                synchronized (DeviceIdleController.this) {
+                                    readPetalDeepIdleLocked();
+                                }
+                            }
+                        });
+                mPetalDeepIdle = Settings.Global.getInt(getContext().getContentResolver(),
+                        PETAL_DEEP_IDLE_KEY, 0) != 0;
                 updateQuickDozeFlagLocked();
 
                 mLocalActivityTaskManager.registerScreenObserver(mScreenObserver);
@@ -3506,11 +3522,13 @@ public class DeviceIdleController extends SystemService
         if (DEBUG) Slog.d(TAG, "updateInteractivityLocked: screenOn=" + screenOn);
         if (!screenOn && mScreenOn) {
             mScreenOn = false;
+            updatePetalCpuCapLocked();
             if (!mForceIdle) {
                 becomeInactiveIfAppropriateLocked();
             }
         } else if (screenOn) {
             mScreenOn = true;
+            updatePetalCpuCapLocked();
             if (!mForceIdle && (!mScreenLocked || !mConstants.WAIT_FOR_UNLOCK)) {
                 mActiveReason = ACTIVE_REASON_SCREEN;
                 becomeActiveLocked("screen", Process.myUid());
@@ -3555,10 +3573,33 @@ public class DeviceIdleController extends SystemService
         if (mConstants.USE_MODE_MANAGER) {
             // Only disable the quick doze flag when mode manager request is false and
             // battery saver is off.
-            updateQuickDozeFlagLocked(mModeManagerRequestedQuickDoze || mBatterySaverEnabled);
+            updateQuickDozeFlagLocked(mModeManagerRequestedQuickDoze || mBatterySaverEnabled
+                    || mPetalDeepIdle);
         } else {
-            updateQuickDozeFlagLocked(mBatterySaverEnabled);
+            // petal deep restricted = skip the "is it lying still" dance, pockets never are
+            updateQuickDozeFlagLocked(mBatterySaverEnabled || mPetalDeepIdle);
         }
+    }
+
+    @GuardedBy("this")
+    private void readPetalDeepIdleLocked() {
+        final boolean deep = Settings.Global.getInt(getContext().getContentResolver(),
+                PETAL_DEEP_IDLE_KEY, 0) != 0;
+        if (deep == mPetalDeepIdle) return;
+        mPetalDeepIdle = deep;
+        Slog.i(TAG, "petal deep idle=" + deep);
+        updateQuickDozeFlagLocked();
+        updatePetalCpuCapLocked();
+    }
+
+    // DEVICE_IDLE is unused by the framework, the oplus power ext turns it into a cpu cap.
+    // only while screen is off so unlock never runs capped
+    @GuardedBy("this")
+    private void updatePetalCpuCapLocked() {
+        final boolean want = mPetalDeepIdle && !mScreenOn;
+        if (want == mPetalCpuCapApplied || mLocalPowerManager == null) return;
+        mPetalCpuCapApplied = want;
+        mLocalPowerManager.setPowerMode(android.hardware.power.Mode.DEVICE_IDLE, want);
     }
 
     /** Updates the quick doze flag and enters deep doze if appropriate. */

@@ -253,6 +253,11 @@ constructor(
                 .decision
         }
 
+    // pulse filters, no ambient toggle check. dnd and hide-silent live here
+    override fun makeUnloggedPopupDecision(entry: NotificationEntry): Decision =
+        (checkFilters(PULSE, entry) ?: checkSuppressInterruptions(entry)
+            ?: LoggableDecision.unsuppressed).decision
+
     private fun makeLoggablePeekDecision(entry: NotificationEntry): LoggableDecision =
         checkConditions(PEEK)
             ?: checkFilters(PEEK, entry)

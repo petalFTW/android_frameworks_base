@@ -113,7 +113,7 @@ internal class PetalBouncerClock(private val view: BouncerKeyguardMessageArea) {
         if (!tickScheduled) {
             tickScheduled = true
             val delay = if (activeClock.bouncerAnimationRunning) 16L
-                else 1000L - System.currentTimeMillis() % 1000L
+                else 60_000L - System.currentTimeMillis() % 60_000L
             view.postDelayed(tick, delay)
         }
         return rendered

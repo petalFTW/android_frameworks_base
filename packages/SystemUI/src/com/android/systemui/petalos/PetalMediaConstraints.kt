@@ -10,7 +10,12 @@ import com.android.systemui.res.R
 
 // Keep the live action flags; just shuffle the bloody geometry.
 object PetalMediaConstraints {
-    fun create(context: Context, original: ConstraintSet, state: MediaHostState): ConstraintSet {
+    fun create(
+        context: Context,
+        original: ConstraintSet,
+        state: MediaHostState,
+        hasArtist: Boolean = true,
+    ): ConstraintSet {
         val layout = ConstraintSet().apply { clone(original) }
         val density = context.resources.displayMetrics.density
         fun px(dp: Int) = (dp * density).toInt()
@@ -20,8 +25,10 @@ object PetalMediaConstraints {
         val width = (state.measurementInput?.width ?: px(300)) / density
         val narrowMini = mini && width < 260
         val narrowSplit = split && width < 280
-        val miniArtWidth = if (narrowMini) 56 else 76
-        val miniButtonSize = if (narrowMini) 40 else 48
+        // Slim row: square art, text centred on it, transport flush right, hairline under all.
+        val miniArt = if (narrowMini) 52 else 60
+        val miniButtonSize = if (narrowMini) 36 else 40
+        val miniPlaySize = if (narrowMini) 40 else 44
         val scale = context.resources.configuration.fontScale.coerceAtLeast(1f)
         val textHeight = (48 * scale).toInt()
         val timeHeight = ((if (lock) 18 else 14) * scale).toInt().coerceAtLeast(15)
@@ -36,11 +43,11 @@ object PetalMediaConstraints {
         val buttonSize = if (lock && width < 320) 40 else if (narrowSplit) 36 else 48
         val playSize = if (lock) {
             (width * 0.20f).toInt().coerceIn(56, 80)
-        } else if (mini) miniButtonSize else if (split) {
+        } else if (mini) miniPlaySize else if (split) {
             if (narrowSplit) 44 else 48
         } else 60
         val artHeight = when {
-            mini -> 88
+            mini -> miniArt
             lock -> lockArtWidth
             split -> splitArtWidth
             else -> (width * .31f).toInt().coerceIn(88, 176)
@@ -53,13 +60,13 @@ object PetalMediaConstraints {
         }
         val splitProgressTop = 16 + splitHeaderHeight + 8
         val progressTop = when {
-            mini -> textTop + textHeight + 56
+            mini -> 16 + miniArt + 10
             lock -> lockHeaderTop + lockHeaderHeight + 4
             split -> splitProgressTop
             else -> textTop + textHeight + 4
         }
         val transportTop = when {
-            mini -> textTop + textHeight + 4
+            mini -> 16 + (miniArt - miniPlaySize) / 2
             lock -> progressTop + 36 + timeHeight + 12
             split -> progressTop + 24 + timeHeight + 6
             else -> progressTop + 24 + timeHeight + 4
@@ -77,7 +84,7 @@ object PetalMediaConstraints {
         } else (extras + columns - 1) / columns
         val splitOutputTop = transportTop + playSize + 8
         val height = when {
-            mini -> maxOf(124, progressTop + 16)
+            mini -> progressTop + 8 + 12
             split -> splitOutputTop + 40 + 12
             lock -> transportTop + playSize + 12 + lockSweep + extraRows * 48
             else -> transportTop + 76 + extraRows * 48
@@ -105,6 +112,13 @@ object PetalMediaConstraints {
             layout.setVisibility(id, if (visible) View.VISIBLE else View.GONE)
             layout.setAlpha(id, if (visible) 1f else 0f)
         }
+        // Present but transparent (TransitionLayout makes it INVISIBLE, so no taps). A GONE view
+        // has no position and only pops in over the last 20% of a morph; this one fades and
+        // travels from where it's parked across the whole transition.
+        fun fade(id: Int) {
+            layout.setVisibility(id, View.VISIBLE)
+            layout.setAlpha(id, 0f)
+        }
         MediaViewHolder.backgroundIds.forEach {
             top(it, 0, height)
             full(it, 0)
@@ -112,7 +126,7 @@ object PetalMediaConstraints {
         layout.setAlpha(R.id.album_art, 0f)
         top(R.id.petal_media_cover, if (lock) lockHeaderTop else if (mini || split) 16 else 0, artHeight)
         if (mini) {
-            layout.constrainWidth(R.id.petal_media_cover, px(miniArtWidth))
+            layout.constrainWidth(R.id.petal_media_cover, px(miniArt))
             layout.connect(R.id.petal_media_cover, ConstraintSet.START,
                 ConstraintSet.PARENT_ID, ConstraintSet.START, px(16))
         } else if (lock) {
@@ -132,9 +146,8 @@ object PetalMediaConstraints {
             full(id)
             if (mini) {
                 layout.connect(id, ConstraintSet.START, R.id.petal_media_cover,
-                    ConstraintSet.END, px(12))
-                layout.connect(id, ConstraintSet.END, ConstraintSet.PARENT_ID,
-                    ConstraintSet.END, px(48))
+                    ConstraintSet.END, px(14))
+                layout.connect(id, ConstraintSet.END, R.id.actionPrev, ConstraintSet.START, px(8))
             } else if (lock) {
                 layout.connect(id, ConstraintSet.START, R.id.petal_media_cover,
                     ConstraintSet.END, px(if (width < 320) 12 else 18))
@@ -145,6 +158,25 @@ object PetalMediaConstraints {
                     ConstraintSet.END, px(12))
                 layout.connect(id, ConstraintSet.END, ConstraintSet.PARENT_ID,
                     ConstraintSet.END, px(16))
+            }
+        }
+        if (mini) {
+            // Packed on the art's centre line.
+            show(R.id.header_artist, hasArtist)
+            layout.clear(R.id.header_title, ConstraintSet.TOP)
+            layout.clear(R.id.header_artist, ConstraintSet.TOP)
+            if (hasArtist) {
+                layout.constrainHeight(R.id.header_artist, px((20 * scale).toInt()))
+                layout.createVerticalChain(R.id.petal_media_cover, ConstraintSet.TOP,
+                    R.id.petal_media_cover, ConstraintSet.BOTTOM,
+                    intArrayOf(R.id.header_title, R.id.header_artist), null,
+                    ConstraintSet.CHAIN_PACKED)
+            } else {
+                // A GONE artist still anchors the chain's tail and dragged the title low.
+                layout.connect(R.id.header_title, ConstraintSet.TOP, R.id.petal_media_cover,
+                    ConstraintSet.TOP)
+                layout.connect(R.id.header_title, ConstraintSet.BOTTOM, R.id.petal_media_cover,
+                    ConstraintSet.BOTTOM)
             }
         }
         show(R.id.icon, false)
@@ -165,9 +197,12 @@ object PetalMediaConstraints {
             layout.connect(R.id.media_seamless, ConstraintSet.END, ConstraintSet.PARENT_ID,
                 ConstraintSet.END, px(8))
         }
+        // No room for the output pill in the slim row; full QS still has it.
         if (lock) show(R.id.media_seamless, false)
+        // No room for the output pill in the slim row; it grows out of the top corner instead.
+        if (mini) fade(R.id.media_seamless)
         show(R.id.device_suggestion_container, false)
-        top(R.id.media_progress_bar, progressTop, if (mini) 12 else 24)
+        top(R.id.media_progress_bar, progressTop, if (mini) 8 else 24)
         full(R.id.media_progress_bar, if (lock) lockInset else 16)
         show(R.id.media_scrubbing_elapsed_time, false)
         show(R.id.media_scrubbing_total_time, false)
@@ -176,15 +211,13 @@ object PetalMediaConstraints {
             top(id, progressTop + (if (lock) 36 else 24), timeHeight)
             layout.constrainWidth(id, px((56 * scale).toInt()))
             layout.connect(id, side, ConstraintSet.PARENT_ID, side, px(lockInset))
-            show(id, !mini)
+            if (mini) fade(id) else show(id, true)
         }
         val play = R.id.actionPlayPause
         top(play, transportTop, playSize)
         layout.constrainWidth(play, px(playSize))
         if (mini) {
-            layout.connect(play, ConstraintSet.START, R.id.petal_media_cover,
-                ConstraintSet.END, px(12))
-            layout.connect(play, ConstraintSet.END, ConstraintSet.PARENT_ID, ConstraintSet.END)
+            layout.connect(play, ConstraintSet.END, R.id.actionNext, ConstraintSet.START, px(4))
         } else {
             layout.connect(play, ConstraintSet.LEFT, ConstraintSet.PARENT_ID, ConstraintSet.LEFT)
             layout.connect(play, ConstraintSet.RIGHT, ConstraintSet.PARENT_ID, ConstraintSet.RIGHT)
@@ -194,14 +227,28 @@ object PetalMediaConstraints {
             val size = if (mini) miniButtonSize else buttonSize
             top(id, transportTop + (playSize - size) / 2, size)
             layout.constrainWidth(id, px(size))
-            layout.connect(id, side, play,
-                if (side == ConstraintSet.RIGHT) ConstraintSet.LEFT else ConstraintSet.RIGHT,
-                px(if (mini) 0 else if (split || lock) 4 else 12))
+            if (mini && id == R.id.actionNext) {
+                layout.connect(id, ConstraintSet.END, ConstraintSet.PARENT_ID, ConstraintSet.END,
+                    px(10))
+            } else {
+                layout.connect(id, side, play,
+                    if (side == ConstraintSet.RIGHT) ConstraintSet.LEFT else ConstraintSet.RIGHT,
+                    px(if (mini) 4 else if (split || lock) 4 else 12))
+            }
         }
         generic.forEachIndexed { index, id ->
             when {
-                // 05 and mini keep it to three buttons
-                mini || (state.petalStyle == PetalMediaStyle.LargeProgress && primary) -> show(id, false)
+                // 05 and mini keep it to three buttons; the extras wait, transparent, on the
+                // transport so the expanded player can grow them out of prev/next.
+                mini || (state.petalStyle == PetalMediaStyle.LargeProgress && primary) -> {
+                    val anchor = if (index % 2 == 0) R.id.actionPrev else R.id.actionNext
+                    val size = if (mini) miniButtonSize else buttonSize
+                    top(id, transportTop + (playSize - size) / 2, size)
+                    layout.constrainWidth(id, px(size))
+                    layout.connect(id, ConstraintSet.START, anchor, ConstraintSet.START)
+                    layout.connect(id, ConstraintSet.END, anchor, ConstraintSet.END)
+                    fade(id)
+                }
                 inlineExtras && index < 2 -> {
                     top(id, transportTop + (playSize - buttonSize) / 2, buttonSize)
                     layout.constrainWidth(id, px(buttonSize))

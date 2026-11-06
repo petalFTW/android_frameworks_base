@@ -86,6 +86,19 @@ public class VolumeDialogComponent implements VolumeComponent, TunerService.Tuna
     private boolean mHasShownVolume = false;
     // stream the HUD rides on; -1 = whatever the volume keys say (media, mostly)
     private int mPetalStream = -1;
+    // last thing the scrub sent, dont spam the worker with dupes
+    private int mScrubStream = -1;
+    private int mScrubLevel = Integer.MIN_VALUE;
+    private int mScrubMin;
+    private int mScrubMax;
+    private final Handler mPetalUiHandler = new Handler(android.os.Looper.getMainLooper());
+    // javac whines about blank finals in lambdas, method ref shuts it up
+    private final Runnable mPetalReconcile = this::reconcilePetalHud;
+
+    private void reconcilePetalHud() {
+        // only touch it if it's still up, otherwise this resurrects the bloody thing
+        if (mPetalHost.isVolumeShowing()) updateVolumeOverlay(false);
+    }
 
     @Inject
     public VolumeDialogComponent(
@@ -103,36 +116,49 @@ public class VolumeDialogComponent implements VolumeComponent, TunerService.Tuna
         mActivityStarter = activityStarter;
         mController = volumeDialogController;
         mController.setUserActivityListener(this);
-        // petalOS: drive the bezel-anchored volume overlay from the controller's
-        // show/state/dismiss callbacks instead of the stock volume panel (whose
-        // show path is suppressed in VolumeDialogImpl#showH).
+        // petal hud replaces the stock panel, showH is muzzled
         mPetalHost = new PetalOverlayHost(context);
         mAudioManager = context.getSystemService(AudioManager.class);
-        // petalOS: scrubbing the volume HUD sets the stream level directly.
         mPetalHost.setOnVolumeScrubListener(new PetalOverlayHost.OnVolumeScrubListener() {
             @Override
             public void onVolumeScrub(float fraction) {
+                int stream;
+                int min;
+                int max;
                 if (mPetalStream >= 0) {
-                    // user picked a stream by holding the glyph; ride that one
-                    int min = mAudioManager.getStreamMinVolume(mPetalStream);
-                    int max = mAudioManager.getStreamMaxVolume(mPetalStream);
-                    int level = min + Math.round(fraction * (max - min));
-                    level = Math.max(min, Math.min(max, level));
-                    mAudioManager.setStreamVolume(mPetalStream, level, 0);
-                    return;
+                    stream = mPetalStream;
+                    if (mScrubStream != stream) {
+                        // cache it, binder per move frame was murdering the looper
+                        mScrubMin = mAudioManager.getStreamMinVolume(stream);
+                        mScrubMax = mAudioManager.getStreamMaxVolume(stream);
+                    }
+                    min = mScrubMin;
+                    max = mScrubMax;
+                } else {
+                    if (mLastState == null) return;
+                    VolumeDialogController.StreamState ss =
+                            mLastState.states.get(mLastState.activeStream);
+                    if (ss == null) return;
+                    stream = mLastState.activeStream;
+                    min = ss.levelMin;
+                    max = ss.levelMax;
                 }
-                if (mLastState == null) return;
-                VolumeDialogController.StreamState ss =
-                        mLastState.states.get(mLastState.activeStream);
-                if (ss == null) return;
-                int level = ss.levelMin + Math.round(fraction * (ss.levelMax - ss.levelMin));
-                level = Math.max(ss.levelMin, Math.min(ss.levelMax, level));
-                mController.setStreamVolume(mLastState.activeStream, level, true);
+                int level = min + Math.round(fraction * (max - min));
+                level = Math.max(min, Math.min(max, level));
+                if (stream == mScrubStream && level == mScrubLevel) return;
+                mScrubStream = stream;
+                mScrubLevel = level;
+                // worker thread, NOT main. sync=true froze the hud solid
+                mController.setStreamVolume(stream, level, false);
             }
 
             @Override
             public void onVolumeScrubEnd() {
-                // no-op; the host re-arms the auto-dismiss timer.
+                mScrubStream = -1;
+                mScrubLevel = Integer.MIN_VALUE;
+                // stream said no? snap the fill back to whatever's real
+                mPetalUiHandler.removeCallbacks(mPetalReconcile);
+                mPetalUiHandler.postDelayed(mPetalReconcile, 360L);
             }
         });
         // hold the glyph: media -> ring -> notif -> media
@@ -290,9 +316,7 @@ public class VolumeDialogComponent implements VolumeComponent, TunerService.Tuna
             boolean wasShowing = mPetalHost.isVolumeShowing();
             mLastState = state;
             if (wasShowing) {
-                // The overlay is up: push the fresh level/mute into it so the fill pill
-                // tracks the volume keys. Without this the bar freezes on the value it
-                // was opened with.
+                // keep the pill following the keys or it just sits there like a lemon
                 updateVolumeOverlay(true);
             }
         }
@@ -357,11 +381,7 @@ public class VolumeDialogComponent implements VolumeComponent, TunerService.Tuna
         return PetalVolumeOverlayView.STREAM_MEDIA;
     }
 
-    /**
-     * Shows (or refreshes) the petal volume overlay from the latest controller state.
-     * Re-arms the auto-dismiss, and fires the over-limit shake when a press did not
-     * move the level while already parked at an end of the range.
-     */
+    // push latest level into the hud, jiggles if you mash past the end
     private void updateVolumeOverlay(boolean allowShake) {
         int level;
         int levelMin;

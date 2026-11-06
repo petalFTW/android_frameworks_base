@@ -58,6 +58,7 @@ import android.os.Process;
 import android.os.Trace;
 import android.os.UserHandle;
 import android.provider.Settings;
+import android.text.TextUtils;
 import android.util.Log;
 import android.util.Pair;
 import android.view.Gravity;
@@ -868,11 +869,14 @@ public class MediaControlPanel {
         TextView artistText = mMediaViewHolder.getArtistText();
         ConstraintSet expandedSet = mMediaViewController.getExpandedLayout();
         ConstraintSet collapsedSet = mMediaViewController.getCollapsedLayout();
+        // Players that send no artist get the app name, so the subtitle line is never blank.
+        CharSequence subtitle = TextUtils.isEmpty(data.getArtist()) ? data.getApp()
+                : data.getArtist();
         return mMetadataAnimationHandler.setNext(
-                new Triple(data.getSong(), data.getArtist(), data.isExplicit()),
+                new Triple(data.getSong(), subtitle, data.isExplicit()),
                 () -> {
                     titleText.setText(data.getSong());
-                    artistText.setText(data.getArtist());
+                    artistText.setText(subtitle);
                     setVisibleAndAlpha(expandedSet, R.id.media_explicit_indicator,
                             data.isExplicit());
                     setVisibleAndAlpha(collapsedSet, R.id.media_explicit_indicator,

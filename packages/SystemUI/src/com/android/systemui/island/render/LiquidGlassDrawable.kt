@@ -42,7 +42,7 @@ class LiquidGlassDrawable : Drawable() {
     private val grainPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val rimPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val sheenPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val slabShader = runCatching { RuntimeShader(SLAB_AGSL) }.getOrNull()
+    private val slabShader by lazy { runCatching { RuntimeShader(SLAB_AGSL) }.getOrNull() }
     private var slabBand = 0f
     private var slabStrength = 0f
     private var slabUniformsDirty = true
@@ -223,22 +223,23 @@ class LiquidGlassDrawable : Drawable() {
         paint.color = tint
         paint.style = Paint.Style.FILL
         paint.shader = null
-        if (slabBand > 0f && slabStrength > 0f && slabShader != null) {
+        val lens = if (slabBand > 0f && slabStrength > 0f) slabShader else null
+        if (lens != null) {
             if (slabUniformsDirty) {
-                slabShader.setFloatUniform("center", rect.centerX(), rect.centerY())
-                slabShader.setFloatUniform("halfSize", rect.width() * .5f, rect.height() * .5f)
-                slabShader.setFloatUniform("radius", cornerRadius.coerceIn(
+                lens.setFloatUniform("center", rect.centerX(), rect.centerY())
+                lens.setFloatUniform("halfSize", rect.width() * .5f, rect.height() * .5f)
+                lens.setFloatUniform("radius", cornerRadius.coerceIn(
                     0f, minOf(rect.width(), rect.height()) * .5f))
-                slabShader.setFloatUniform("bandWidth", slabBand)
-                slabShader.setFloatUniform("gain", slabStrength)
+                lens.setFloatUniform("bandWidth", slabBand)
+                lens.setFloatUniform("gain", slabStrength)
                 // light tint wants less grubby shading
-                slabShader.setFloatUniform("surface", relativeLuminance(tint))
-                slabShader.setColorUniform("tint", tint)
+                lens.setFloatUniform("surface", relativeLuminance(tint))
+                lens.setColorUniform("tint", tint)
                 slabUniformsDirty = false
             }
             // Paint's colour alpha would otherwise modulate the premultiplied shader again.
             paint.color = Color.WHITE
-            paint.shader = slabShader
+            paint.shader = lens
         }
         canvas.drawPath(path, paint)
         paint.shader = null

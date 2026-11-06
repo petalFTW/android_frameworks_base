@@ -331,6 +331,10 @@ public class SwipeHelper implements Gefingerpoken, Dumpable {
 
     @Override
     public boolean onInterceptTouchEvent(final MotionEvent ev) {
+        // peek owns the gesture, but a fresh DOWN means the last one got orphaned, bin it
+        if (mRedactionPeekRow != null && ev.getActionMasked() != MotionEvent.ACTION_DOWN) {
+            return true;
+        }
         if (mTouchedView instanceof ExpandableNotificationRow) {
             NotificationMenuRowPlugin nmr = ((ExpandableNotificationRow) mTouchedView).getProvider();
             if (nmr != null) {
@@ -879,6 +883,11 @@ public class SwipeHelper implements Gefingerpoken, Dumpable {
     protected boolean handleUpEvent(MotionEvent ev, View animView, float velocity,
             float translation) {
         return false;
+    }
+
+    // nssl needs this or it never forwards the UP and the peek gets stuck forever
+    public boolean isRedactionPeeking() {
+        return mRedactionPeekRow != null;
     }
 
     public boolean isSwiping() {

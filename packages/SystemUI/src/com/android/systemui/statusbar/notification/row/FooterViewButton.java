@@ -25,6 +25,14 @@ import com.android.systemui.statusbar.AlphaOptimizedButton;
 import com.android.systemui.statusbar.notification.stack.NotificationStackScrollLayout;
 
 public class FooterViewButton extends AlphaOptimizedButton {
+    private android.graphics.drawable.Drawable mOriginalBackground;
+    private final Runnable mAppearanceListener = () -> {
+        com.android.systemui.petalos.NotificationStyleController style =
+                com.android.systemui.petalos.NotificationStyleController.get(getContext());
+        setBackground(style.hasFinish()
+                ? com.android.systemui.petalos.PetalNotificationGlass
+                        .footerButtonBackground(getContext()) : mOriginalBackground);
+    };
 
     public FooterViewButton(Context context) {
         this(context, null);
@@ -41,12 +49,21 @@ public class FooterViewButton extends AlphaOptimizedButton {
     public FooterViewButton(Context context, AttributeSet attrs, int defStyleAttr,
             int defStyleRes) {
         super(context, attrs, defStyleAttr, defStyleRes);
-        // petalOS: island glass pill instead of the stock footer chip
-        if (com.android.systemui.petalos.PetalNotificationGlass.enabled(context)) {
-            setBackground(
-                    com.android.systemui.petalos.PetalNotificationGlass
-                            .footerButtonBackground(context));
-        }
+        mOriginalBackground = getBackground();
+    }
+
+    @Override
+    protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        com.android.systemui.petalos.NotificationStyleController.get(getContext())
+                .addListener(mAppearanceListener);
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        com.android.systemui.petalos.NotificationStyleController.get(getContext())
+                .removeListener(mAppearanceListener);
+        super.onDetachedFromWindow();
     }
 
     /**

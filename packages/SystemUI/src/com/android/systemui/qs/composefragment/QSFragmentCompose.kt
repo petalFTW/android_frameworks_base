@@ -58,6 +58,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -765,8 +766,12 @@ constructor(
                         .approachLayout(isMeasurementApproachInProgress = { squishiness < 1f }) {
                             measurable,
                             constraints ->
-                            viewModel.qqsHeight = lookaheadSize.height
                             val placeable = measurable.measure(constraints)
+                            // Lookahead leaves the AndroidView media slot out (785 vs 1156px with
+                            // the slim player), so notifications slid over the player mid-pull and
+                            // jumped down once squishiness hit 1. Tiles squish in draw, not layout,
+                            // so the live height is the larger, correct one.
+                            viewModel.qqsHeight = maxOf(lookaheadSize.height, placeable.height)
                             layout(placeable.width, placeable.height) { placeable.place(0, 0) }
                         }
                         .padding(top = { qqsPadding }, bottom = { bottomPadding })
@@ -806,19 +811,29 @@ constructor(
                                     } else com.android.systemui.petalos.PetalMediaStyle.LargeProgress,
                             ) {
                             MediaObject(
-                                // Don't squash the damn AndroidView mid-expansion.
-                                 modifier = Modifier.requiredHeightIn(max = Dp.Infinity).offset {
-                                     // Balance the tile gap against QQS padding plus the stack gutter.
-                                     val gutter = if (com.android.systemui.scene.shared.flag.SceneContainerFlag.isEnabled) {
-                                         0
-                                     } else mediaResources.getDimensionPixelSize(R.dimen.notification_side_paddings)
-                                     val gap = mediaResources.getDimensionPixelSize(R.dimen.qs_tile_margin_vertical)
-                                     val shift = if (petalMedia && !viewModel.qqsMediaInRow) {
-                                         ((viewModel.qqsBottomPadding + gutter - gap) / 2)
-                                             .coerceIn(0, viewModel.qqsBottomPadding.coerceAtLeast(0))
-                                     } else 0
-                                     IntOffset(0, shift)
-                                 },
+                                // Don't squash the damn AndroidView mid-expansion. The slot takes
+                                // the final size at once; the stack animates to it on the same
+                                // 360ms as the player's morph (PetalMediaSpace.onPlayerStyleFlip).
+                                modifier = Modifier.requiredHeightIn(max = Dp.Infinity)
+                                    .graphicsLayer {
+                                        alpha = if (petalMedia &&
+                                            MediaControlsInComposeFlag.isEnabled &&
+                                            !viewModel.isInSplitShade && viewModel.statusBarState ==
+                                            com.android.systemui.statusbar.StatusBarState.SHADE) {
+                                            viewModel.shadeMotionProgress
+                                        } else 1f
+                                    }.offset {
+                                        // Balance the tile gap against QQS padding plus the stack gutter.
+                                        val gutter = if (com.android.systemui.scene.shared.flag.SceneContainerFlag.isEnabled) {
+                                            0
+                                        } else mediaResources.getDimensionPixelSize(R.dimen.notification_side_paddings)
+                                        val gap = mediaResources.getDimensionPixelSize(R.dimen.qs_tile_margin_vertical)
+                                        val shift = if (petalMedia && !viewModel.qqsMediaInRow) {
+                                            ((viewModel.qqsBottomPadding + gutter - gap) / 2)
+                                                .coerceIn(0, viewModel.qqsBottomPadding.coerceAtLeast(0))
+                                        } else 0
+                                        IntOffset(0, shift)
+                                    },
                                 mediaHost = viewModel.qqsMediaHost,
                                 mediaLogger = mediaLogger,
                                 mediaPresentationStyle =
@@ -860,6 +875,7 @@ constructor(
 
     @Composable
     private fun ContentScope.QuickSettingsElement(modifier: Modifier = Modifier) {
+        val petalMedia = com.android.systemui.petalos.LocalPetalQsPreferences.current.enabled
         val qqsPadding = viewModel.qqsHeaderHeight
         val qsExtraPadding = dimensionResource(R.dimen.qs_panel_padding_top)
         Column(
@@ -949,6 +965,14 @@ constructor(
                             @Composable {
                                 if (viewModel.qsMediaVisible) {
                                     MediaObject(
+                                        modifier = Modifier.graphicsLayer {
+                                            alpha = if (petalMedia &&
+                                                MediaControlsInComposeFlag.isEnabled &&
+                                                !viewModel.isInSplitShade && viewModel.statusBarState ==
+                                                com.android.systemui.statusbar.StatusBarState.SHADE) {
+                                                viewModel.shadeMotionProgress
+                                            } else 1f
+                                        },
                                         mediaHost = viewModel.qsMediaHost,
                                         mediaLogger = mediaLogger,
                                         mediaViewModelFactory = viewModel.mediaViewModelFactory,
@@ -1528,6 +1552,10 @@ private fun ContentScope.MediaObject(
             )
         }
     } else {
+        // A new player view means a fresh measure: see MediaHostStatesManager.playersAttached.
+        val playersAttached by com.android.systemui.media.controls.ui.controller
+            .MediaHostStatesManager.playersAttached.collectAsStateWithLifecycle()
+        key(playersAttached) {
         Box {
             AndroidView(
                 modifier = modifier,
@@ -1558,7 +1586,8 @@ private fun ContentScope.MediaObject(
                     }
 
                     view.update()
-                    if (!Flags.mediaFrameDimensionsFix()) {
+                    if (!Flags.mediaFrameDimensionsFix() && mediaHost.petalStyle ==
+                        com.android.systemui.petalos.PetalMediaStyle.Stock) {
                         // Update layout params if host view bounds are higher than its child.
                         val height = mediaHost.hostView.height
                         val width = mediaHost.hostView.width
@@ -1585,6 +1614,7 @@ private fun ContentScope.MediaObject(
                     if (view.parent === container) container.removeView(view)
                 },
             )
+        }
         }
     }
 }
@@ -1779,3 +1809,4 @@ private data class QsBrightnessSettings(
     val sliderAtTop: Boolean,
     val showSlider: Int,
 )
+

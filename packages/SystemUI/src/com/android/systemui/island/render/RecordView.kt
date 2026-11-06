@@ -7,9 +7,9 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
+import android.os.SystemClock
 import android.view.View
 import android.view.animation.DecelerateInterpolator
-import android.view.animation.LinearInterpolator
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
@@ -24,6 +24,8 @@ class RecordView(context: Context) : View(context) {
     private var spinning = false
     private var visibleToUser = false
     private var spinAnim: ValueAnimator? = null
+    private var spinStartMs = 0L
+    private var spinStartAngle = 0f
     private var needleAnim: ValueAnimator? = null
     private val density = resources.displayMetrics.density
 
@@ -69,6 +71,7 @@ class RecordView(context: Context) : View(context) {
         spinAnim?.cancel()
         spinAnim = null
         spinning = false
+        removeCallbacks(spinTick)
     }
 
     private fun canAnimate(): Boolean =
@@ -95,26 +98,31 @@ class RecordView(context: Context) : View(context) {
         }
     }
 
+    private val spinTick = object : Runnable {
+        override fun run() {
+            if (!spinning || !canAnimate()) return
+            val elapsed = (SystemClock.uptimeMillis() - spinStartMs).coerceAtLeast(0L)
+            angle = (spinStartAngle + elapsed * 360f / SPIN_MS) % 360f
+            invalidate()
+            postDelayed(this, FRAME_MS)
+        }
+    }
+
     private fun updateSpin() {
         val wasSpinning = spinning
         spinAnim?.cancel()
         spinAnim = null
         spinning = false
+        removeCallbacks(spinTick)
         if (!canAnimate()) return
         if (active) {
-            // wait for the needle to land first
-            spinAnim = ValueAnimator.ofFloat(angle, angle + 360f).apply {
-                startDelay = if (needle < 0.95f) DROP_MS else 0L
-                duration = SPIN_MS
-                repeatCount = ValueAnimator.INFINITE
-                interpolator = LinearInterpolator()
-                addUpdateListener {
-                    angle = (it.animatedValue as Float) % 360f
-                    invalidate()
-                }
-                start()
-            }
+            // wait for the needle to land first. ticks at ~30fps, an infinite animator ran at
+            // full 120hz and kept the whole panel from dropping its refresh while music played
+            val delay = if (needle < 0.95f) DROP_MS else 0L
+            spinStartAngle = angle
+            spinStartMs = SystemClock.uptimeMillis() + delay
             spinning = true
+            postDelayed(spinTick, delay)
         } else if (wasSpinning) {
             // stopping, let it coast
             spinAnim = ValueAnimator.ofFloat(angle, angle + 120f).apply {
@@ -221,5 +229,6 @@ class RecordView(context: Context) : View(context) {
         private const val DROP_MS = 240L
         private const val LIFT_MS = 340L
         private const val COAST_MS = 750L
+        private const val FRAME_MS = 33L
     }
 }

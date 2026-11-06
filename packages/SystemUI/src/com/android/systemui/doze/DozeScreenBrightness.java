@@ -125,6 +125,9 @@ public class DozeScreenBrightness extends BroadcastReceiver implements DozeMachi
      */
     private int mDebugBrightnessBucket = -1;
 
+    // petal: aod popup pulses run at the normal screen brightness, true aod level was unreadable
+    private boolean mPetalBright;
+
     @Inject
     @SuppressLint("AndroidFrameworkRequiresPermission")
     public DozeScreenBrightness(
@@ -195,8 +198,24 @@ public class DozeScreenBrightness extends BroadcastReceiver implements DozeMachi
             case DOZE_AOD_MINMODE:
                 setLightSensorEnabled(true);
                 break;
+            case DOZE_PULSING:
+            case DOZE_PULSING_BRIGHT:
+                if (com.android.systemui.petalos.PetalAodPopup.wantsBrightPulse()) {
+                    mPetalBright = true;
+                    // whatever the screen was last at, manual or auto. never dimmer than aod
+                    mDozeService.setDozeScreenBrightness(
+                            Math.max(getScreenBrightness(), mDefaultDozeBrightness));
+                }
+                break;
+            case DOZE_PULSE_DONE:
+                if (mPetalBright) {
+                    mPetalBright = false;
+                    resetBrightnessToDefault();
+                }
+                break;
             case DOZE:
             case DOZE_SUSPEND_TRIGGERS:
+                mPetalBright = false;
                 setLightSensorEnabled(false);
                 resetBrightnessToDefault();
                 break;
@@ -241,7 +260,8 @@ public class DozeScreenBrightness extends BroadcastReceiver implements DozeMachi
             boolean brightnessReady;
             float brightness = computeBrightness(sensorValue);
             brightnessReady = brightness >= 0;
-            if (brightnessReady) {
+            // popup pulse owns the brightness, don't let the aod light sensor drag it back down
+            if (brightnessReady && !mPetalBright) {
                 mDozeService.setDozeScreenBrightness(
                         clampToDimBrightnessForScreenOff(clampToUserSetting(brightness)));
             }

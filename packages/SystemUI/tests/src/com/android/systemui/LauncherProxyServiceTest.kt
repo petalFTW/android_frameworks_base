@@ -498,6 +498,7 @@ class LauncherProxyServiceTest : SysuiTestCase() {
             kosmos.displayRepository,
             desktopState,
             fakeHeadlessSystemUserMode,
+            mock(com.android.systemui.shade.HomeShadeTransitionBridge::class.java),
         )
     }
 }

@@ -19,6 +19,16 @@ package {
     default_applicable_licenses: ["frameworks_base_packages_SystemUI_license"],
 }
 
+java_test_host {
+    name: "PetalMediaLayoutPolicyTests",
+    srcs: [
+        "src/com/android/systemui/petalos/PetalMediaLayoutPolicy.java",
+        "tests/src/com/android/systemui/petalos/PetalMediaLayoutPolicyTest.java",
+    ],
+    static_libs: ["junit"],
+    test_suites: ["general-tests"],
+}
+
 // Added automatically by a large-scale-change
 // See: http://go/android-license-faq
 license {

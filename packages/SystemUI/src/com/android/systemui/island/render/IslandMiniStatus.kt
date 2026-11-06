@@ -32,8 +32,6 @@ import android.graphics.drawable.Drawable
 import android.net.NetworkInfo
 import android.net.wifi.WifiManager
 import android.os.BatteryManager
-import android.os.Handler
-import android.os.Looper
 import android.telephony.SignalStrength
 import android.telephony.ServiceState
 import android.telephony.TelephonyCallback
@@ -85,7 +83,7 @@ class IslandMiniStatusView(
     private val notifSource: IslandMiniNotifSource?,
 ) : View(context) {
 
-    private val handler = Handler(Looper.getMainLooper())
+    private var monitoring = false
 
     private var signalLevel = -1
     private var wifiLevel = -1
@@ -104,14 +102,6 @@ class IslandMiniStatusView(
     }
     private val btPath = Path()
 
-    private val tickRunnable = object : Runnable {
-        override fun run() {
-            updateTime()
-            invalidate()
-            handler.postDelayed(this, 10_000L)
-        }
-    }
-
     private val telephonyCallback =
         object : TelephonyCallback(), TelephonyCallback.SignalStrengthsListener,
                 TelephonyCallback.ServiceStateListener {
@@ -128,6 +118,11 @@ class IslandMiniStatusView(
     private val receiver =
         object : BroadcastReceiver() {
             override fun onReceive(ctx: Context, intent: Intent) {
+                if (cluster == Cluster.LEFT) {
+                    updateTime()
+                    invalidate()
+                    return
+                }
                 when (intent.action) {
                     Intent.ACTION_BATTERY_CHANGED -> {
                         val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
@@ -148,41 +143,70 @@ class IslandMiniStatusView(
         }
 
     init {
-        if (cluster == Cluster.LEFT) notifSource?.onChanged = { loadNotifIcons() }
         updateTime()
     }
+
+    private val notifChanged: () -> Unit = { loadNotifIcons() }
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
+        if (isShown && windowVisibility == VISIBLE) startMonitoring()
+    }
+
+    override fun onVisibilityAggregated(isVisible: Boolean) {
+        super.onVisibilityAggregated(isVisible)
+        if (isVisible) startMonitoring() else stopMonitoring()
+    }
+
+    private fun startMonitoring() {
+        if (monitoring || !isAttachedToWindow) return
+        monitoring = true
         val filter = IntentFilter().apply {
-            addAction(Intent.ACTION_BATTERY_CHANGED)
-            addAction(WifiManager.WIFI_STATE_CHANGED_ACTION)
-            addAction(WifiManager.RSSI_CHANGED_ACTION)
-            addAction(WifiManager.NETWORK_STATE_CHANGED_ACTION)
-            // petalOS: bluetooth rune disabled, no bt glyphs in the mini status row
-            // addAction(BluetoothAdapter.ACTION_STATE_CHANGED)
-            // addAction(BluetoothAdapter.ACTION_CONNECTION_STATE_CHANGED)
+            if (cluster == Cluster.LEFT) {
+                addAction(Intent.ACTION_TIME_TICK)
+                addAction(Intent.ACTION_TIME_CHANGED)
+                addAction(Intent.ACTION_TIMEZONE_CHANGED)
+            } else {
+                addAction(Intent.ACTION_BATTERY_CHANGED)
+                addAction(WifiManager.WIFI_STATE_CHANGED_ACTION)
+                addAction(WifiManager.RSSI_CHANGED_ACTION)
+                addAction(WifiManager.NETWORK_STATE_CHANGED_ACTION)
+            }
         }
         runCatching { context.registerReceiver(receiver, filter) }
-        runCatching {
-            context.getSystemService(TelephonyManager::class.java)?.registerTelephonyCallback(
-                context.mainExecutor, telephonyCallback)
+        if (cluster == Cluster.RIGHT) {
+            runCatching {
+                context.getSystemService(TelephonyManager::class.java)?.registerTelephonyCallback(
+                    context.mainExecutor, telephonyCallback)
+            }
+            // Query the current connection on reappearance; broadcasts may have been missed.
+            wifiConnected = context.getSystemService(WifiManager::class.java)
+                ?.connectionInfo?.networkId?.let { it != -1 } == true
+            readWifiLevel()
+        } else {
+            notifSource?.onChanged = notifChanged
+            loadNotifIcons()
+            updateTime()
         }
-        readWifiLevel()
-        // refreshBt() // petalOS: bluetooth rune disabled
-        loadNotifIcons()
-        updateTime()
-        handler.post(tickRunnable)
+        invalidate()
     }
 
     override fun onDetachedFromWindow() {
+        stopMonitoring()
         super.onDetachedFromWindow()
+    }
+
+    private fun stopMonitoring() {
+        if (!monitoring) return
+        monitoring = false
         runCatching { context.unregisterReceiver(receiver) }
-        runCatching {
-            context.getSystemService(TelephonyManager::class.java)
-                ?.unregisterTelephonyCallback(telephonyCallback)
+        if (cluster == Cluster.RIGHT) {
+            runCatching {
+                context.getSystemService(TelephonyManager::class.java)
+                    ?.unregisterTelephonyCallback(telephonyCallback)
+            }
         }
-        handler.removeCallbacks(tickRunnable)
+        notifSource?.let { if (it.onChanged === notifChanged) it.onChanged = null }
     }
 
     private fun readWifiLevel() {

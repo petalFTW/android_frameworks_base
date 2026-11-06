@@ -223,7 +223,7 @@ class IslandTouchHandler(
             "onTap x=$x y=$y expanded=${view.isExpanded} hitChild=$hitChild",
         )
         if (hitChild) return
-        if (view.isExpanded) {
+        if (view.isExpanded || !view.canExpand()) {
             view.callbacks?.onUserPrimaryAction(view)
         } else {
             view.callbacks?.onUserExpand(view)

@@ -19,6 +19,7 @@ package com.android.systemui.island.dagger
 import com.android.systemui.CoreStartable
 import com.android.systemui.island.IslandController
 import com.android.systemui.island.StatusBarIconHider
+import com.android.systemui.petalos.PetalAodPopup
 import com.android.systemui.statusbar.core.StatusBarInitializer.StatusBarViewLifecycleListener
 import dagger.Binds
 import dagger.Lazy
@@ -35,6 +36,12 @@ abstract class IslandModule {
     @IntoMap
     @ClassKey(IslandController::class)
     abstract fun bindIslandController(controller: IslandController): CoreStartable
+
+    // aod popup rides along, no point in a second module
+    @Binds
+    @IntoMap
+    @ClassKey(PetalAodPopup::class)
+    abstract fun bindPetalAodPopup(popup: PetalAodPopup): CoreStartable
 }
 
 @Module

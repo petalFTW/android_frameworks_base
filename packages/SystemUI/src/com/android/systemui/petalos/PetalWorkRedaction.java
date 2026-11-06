@@ -116,8 +116,14 @@ public final class PetalWorkRedaction {
     }
 
     public static boolean beginPeek(ExpandableNotificationRow row) {
+        // A previous peek can outlive its gesture when its finger moved to another row.
+        Peek current = PEEKS.get(row);
+        for (Peek other : new ArrayList<>(PEEKS.values())) {
+            if (other != current) other.animateTo(0f, true);
+        }
         List<Mask> masks = new ArrayList<>();
-        for (NotificationContentView layout : row.getLayouts()) collectMasks(layout, masks);
+        // whole row, headers and app name/time live outside the content view, sneaky buggers
+        collectMasks(row, masks);
         if (masks.isEmpty()) return false;
         Peek peek = PEEKS.get(row);
         if (peek == null) {
@@ -146,6 +152,20 @@ public final class PetalWorkRedaction {
         if (peek != null) peek.animateTo(0f, immediate);
     }
 
+    // cut the masks loose so none of em stay half revealed
+    private static void unlink(Peek peek) {
+        for (WeakReference<Mask> reference : peek.masks) {
+            Mask mask = reference.get();
+            if (mask != null && mask.peek == peek) mask.peek = null;
+        }
+        peek.masks.clear();
+        ExpandableNotificationRow row = peek.row.get();
+        if (row != null) {
+            row.removeOnAttachStateChangeListener(peek);
+            if (PEEKS.get(row) == peek) PEEKS.remove(row);
+        }
+    }
+
     private static void collectMasks(View view, List<Mask> masks) {
         if (view == null) return;
         Object tag = view.getTag(R.id.petal_redacted_text);
@@ -157,6 +177,9 @@ public final class PetalWorkRedaction {
     }
 
     private static final class Peek implements View.OnAttachStateChangeListener {
+        static final long REVEAL_MS = 400;
+        static final long REDACT_MS = 340;
+
         final WeakReference<ExpandableNotificationRow> row;
         final List<WeakReference<Mask>> masks = new ArrayList<>();
         float progress;
@@ -172,15 +195,34 @@ public final class PetalWorkRedaction {
             if (immediate || !ValueAnimator.areAnimatorsEnabled()) {
                 progress = target;
                 invalidate();
+                if (target == 0f) unlink(this);
                 return;
             }
+            float distance = Math.abs(target - progress);
             animator = ValueAnimator.ofFloat(progress, target);
-            animator.setDuration(Math.max(1L, Math.round(240f * Math.abs(target - progress))));
+            animator.setDuration(Math.max(1L, Math.round(
+                    (target == 1f ? REVEAL_MS : REDACT_MS) * distance)));
             animator.setInterpolator(new android.view.animation.PathInterpolator(.2f, 0f, .2f, 1f));
             animator.addUpdateListener(value -> {
                 progress = (float) value.getAnimatedValue();
                 invalidate();
             });
+            if (target == 0f) {
+                animator.addListener(new android.animation.AnimatorListenerAdapter() {
+                    private boolean mCancelled;
+
+                    @Override
+                    public void onAnimationCancel(android.animation.Animator animation) {
+                        mCancelled = true;
+                    }
+
+                    @Override
+                    public void onAnimationEnd(android.animation.Animator animation) {
+                        // cancelled close = someone else took over, only a clean finish kills it
+                        if (!mCancelled) unlink(Peek.this);
+                    }
+                });
+            }
             animator.start();
         }
 
@@ -196,9 +238,8 @@ public final class PetalWorkRedaction {
 
         @Override
         public void onViewDetachedFromWindow(View view) {
+            // An immediate close unlinks, which also drops this listener.
             animateTo(0f, true);
-            view.removeOnAttachStateChangeListener(this);
-            PEEKS.remove(row.get());
         }
     }
 

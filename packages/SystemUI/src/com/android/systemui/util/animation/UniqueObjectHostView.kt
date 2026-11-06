@@ -51,15 +51,17 @@ class UniqueObjectHostView(context: Context) : FrameLayout(context) {
         val (cachedWidth, cachedHeight) = measurementManager.onMeasure(measurementInput)
 
         if (isCurrentHost()) {
+            if (!Flags.mediaFrameDimensionsFix()) {
+                getChildAt(0)?.let { mediaFrame ->
+                    // Reparenting a large carousel into Mini must shrink its frame in this measure
+                    // pass. A grow-only update preserves the old large gap below a slim player.
+                    val params = mediaFrame.layoutParams
+                    params.width = cachedWidth
+                    params.height = cachedHeight
+                }
+            }
             super.onMeasure(widthMeasureSpec, heightMeasureSpec)
             getChildAt(0)?.let { mediaFrame ->
-                if (!Flags.mediaFrameDimensionsFix()) {
-                    // Media host dimensions are correct. Its child cannot show larger dimensions.
-                    // We also need to ensure that dimensions are not less than expected.
-                    if (cachedWidth > mediaFrame.width || cachedHeight > mediaFrame.height) {
-                        mediaFrame.layoutParams = LayoutParams(cachedWidth, cachedHeight)
-                    }
-                }
                 mediaFrame.requiresRemeasuring = false
             }
         }

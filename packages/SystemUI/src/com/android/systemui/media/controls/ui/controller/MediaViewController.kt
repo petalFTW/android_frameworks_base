@@ -66,6 +66,8 @@ constructor(
 
     companion object {
         @JvmField val GUTS_ANIMATION_DURATION = 234L
+        // Slim <-> large player morph; QSFragmentCompose animates its slot over the same time.
+        const val PETAL_STYLE_MORPH_MS = 360L
     }
 
     /** A listener when the current dimensions of the player change */
@@ -77,7 +79,14 @@ constructor(
     private var animationDuration: Long = 0
     private var animateNextStateChange: Boolean = false
     private var lastPetalStyle = com.android.systemui.petalos.PetalMediaStyle.Stock
+    // Inflated horizontal seek padding, kept so leaving the slim player restores it.
+    private var seekHorizontalPadding = -1
     private var petalButtonAccent: Int? = null
+    // Style morph: one 360ms clock for the artwork fade and cover corners, matching the layout
+    // morph and the notification stack, so the two players blend rather than swap.
+    private var petalStyleMorph: android.animation.ValueAnimator? = null
+    private var petalMorphFlow = -1f
+    private var petalCoverRadiusPx = 0f
     // same recipe as the qs tiles, so the player reads as the same glass
     private val petalCardBackgroundDelegate = lazy {
         val density = context.resources.displayMetrics.density
@@ -456,8 +465,12 @@ constructor(
             setGutsViewState(result)
             // We don't want to cache interpolated or null states as this could quickly fill up
             // our cache. We only cache the start and the end states since the interpolation
-            // is cheap
-            viewStates[cacheKey] = result
+            // is cheap.
+            // Never cache an empty layout: at boot QQS is measured before the player is bound,
+            // and a cached 0x0 kept the QQS slot empty until a style change cleared the cache.
+            if (result.measureWidth > 0 && result.measureHeight > 0) {
+                viewStates[cacheKey] = result
+            }
         } else {
             // This is an interpolated state
             val startState = state.copy().also { it.expansion = 0.0f }
@@ -483,7 +496,11 @@ constructor(
         if (style == com.android.systemui.petalos.PetalMediaStyle.Lockscreen ||
             (PetalConfig.isQsSkinEnabled(context) &&
                 style != com.android.systemui.petalos.PetalMediaStyle.Stock)) {
-            return com.android.systemui.petalos.PetalMediaConstraints.create(context, original, state)
+            // bindSongMetadata refreshes the state after setting text, so this stays current.
+            val hasArtist = !transitionLayout?.findViewById<android.widget.TextView>(R.id.header_artist)
+                ?.text.isNullOrBlank()
+            return com.android.systemui.petalos.PetalMediaConstraints.create(
+                context, original, state, hasArtist)
         }
         val density = context.resources.displayMetrics.density
         val widthDp = (state.measurementInput?.width ?: 0) / density
@@ -599,10 +616,12 @@ constructor(
             loadLayoutConstraints()
             logger.logMediaLocation("attach", currentStartLocation, currentEndLocation)
             this.transitionLayout = transitionLayout
+            seekHorizontalPadding = -1
             petalRibbonBackdrop?.destroy()
             petalRibbonBackdrop = com.android.systemui.petalos.PetalMediaRibbonBackdrop(transitionLayout)
             petalRibbonBackground.backdrop = petalRibbonBackdrop
             layoutController.attach(transitionLayout)
+            MediaHostStatesManager.playersAttached.value += 1
             if (currentEndLocation == MediaHierarchyManager.LOCATION_UNKNOWN) {
                 return
             }
@@ -643,7 +662,14 @@ constructor(
             val endHostState = mediaHostStatesManager.mediaHostStates[endLocation] ?: return
             val startHostState = mediaHostStatesManager.mediaHostStates[startLocation]
             val styleChanged = lastPetalStyle != endHostState.petalStyle
-            val applyLayoutImmediately = applyImmediately || styleChanged
+            // Slim <-> large in the same, settled place is a resize the user watches happen:
+            // morph it rather than swapping layouts in one frame.
+            val morphStyle = styleChanged && !applyImmediately &&
+                startLocation == endLocation && endHostState.visible &&
+                isPetalShadeStyle(lastPetalStyle) && isPetalShadeStyle(endHostState.petalStyle) &&
+                android.animation.ValueAnimator.areAnimatorsEnabled()
+            if (morphStyle) animatePendingStateChange(PETAL_STYLE_MORPH_MS, 0L)
+            val applyLayoutImmediately = applyImmediately || (styleChanged && !morphStyle)
             if (styleChanged) {
                 // Old-style measurements never get to poison the morph.
                 viewStates.clear()
@@ -662,7 +688,14 @@ constructor(
             val startFlow = petalArtworkFlowStrength(startStyle)
             val endFlow = petalArtworkFlowStrength(endHostState.petalStyle)
             // Follow the drag both ways; the destination style doesn't get to kill the smear early.
-            val artworkFlow = startFlow + (endFlow - startFlow) * progress
+            var artworkFlow = startFlow + (endFlow - startFlow) * progress
+            if (morphStyle) {
+                startPetalStyleMorph(petalArtworkFlowStrength(lastPetalStyle), endFlow,
+                    petalCoverRadiusPx, petalCoverRadiusFor(endHostState.petalStyle))
+            }
+            if (petalStyleMorph?.isRunning == true && petalMorphFlow >= 0f) {
+                artworkFlow = petalMorphFlow
+            }
             val lock = endHostState.petalStyle == com.android.systemui.petalos.PetalMediaStyle.Lockscreen
             petalRibbonBackdrop?.setEnabled(lock)
             val blurRadius = 12f + (28f - 12f) * strength
@@ -713,15 +746,14 @@ constructor(
                         }
                     }
                     // flush artwork takes the card's own corners, inset art stays cosy
-                    val insetArt =
-                        endHostState.petalStyle != com.android.systemui.petalos.PetalMediaStyle.LargeProgress
-                    val coverRadius =
-                        (if (lock) 10f else if (insetArt) 16f else 0f) * context.resources.displayMetrics.density
+                    if (petalStyleMorph?.isRunning != true) {
+                        petalCoverRadiusPx = petalCoverRadiusFor(endHostState.petalStyle)
+                    }
                     transitionLayout?.findViewById<android.widget.ImageView>(R.id.petal_media_cover)
                         ?.apply {
                             clipToOutline = true
                             foreground = if (lock) android.graphics.drawable.GradientDrawable().apply {
-                                cornerRadius = coverRadius
+                                cornerRadius = petalCoverRadiusPx
                                 setColor(android.graphics.Color.TRANSPARENT)
                                 setStroke(context.resources.displayMetrics.density.toInt().coerceAtLeast(1), 0x70FFFFFF)
                             } else null
@@ -730,33 +762,42 @@ constructor(
                                     view: View,
                                     outline: android.graphics.Outline,
                                 ) {
+                                    // read live, so the style morph can ease the corners
                                     outline.setRoundRect(
-                                        0, 0, view.width, view.height, coverRadius
+                                        0, 0, view.width, view.height, petalCoverRadiusPx
                                     )
                                 }
                             }
                         }
-                    val play = transitionLayout?.findViewById<android.widget.ImageButton>(R.id.actionPlayPause)
-                    play?.background = com.android.systemui.petalos.PetalMediaBubbleDrawable(
-                        true, true, context.resources.displayMetrics.density, accent)
-                    play?.backgroundTintList = null
-                    play?.imageTintList = android.content.res.ColorStateList.valueOf(
-                        if (lock) android.graphics.Color.WHITE else
-                            com.android.systemui.petalos.PetalQsSkin.glyphOnBackground(accent))
                     val sideColor = if (lock || com.android.systemui.petalos.PetalQsSkin.isDark(context)) {
                         0xFFF5F5F8.toInt()
                     } else 0xFF202127.toInt()
+                    // The slim row sits among quiet notification cards; a filled accent disc
+                    // shouted over them, so it gets the secondary bubble and plain glyph.
+                    val slimRow = endHostState.petalStyle ==
+                        com.android.systemui.petalos.PetalMediaStyle.Mini
+                    val play = transitionLayout?.findViewById<android.widget.ImageButton>(R.id.actionPlayPause)
+                    play?.background = com.android.systemui.petalos.PetalMediaBubbleDrawable(
+                        !slimRow, true, context.resources.displayMetrics.density, accent)
+                    play?.backgroundTintList = null
+                    play?.imageTintList = android.content.res.ColorStateList.valueOf(
+                        if (lock) android.graphics.Color.WHITE else if (slimRow) sideColor else
+                            com.android.systemui.petalos.PetalQsSkin.glyphOnBackground(accent))
                     (MediaViewHolder.genericButtonIds + setOf(R.id.actionPrev, R.id.actionNext)).forEach { id ->
                         transitionLayout?.findViewById<android.widget.ImageButton>(id)?.imageTintList =
                             android.content.res.ColorStateList.valueOf(sideColor)
                     }
                     val seek = transitionLayout?.findViewById<android.widget.SeekBar>(R.id.media_progress_bar)
-                    seek?.apply {
-                        setPadding(paddingLeft, if (lock) 0 else context.resources.getDimensionPixelSize(
-                            R.dimen.qs_media_session_enabled_seekbar_vertical_padding), paddingRight,
-                            if (lock) 0 else (12f * context.resources.displayMetrics.density).toInt())
-                    }
                     val mini = endHostState.petalStyle == com.android.systemui.petalos.PetalMediaStyle.Mini
+                    seek?.apply {
+                        if (seekHorizontalPadding < 0) seekHorizontalPadding = paddingLeft
+                        // The slim hairline has no thumb, so its track lines up with the artwork.
+                        val side = if (mini) 0 else seekHorizontalPadding
+                        val vertical = if (lock || mini) 0 else context.resources.getDimensionPixelSize(
+                            R.dimen.qs_media_session_enabled_seekbar_vertical_padding)
+                        setPadding(side, vertical, side, if (lock || mini) 0 else
+                            (12f * context.resources.displayMetrics.density).toInt())
+                    }
                     (seek?.progressDrawable as? com.android.systemui.media.controls.ui.drawable.SquigglyProgress)?.apply {
                         lineAmplitude = 0f
                         strokeWidth = (if (mini) 2f else 6f) * context.resources.displayMetrics.density
@@ -1119,6 +1160,47 @@ constructor(
         }
         obtainViewStateForLocation(newLocation)?.let { layoutController.setMeasureState(it) }
     }
+
+    // flush artwork takes the card's own corners, inset art stays cosy
+    private fun petalCoverRadiusFor(style: com.android.systemui.petalos.PetalMediaStyle): Float {
+        val dp = when (style) {
+            com.android.systemui.petalos.PetalMediaStyle.Lockscreen -> 10f
+            com.android.systemui.petalos.PetalMediaStyle.LargeProgress -> 0f
+            else -> 16f
+        }
+        return dp * context.resources.displayMetrics.density
+    }
+
+    private fun startPetalStyleMorph(fromFlow: Float, toFlow: Float, fromRadius: Float,
+            toRadius: Float) {
+        petalStyleMorph?.cancel()
+        petalStyleMorph = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = PETAL_STYLE_MORPH_MS
+            interpolator = com.android.app.animation.Interpolators.FAST_OUT_SLOW_IN
+            addUpdateListener { animator ->
+                val t = animator.animatedValue as Float
+                petalMorphFlow = fromFlow + (toFlow - fromFlow) * t
+                petalCoverRadiusPx = fromRadius + (toRadius - fromRadius) * t
+                val layout = transitionLayout ?: return@addUpdateListener
+                layout.findViewById<com.android.systemui.petalos.PetalMediaArtworkView>(
+                    R.id.petal_media_cover)?.apply {
+                    setFeatherBottom(petalMorphFlow)
+                    invalidateOutline()
+                }
+                petalCardBackground.setStyle(lastPetalStyle, petalMorphFlow)
+            }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    petalMorphFlow = -1f
+                }
+            })
+            start()
+        }
+    }
+
+    private fun isPetalShadeStyle(style: com.android.systemui.petalos.PetalMediaStyle) =
+        style == com.android.systemui.petalos.PetalMediaStyle.Mini ||
+            style == com.android.systemui.petalos.PetalMediaStyle.LargeProgress
 
     /** Request that the next state change should be animated with the given parameters. */
     fun animatePendingStateChange(duration: Long, delay: Long) {

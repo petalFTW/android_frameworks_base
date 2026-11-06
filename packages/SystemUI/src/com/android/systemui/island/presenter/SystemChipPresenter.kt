@@ -24,6 +24,8 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.android.systemui.island.IslandGeometry
+import com.android.systemui.island.render.IslandGlyph
+import com.android.systemui.island.render.IslandGlyphView
 
 // label and accent for a simple chip
 data class SystemChipPayload(
@@ -31,6 +33,9 @@ data class SystemChipPayload(
     val accent: Int,
     val toggleAction: (() -> Unit)? = null,
     val iconRes: Int = 0,
+    // animated icon, wins over iconRes
+    val glyph: IslandGlyph? = null,
+    val expandable: Boolean = true,
 )
 
 // chip with an icon and label
@@ -46,7 +51,9 @@ class SystemChipPresenter(
             gravity = Gravity.CENTER_VERTICAL
             setPadding(geometry.capsulePaddingStart, 0, geometry.capsulePaddingEnd, 0)
         }
-        val dot = if (payload.iconRes != 0) ImageView(context).apply {
+        val dot = if (payload.glyph != null) {
+            IslandGlyphView(context, payload.glyph, payload.accent)
+        } else if (payload.iconRes != 0) ImageView(context).apply {
             setImageResource(payload.iconRes)
             imageTintList = android.content.res.ColorStateList.valueOf(payload.accent)
             importantForAccessibility = android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -80,6 +87,8 @@ class SystemChipPresenter(
     override fun bindExpanded(container: ViewGroup) {
         bindCollapsed(container)
     }
+
+    override fun canExpand(): Boolean = payload.expandable
 
     override fun tint(): IslandTint = IslandTint(accent = payload.accent)
 

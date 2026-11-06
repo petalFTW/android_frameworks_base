@@ -205,11 +205,7 @@ constructor(
                 )
                 resolveClipping(currentClipping)
                 applyState(currentBounds, currentAlpha, clipBounds = currentClipping)
-                applyGravityBounce(
-                    fraction,
-                    isDroppingIntoQs && !isCrossFadeAnimatorRunning &&
-                        PetalConfig.isQsSkinEnabled(context) && ValueAnimator.areAnimatorsEnabled(),
-                )
+                applyGravityBounce(fraction, gravityBounceThisDrop)
             }
             addListener(
                 object : AnimatorListenerAdapter() {
@@ -234,6 +230,11 @@ constructor(
                     override fun onAnimationStart(animation: Animator) {
                         cancelled = false
                         animationPending = false
+                        // Decide once per drop. A finger on the shade owns the position, so a
+                        // timed bounce on top of it reads as the player jolting up or down.
+                        gravityBounceThisDrop = isDroppingIntoQs && !isCrossFadeAnimatorRunning &&
+                            !petalShadeTracking && PetalConfig.isQsSkinEnabled(context) &&
+                            ValueAnimator.areAnimatorsEnabled()
                     }
                 }
             )
@@ -486,15 +487,34 @@ constructor(
      */
     private var animationCrossFadeProgress = 1.0f
 
-    /** The current carousel Alpha. */
+    private var petalShadeFadeEnabled = PetalConfig.isQsSkinEnabled(context)
+    private val petalQsSkinUri = Settings.System.getUriFor(PetalConfig.KEY_QS_SKIN_ENABLED)
+    private var petalShadeExpansion = shadeInteractor.anyExpansion.value
+    private var petalShadeTracking = false
+    private var gravityBounceThisDrop = false
+    private var lastAppliedCarouselAlpha = Float.NaN
+
+    /** Crossfade alpha is independent of shade opacity; do not feed their product back here. */
     private var carouselAlpha: Float = 1.0f
         set(value) {
-            if (field == value) {
-                return
-            }
             field = value
-            CrossFadeHelper.fadeIn(mediaFrame, value)
+            applyCarouselOpacity()
         }
+
+    private fun applyCarouselOpacity() {
+        val followsShade = petalShadeFadeEnabled && !inSplitShade &&
+            statusbarState == StatusBarState.SHADE &&
+            (desiredLocation == LOCATION_QQS || desiredLocation == LOCATION_QS)
+        val shadeAlpha = if (followsShade) {
+            com.android.systemui.petalos.PetalMediaLayoutPolicy.shadeOpacity(petalShadeExpansion)
+        } else 1f
+        val baseAlpha = if (carouselAlpha.isFinite()) carouselAlpha.coerceIn(0f, 1f) else 1f
+        val combined = baseAlpha * shadeAlpha
+        if (combined == lastAppliedCarouselAlpha) return
+        lastAppliedCarouselAlpha = combined
+        // The shared native frame may be in the root overlay rather than its Compose host.
+        CrossFadeHelper.fadeIn(mediaFrame, combined)
+    }
 
     /**
      * Calculate the alpha of the view when given a cross-fade progress.
@@ -663,9 +683,31 @@ constructor(
             }
         }
 
+        coroutineScope.launch {
+            shadeInteractor.anyExpansion.collect { expansion ->
+                petalShadeExpansion = expansion
+                applyCarouselOpacity()
+            }
+        }
+
+        coroutineScope.launch {
+            shadeInteractor.isUserInteracting.collect { tracking ->
+                petalShadeTracking = tracking
+                if (tracking && gravityBounceThisDrop) {
+                    // The finger came back mid-bounce; hand the position straight back to it.
+                    gravityBounceThisDrop = false
+                    resetGravityBounce()
+                }
+            }
+        }
+
         val settingsObserver: ContentObserver =
             object : ContentObserver(handler) {
                 override fun onChange(selfChange: Boolean, uri: Uri?) {
+                    if (uri == petalQsSkinUri) {
+                        petalShadeFadeEnabled = PetalConfig.isQsSkinEnabled(context)
+                        applyCarouselOpacity()
+                    }
                     if (uri == lockScreenMediaPlayerUri) {
                         allowMediaPlayerOnLockScreen =
                             secureSettings.getBoolForUser(
@@ -681,6 +723,8 @@ constructor(
             settingsObserver,
             UserHandle.USER_ALL,
         )
+        context.contentResolver.registerContentObserver(petalQsSkinUri, false, settingsObserver,
+            UserHandle.USER_ALL)
 
         // Listen to the communal UI state. Make sure that communal UI is showing and hub itself
         // is
@@ -1249,7 +1293,7 @@ constructor(
 
             var newLocation = resolveLocationForFading()
             // Don't use the overlay when fading or when we don't have active media
-            var canUseOverlay = !isCurrentlyFading() && hasActiveMedia
+            var canUseOverlay = !isCurrentlyFading() && mediaManager.hasAnyMedia()
             if (isCrossFadeAnimatorRunning) {
                 if (
                     getHost(newLocation)?.visible == true &&
@@ -1426,7 +1470,8 @@ constructor(
             isLockScreenVisibleToUser() ||
                 isHomeScreenShadeVisibleToUser() ||
                 isGlanceableHubVisibleToUser()
-        val mediaVisible = qsExpanded || hasActiveMedia
+        // QQS shows resumption players too (petalOS), so any media counts as visible there.
+        val mediaVisible = qsExpanded || mediaManager.hasAnyMedia()
         logger.logUserVisibilityChange(shadeVisible, mediaVisible)
         val carouselVisible = shadeVisible && mediaVisible
         mediaCarouselController.mediaCarouselScrollHandler.visibleToUser = carouselVisible

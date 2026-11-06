@@ -24,9 +24,11 @@ import android.content.res.ColorStateList;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Path;
+import android.graphics.Paint;
 import android.graphics.PorterDuff;
 import android.graphics.PorterDuffColorFilter;
 import android.graphics.Rect;
+import android.graphics.RectF;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.LayerDrawable;
@@ -40,6 +42,10 @@ import androidx.annotation.Nullable;
 import com.android.internal.util.ContrastColorUtil;
 import com.android.systemui.Dumpable;
 import com.android.systemui.island.render.LiquidGlassDrawable;
+import com.android.systemui.island.render.RefractionShader;
+import com.android.internal.graphics.drawable.BackgroundBlurDrawable;
+import com.android.systemui.petalos.NotificationStyleController;
+import com.android.systemui.petalos.NotificationSilkDrawable;
 import com.android.systemui.common.shared.colors.SurfaceEffectColors;
 import com.android.systemui.res.R;
 import com.android.systemui.statusbar.notification.shared.NotificationAddXOnHoverToDismiss;
@@ -55,6 +61,21 @@ public class NotificationBackgroundView extends View implements Dumpable,
     private final boolean mDontModifyCorners;
     private Drawable mBackground;
     private final LiquidGlassDrawable mGlassFinish = new LiquidGlassDrawable();
+    private final RefractionShader mRefraction = new RefractionShader();
+    private final NotificationStyleController mStyleController;
+    private final NotificationSilkDrawable mSilk;
+    private final Runnable mStyleListener = this::onStyleChanged;
+    private BackgroundBlurDrawable mBackdrop;
+    private Runnable mAppearanceChangedListener;
+    private boolean mAggregatedVisible;
+    private boolean mUsesParentMaterial;
+    private float mRequestedTopRadius;
+    private float mRequestedBottomRadius;
+    private final Path mMaterialClip = new Path();
+    private final RectF mMaterialBounds = new RectF();
+    private boolean mMaterialClipDirty = true;
+    private final Paint mFallbackPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private int mSilkAccent;
     private int mClipTopAmount;
     private int mTopOverlap;
     private int mBottomOverlap;
@@ -83,6 +104,9 @@ public class NotificationBackgroundView extends View implements Dumpable,
 
     public NotificationBackgroundView(Context context, AttributeSet attrs) {
         super(context, attrs);
+        mStyleController = NotificationStyleController.get(context);
+        mSilk = new NotificationSilkDrawable(getResources().getDisplayMetrics().density);
+        mSilkAccent = context.getColor(android.R.color.system_accent1_200);
         mDontModifyCorners = getResources().getBoolean(R.bool.config_clipNotificationsToOutline);
         mLightColoredStatefulColors = getResources().getColorStateList(
                 R.color.notification_state_color_light);
@@ -95,6 +119,66 @@ public class NotificationBackgroundView extends View implements Dumpable,
                     com.android.internal.R.color.materialColorSurfaceContainerHigh);
         }
         mFocusOverlayStroke = getResources().getDimension(R.dimen.notification_focus_stroke_width);
+    }
+
+    public void setAppearanceChangedListener(Runnable listener) {
+        mAppearanceChangedListener = listener;
+    }
+
+    public boolean hasPetalFinish() {
+        return mStyleController.hasFinish();
+    }
+
+    /** Expanded app groups have one material owner; children may retain app-colored content. */
+    public void setUsesParentMaterial(boolean usesParentMaterial) {
+        if (mUsesParentMaterial == usesParentMaterial) return;
+        mUsesParentMaterial = usesParentMaterial;
+        if (usesParentMaterial) releaseBackdrop();
+        invalidate();
+    }
+
+    @Override
+    protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        mStyleController.addListener(mStyleListener);
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        mStyleController.removeListener(mStyleListener);
+        releaseBackdrop();
+        super.onDetachedFromWindow();
+    }
+
+    @Override
+    public void onVisibilityAggregated(boolean visible) {
+        super.onVisibilityAggregated(visible);
+        mAggregatedVisible = visible;
+        onStyleChanged();
+    }
+
+    private void releaseBackdrop() {
+        if (mBackdrop == null) return;
+        mBackdrop.setVisible(false, false);
+        mBackdrop.setBlurRadius(0);
+        mRefraction.clear(mBackdrop);
+        mBackdrop.setCallback(null);
+        mBackdrop = null;
+    }
+
+    private void onStyleChanged() {
+        if (!mAggregatedVisible || !mStyleController.canRenderBackdrop()) releaseBackdrop();
+        setRadius(mRequestedTopRadius, mRequestedBottomRadius);
+        if (mBackground != null) setTint(mTintColor);
+        if (mAppearanceChangedListener != null) mAppearanceChangedListener.run();
+        invalidate();
+    }
+
+    @Override
+    protected void onConfigurationChanged(android.content.res.Configuration config) {
+        super.onConfigurationChanged(config);
+        mSilkAccent = getContext().getColor(android.R.color.system_accent1_200);
+        invalidate();
     }
 
     @Override
@@ -137,6 +221,7 @@ public class NotificationBackgroundView extends View implements Dumpable,
 
             if (mBackground != null) {
                 mBackground.setBounds(backgroundBounds);
+                drawBackdrop(canvas, mBackground);
                 mBackground.draw(canvas);
                 drawGlassFinish(canvas, mBackground);
             }
@@ -228,29 +313,91 @@ public class NotificationBackgroundView extends View implements Dumpable,
                 right = (int) (left + actualWidth);
             }
             drawable.setBounds(left, top, right, bottom);
+            drawBackdrop(canvas, drawable);
             drawable.draw(canvas);
             drawGlassFinish(canvas, drawable);
         }
     }
 
     private void drawGlassFinish(Canvas canvas, Drawable background) {
-        if (!petalGlassNotificationsEnabled()) return;
+        if (mUsesParentMaterial || !petalGlassNotificationsEnabled()) return;
         boolean dark = ContrastColorUtil.isColorDark(mTintColor == 0 ? mNormalColor : mTintColor);
+        if (mStyleController.getStyle() == 2) {
+            mSilk.draw(canvas, background.getBounds(), mCornerRadii, mSilkAccent, dark,
+                    background.getAlpha());
+            return;
+        }
         mGlassFinish.setBounds(background.getBounds());
-        mGlassFinish.setCornerRadius(getResources().getDimension(
-                R.dimen.island_corner_expanded));
+        mGlassFinish.setCornerRadius(mStyleController.getStyle() == 0
+                ? getResources().getDimension(R.dimen.island_corner_expanded)
+                : Math.max(mCornerRadii[0], mCornerRadii[4]));
+        boolean lens = mBackdrop != null && canvas.isHardwareAccelerated();
+        mGlassFinish.setSlab(lens ? mRefraction.bandFor(background.getBounds().width(),
+                background.getBounds().height(), getResources().getDisplayMetrics().density)
+                : 0f, lens ? .65f : 0f);
         mGlassFinish.setRimWidth(getResources().getDisplayMetrics().density);
         mGlassFinish.setGrainAlpha(dark ? 0x14 : 0x10);
         mGlassFinish.setRim(dark ? 0x59FFFFFF : 0x99FFFFFF,
                 dark ? 0x14FFFFFF : 0x26000000);
         Rect bounds = background.getBounds();
         int save = canvas.save();
+        if (mStyleController.getStyle() != 0) {
+            updateMaterialClip(bounds);
+            canvas.clipPath(mMaterialClip);
+        }
         if (background.getAlpha() < 255) {
             canvas.saveLayerAlpha(bounds.left, bounds.top, bounds.right, bounds.bottom,
                     background.getAlpha());
         }
         mGlassFinish.draw(canvas);
         canvas.restoreToCount(save);
+    }
+
+    private void drawBackdrop(Canvas canvas, Drawable background) {
+        if (mUsesParentMaterial) {
+            releaseBackdrop();
+            return;
+        }
+        if (!canvas.isHardwareAccelerated() || !mAggregatedVisible
+                || !mStyleController.canRenderBackdrop() || getViewRootImpl() == null
+                || background.getAlpha() == 0) {
+            releaseBackdrop();
+            if (!canvas.isHardwareAccelerated() && mStyleController.getStyle() == 1) {
+                updateMaterialClip(background.getBounds());
+                mFallbackPaint.setColor((mTintColor == 0 ? mNormalColor : mTintColor)
+                        | 0xff000000);
+                mFallbackPaint.setAlpha(background.getAlpha());
+                canvas.drawPath(mMaterialClip, mFallbackPaint);
+            }
+            return;
+        }
+        if (mBackdrop == null) {
+            mBackdrop = getViewRootImpl().createBackgroundBlurDrawable();
+        }
+        Rect bounds = background.getBounds();
+        if (!bounds.equals(mBackdrop.getBounds())) mBackdrop.setBounds(bounds);
+        mBackdrop.setCornerRadius(mCornerRadii[0], mCornerRadii[2],
+                mCornerRadii[6], mCornerRadii[4]);
+        mBackdrop.setAlpha(background.getAlpha());
+        float density = getResources().getDisplayMetrics().density;
+        mBackdrop.setBlurRadius((int) (20 * density));
+        mRefraction.applyTo(mBackdrop, bounds.width(), bounds.height(), density, .65f, .35f);
+        // Clip the finish and base by the same live group/expansion geometry.
+        updateMaterialClip(bounds);
+        int save = canvas.save();
+        canvas.clipPath(mMaterialClip);
+        mBackdrop.draw(canvas);
+        canvas.restoreToCount(save);
+    }
+
+    private void updateMaterialClip(Rect bounds) {
+        if (!mMaterialClipDirty && mMaterialBounds.left == bounds.left
+                && mMaterialBounds.top == bounds.top && mMaterialBounds.right == bounds.right
+                && mMaterialBounds.bottom == bounds.bottom) return;
+        mMaterialBounds.set(bounds);
+        mMaterialClip.reset();
+        mMaterialClip.addRoundRect(mMaterialBounds, mCornerRadii, Path.Direction.CW);
+        mMaterialClipDirty = false;
     }
 
     @Override
@@ -316,8 +463,14 @@ public class NotificationBackgroundView extends View implements Dumpable,
         Drawable baseLayer = getBaseBackgroundLayer();
         if (notificationRowTransparency() || petalGlassNotificationsEnabled()) {
             baseLayer.mutate().setTintList(null);
-            ((GradientDrawable) baseLayer).setColor(tintColor == Color.TRANSPARENT
-                    ? mNormalColor : tintColor);
+            int surface = tintColor == Color.TRANSPARENT ? mNormalColor : tintColor;
+            if (mStyleController.getStyle() != 0) {
+                // Opaque fallback on software canvases, AOD, Battery Saver, or disabled blur.
+                int alpha = mStyleController.canRenderBackdrop() && isHardwareAccelerated()
+                        ? 0xcc : (mStyleController.getStyle() == 2 ? 0xf2 : 0xff);
+                surface = (surface & 0x00ffffff) | (alpha << 24);
+            }
+            ((GradientDrawable) baseLayer).setColor(surface);
 
         } else {
             baseLayer.mutate().setTintMode(PorterDuff.Mode.SRC_ATOP);
@@ -413,8 +566,10 @@ public class NotificationBackgroundView extends View implements Dumpable,
 
     // Sets the current top and bottom radius for this background.
     public void setRadius(float topRoundness, float bottomRoundness) {
+        mRequestedTopRadius = topRoundness;
+        mRequestedBottomRadius = bottomRoundness;
         // Keep the damn island corners.
-        if (petalGlassNotificationsEnabled()) {
+        if (petalGlassNotificationsEnabled() && mStyleController.getStyle() == 0) {
             float glassRadius = getResources().getDimensionPixelSize(
                     R.dimen.island_corner_expanded);
             topRoundness = glassRadius;
@@ -424,6 +579,7 @@ public class NotificationBackgroundView extends View implements Dumpable,
             return;
         }
         mBottomIsRounded = bottomRoundness != 0.0f;
+        mMaterialClipDirty = true;
         mCornerRadii[0] = topRoundness;
         mCornerRadii[1] = topRoundness;
         mCornerRadii[2] = topRoundness;
@@ -437,10 +593,7 @@ public class NotificationBackgroundView extends View implements Dumpable,
 
     /** True when the petalOS glass-notification restyle is enabled. */
     private boolean petalGlassNotificationsEnabled() {
-        return android.provider.Settings.Secure.getInt(
-                getContext().getContentResolver(),
-                com.android.systemui.island.settings.IslandSettings.KEY_GLASS_NOTIFICATIONS,
-                1) != 0;
+        return mStyleController.hasFinish();
     }
 
     public void setBottomAmountClips(boolean clips) {

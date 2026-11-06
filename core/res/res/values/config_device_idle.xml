@@ -28,7 +28,8 @@
     <integer name="device_idle_flex_time_short_ms">60000</integer>
 
     <!-- Default for DeviceIdleController.Constants.LIGHT_IDLE_AFTER_INACTIVE_TIMEOUT -->
-    <integer name="device_idle_light_after_inactive_to_ms">240000</integer>
+    <!-- petal: light doze sooner, half the stock wait -->
+    <integer name="device_idle_light_after_inactive_to_ms">120000</integer>
 
     <!-- Default for DeviceIdleController.Constants.LIGHT_IDLE_TIMEOUT -->
     <integer name="device_idle_light_idle_to_ms">300000</integer>
@@ -88,10 +89,12 @@
     <integer name="device_idle_idle_after_inactive_to_ms">15000</integer>
 
     <!-- Default for DeviceIdleController.Constants.IDLE_PENDING_TIMEOUT -->
-    <integer name="device_idle_idle_pending_to_ms">300000</integer>
+    <!-- petal: 1 min maintenance window instead of 5, fcm high prio still punches through -->
+    <integer name="device_idle_idle_pending_to_ms">60000</integer>
 
     <!-- Default for DeviceIdleController.Constants.MAX_IDLE_PENDING_TIMEOUT -->
-    <integer name="device_idle_max_idle_pending_to_ms">600000</integer>
+    <!-- petal: cap at 2 min, 10 was a whole lot of awake for nothing -->
+    <integer name="device_idle_max_idle_pending_to_ms">120000</integer>
 
     <!-- Default for DeviceIdleController.Constants.IDLE_PENDING_FACTOR -->
     <item name="device_idle_idle_pending_factor" format="float" type="integer">2.0</item>

@@ -201,6 +201,11 @@ public abstract class ActivatableNotificationView extends ExpandableOutlineView 
     protected void onFinishInflate() {
         super.onFinishInflate();
         mBackgroundNormal = findViewById(R.id.backgroundNormal);
+        mBackgroundNormal.setAppearanceChangedListener(() -> {
+            updateBackgroundTint();
+            // The logical tint may be unchanged even though the material has changed.
+            mBackgroundNormal.setTint(mCurrentBackgroundTint);
+        });
         mFakeShadow = findViewById(R.id.fake_shadow);
         mShadowHidden = mFakeShadow.getVisibility() != VISIBLE;
         initBackground();

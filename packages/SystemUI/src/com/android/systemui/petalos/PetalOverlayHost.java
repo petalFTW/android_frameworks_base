@@ -171,7 +171,8 @@ public class PetalOverlayHost {
     public void showVolume(int level, int levelMin, int levelMax, boolean muted, boolean shake) {
         watchDisplay();
         if (mVolumeView == null) {
-            mVolumeView = new PetalVolumeOverlayView(mContext);
+            final PetalVolumeOverlayView hud = new PetalVolumeOverlayView(mContext);
+            mVolumeView = hud;
             mVolumeView.setOnDismissListener(() -> dismissVolume());
             mVolumeView.setOnStreamHoldListener(() -> {
                 if (mVolumeStreamCycleListener != null) mVolumeStreamCycleListener.onStreamCycleRequested();
@@ -181,6 +182,8 @@ public class PetalOverlayHost {
                 public void onScrub(float fraction) {
                     // hold the hud open during a drag
                     mHandler.removeCallbacks(mVolumeDismissRunnable);
+                    // fill follows the finger now, not the audioservice round trip
+                    hud.previewLevel(fraction);
                     if (mVolumeScrubListener != null) {
                         mVolumeScrubListener.onVolumeScrub(fraction);
                     }
@@ -216,7 +219,10 @@ public class PetalOverlayHost {
         }
         if (level != mLastVolumeLevel) {
             mLastVolumeLevel = level;
-            PetalUtils.vibrate(mContext, VibrationEffect.EFFECT_TICK);
+            // preview already ticked during a drag, dont double buzz
+            if (!mVolumeView.isScrubbingOrSettling()) {
+                PetalUtils.vibrate(mContext, VibrationEffect.EFFECT_TICK);
+            }
         }
         int range = levelMax - levelMin;
         float fraction = range > 0 ? (float) (level - levelMin) / (float) range : 0f;

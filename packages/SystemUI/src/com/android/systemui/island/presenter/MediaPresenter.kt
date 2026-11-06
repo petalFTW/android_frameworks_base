@@ -715,8 +715,11 @@ class MediaPresenter(
     private val progressTicker = object : Runnable {
         override fun run() {
             if (destroyed || !playing) return
-            updateSeekProgress()
-            mainHandler.postDelayed(this, TICK_MS)
+            // screen off or bar hidden = nobody's watching, skip the binder calls and idle slow
+            val watching = seekBar?.isShown == true &&
+                context.getSystemService(android.os.PowerManager::class.java)?.isInteractive != false
+            if (watching) updateSeekProgress()
+            mainHandler.postDelayed(this, if (watching) TICK_MS else IDLE_TICK_MS)
         }
     }
 
@@ -778,6 +781,7 @@ class MediaPresenter(
     private companion object {
         // seek bar poll interval while playing
         const val TICK_MS = 500L
+        const val IDLE_TICK_MS = 3000L
 
         // incoming-cover cue from PetalMusic's in-app mixer
         const val ACTION_ART_FADE = "org.rab1d.bridge.action.TRANSITION_ART"

@@ -116,6 +116,8 @@ class HeadsUpCoordinatorTest : SysuiTestCase() {
     private val headsUpManager = kosmos.mockHeadsUpManager
     private val headsUpViewBinder: HeadsUpViewBinder = mock(HeadsUpViewBinder::class.java)
     private val islandSettings = mock(com.android.systemui.island.settings.IslandSettings::class.java)
+    private val petalStatusBarState =
+        mock(com.android.systemui.plugins.statusbar.StatusBarStateController::class.java)
     private val visualInterruptionDecisionProvider: VisualInterruptionDecisionProvider =
         mock(VisualInterruptionDecisionProvider::class.java)
     private val remoteInputManager: NotificationRemoteInputManager =
@@ -159,6 +161,7 @@ class HeadsUpCoordinatorTest : SysuiTestCase() {
                 statusBarNotificationChipsInteractor,
                 kosmos.statusBarChipsUiEventLogger,
                 islandSettings,
+                petalStatusBarState,
                 headerController,
                 executor,
             )

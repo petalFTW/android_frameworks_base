@@ -135,10 +135,12 @@ constructor(
             carouselVisibility = MediaCarouselVisibility.WhenNotEmpty,
         )
 
+    // petalOS keeps the player in QQS even when it's only a resumption card. After a reboot the
+    // music app isn't running, so "active only" hid the player until expanded QS was visited.
     val qqsMediaUiBehavior =
         MediaUiBehavior(
             isCarouselDismissible = true,
-            carouselVisibility = MediaCarouselVisibility.WhenAnyCardIsActive,
+            carouselVisibility = MediaCarouselVisibility.WhenNotEmpty,
         )
 
     private val qqsMediaInRowViewModel =
@@ -158,7 +160,11 @@ constructor(
         initialValue = com.android.systemui.petalos.PetalMediaSpace.notificationHeight.value,
         source = com.android.systemui.petalos.PetalMediaSpace.notificationHeight,
     )
-    private var largeQqsMeasurement by mutableStateOf(Triple(0, 0, 0f))
+    private data class LargeQqsMeasurement(
+        val height: Int, val width: Int, val fontScale: Float, val densityDpi: Int,
+        val orientation: Int,
+    )
+    private var largeQqsMeasurement by mutableStateOf(LargeQqsMeasurement(0, 0, 0f, 0, 0))
     private val availableShadeHeight by hydrator.hydratedStateOf(
         traceName = "availableShadeHeight",
         initialValue = com.android.systemui.petalos.PetalMediaSpace.availableShadeHeight.value,
@@ -166,15 +172,21 @@ constructor(
     )
     private val requestedCompactMedia by derivedStateOf {
         val density = resources.displayMetrics.density
-        val (height, width, fontScale) = largeQqsMeasurement
-        val measured = height > 0 && width == resources.displayMetrics.widthPixels &&
-            fontScale == resources.configuration.fontScale
-        val largeHeight = if (measured) height else (440f * density).toInt()
+        val measurement = largeQqsMeasurement
+        val config = resources.configuration
+        val measured = measurement.height > 0 &&
+            measurement.width == resources.displayMetrics.widthPixels &&
+            measurement.fontScale == config.fontScale &&
+            measurement.densityDpi == config.densityDpi &&
+            measurement.orientation == config.orientation
+        val largeHeight = if (measured) measurement.height else (440f * density).toInt()
         val shadeHeight = if (availableShadeHeight > 0) availableShadeHeight else
             resources.displayMetrics.heightPixels - (96f * density).toInt()
-        val available = shadeHeight - largeHeight
-        // Two tall notifications can crowd this thing just fine.
-        mediaNotificationHeight > available.coerceAtLeast(0)
+        // No recovery margin: neither input depends on which player is showing, so nothing can
+        // flap, and a 24dp margin kept slim stuck whenever the slack was smaller than that.
+        com.android.systemui.petalos.PetalMediaLayoutPolicy.useCompact(
+            settledCompactMedia, mediaNotificationHeight, shadeHeight, largeHeight, 0,
+        )
     }
     private var settledCompactMedia by mutableStateOf(false)
     val compactMedia: Boolean
@@ -190,8 +202,9 @@ constructor(
                 com.android.systemui.petalos.PetalMediaStyle.LargeProgress ||
                 player.measuredHeight != player.measureState.measureHeight) return
         }
-        largeQqsMeasurement = Triple(height, resources.displayMetrics.widthPixels,
-            resources.configuration.fontScale)
+        largeQqsMeasurement = LargeQqsMeasurement(height, resources.displayMetrics.widthPixels,
+            resources.configuration.fontScale, resources.configuration.densityDpi,
+            resources.configuration.orientation)
     }
 
     val footerActionsViewModel =
@@ -224,7 +237,7 @@ constructor(
     var panelExpansionFraction by mutableStateOf(0f)
 
     val shadeMotionProgress: Float
-        // Second swipe ain't part of the first pull-down.
+        // Second swipe ain't part of the first pull-down; qsExpansion sits at 1 while closing.
         get() = panelExpansionFraction.coerceIn(0f, 1f)
 
     var squishinessFraction by mutableStateOf(1f)
@@ -583,11 +596,29 @@ constructor(
             launch {
                 // Incoming rows can change height, but not the layout under a moving finger.
                 snapshotFlow {
-                    if (panelExpansionFraction <= 0f || panelExpansionFraction >= 1f) {
+                    // Fully expanded QS hides the notifications, so their height reads 0 there
+                    // and would pick the large player for the trip back to QQS.
+                    if ((panelExpansionFraction <= 0f || panelExpansionFraction >= 1f) &&
+                        qsExpansion <= 0f) {
                         requestedCompactMedia
                     } else null
                 }.collect { requested ->
-                    if (requested != null) settledCompactMedia = requested
+                    if (requested != null && requested != settledCompactMedia) {
+                        com.android.systemui.petalos.PetalMediaSpace.onPlayerStyleFlip()
+                        settledCompactMedia = requested
+                        // Publish the legacy host style in the same transaction as selection;
+                        // a second snapshotFlow used to leave a frame measured as LargeProgress.
+                        if (usingMedia && !MediaControlsInComposeFlag.isEnabled) {
+                            qqsMediaHost.petalStyle = if (requested) {
+                                com.android.systemui.petalos.PetalMediaStyle.Mini
+                            } else com.android.systemui.petalos.PetalMediaStyle.LargeProgress
+                            // We only flip while settled, usually shade closed or on the lock
+                            // screen, where requestLayout can't reach the Compose slot. It kept
+                            // the old player's height, a slim player over a large gap.
+                            com.android.systemui.media.controls.ui.controller
+                                .MediaHostStatesManager.playersAttached.value += 1
+                        }
+                    }
                 }
             }
             launch { hydrateSquishinessInteractor() }
@@ -595,16 +626,6 @@ constructor(
                 launch { hydrateQqsMediaExpansion() }
                 launch { hydrateMediaSquishiness() }
                 launch { hydrateMediaDisappearParameters() }
-                launch {
-                    // first pull flips on crowding alone; expanded stays split-artwork
-                    snapshotFlow { compactMedia }.collect {
-                        qqsMediaHost.petalStyle = if (it) {
-                            com.android.systemui.petalos.PetalMediaStyle.Mini
-                        } else {
-                            com.android.systemui.petalos.PetalMediaStyle.LargeProgress
-                        }
-                    }
-                }
             }
             launch { hydrator.activate() }
             launch { containerViewModel.activate() }
@@ -623,7 +644,7 @@ constructor(
                 com.android.systemui.petalos.PetalMediaStyle.Mini
             } else com.android.systemui.petalos.PetalMediaStyle.LargeProgress
             expansion = qqsMediaExpansion
-            showsOnlyActiveMedia = true
+            showsOnlyActiveMedia = false
             init(LOCATION_QQS)
         }
         qsMediaHost.apply {

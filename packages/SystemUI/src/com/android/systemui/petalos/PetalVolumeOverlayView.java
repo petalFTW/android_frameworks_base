@@ -20,9 +20,11 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.graphics.Rect;
 import android.os.Bundle;
 import android.os.VibrationEffect;
 import android.util.AttributeSet;
+import android.util.Log;
 import android.util.PathParser;
 import android.view.Choreographer;
 import android.view.MotionEvent;
@@ -50,9 +52,9 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
     private static final float PAD_DP = 8f;
     // anchor read at runtime from PetalUiConfig
 
-    // spring settings
-    private static final float SPRING_STIFFNESS = 420f;
-    private static final float SPRING_DAMPING = 0.56f;
+    private static final String TAG = "PetalVolumeHud";
+
+    // body springs live in PetalLiquid now
     private static final float FILL_DAMPING = 0.88f;
 
     private static final long SHAKE_MS = 440L;
@@ -69,6 +71,15 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
     private final PetalSpring mOpen = new PetalSpring(0f);
     private final PetalSpring mContour = new PetalSpring(0f);
     private final PetalSpring mFill = new PetalSpring(0f);
+    private final PetalLiquid mLiquid = new PetalLiquid();
+    // true once dismiss() runs, swaps the springs to the slurp set
+    private boolean mDraining = false;
+    private float mExitT = 0f;
+    // stream got swapped mid hold, let the next level in even with a finger down
+    private boolean mAcceptNextLevel = false;
+    // stale echoes still trickle in right after lift off
+    private static final long SCRUB_SETTLE_MS = 300L;
+    private long mScrubEndUptime = Long.MIN_VALUE / 2;
 
     // user tapped to close
     public interface OnDismissListener {
@@ -177,6 +188,13 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
     }
 
     @Override
+    protected void onLayout(boolean changed, int l, int t, int r, int b) {
+        super.onLayout(changed, l, t, r, b);
+        // gesture nav kept nicking touches off the edge strip, tell it to piss off
+        if (changed) setSystemGestureExclusionRects(java.util.List.of(new Rect(0, 0, r - l, b - t)));
+    }
+
+    @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
         // re-read rotation after a resize
@@ -188,6 +206,9 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
     // set level and mute state
     public void setVolume(float fraction, boolean muted, int steps) {
         mVolumeSteps = Math.max(1, steps);
+        // finger is boss mid drag, late echoes were yanking the fill around
+        if (isScrubbingOrSettling() && !mAcceptNextLevel) return;
+        mAcceptNextLevel = false;
         boolean changed = mMuted != muted || mLevel != PetalUtils.clamp(fraction, 0f, 1f);
         mMuted = muted;
         mLevel = PetalUtils.clamp(fraction, 0f, 1f);
@@ -212,6 +233,7 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
     public void setStream(int stream) {
         if (mStream == stream) return;
         mStream = stream;
+        mAcceptNextLevel = true;
         ensureFrame();
     }
 
@@ -220,9 +242,35 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
         return mScrubbing;
     }
 
+    // finger down or only just lifted
+    public boolean isScrubbingOrSettling() {
+        return mScrubbing
+                || android.os.SystemClock.uptimeMillis() - mScrubEndUptime < SCRUB_SETTLE_MS;
+    }
+
+    // drag sets the fill right away, snapped to real steps
+    public void previewLevel(float fraction) {
+        float q = Math.round(PetalUtils.clamp(fraction, 0f, 1f) * mVolumeSteps)
+                / (float) mVolumeSteps;
+        if (q != mLevel || mMuted != (q <= 0f)) {
+            PetalUtils.vibrate(getContext(), VibrationEffect.EFFECT_TICK);
+        }
+        mLevel = q;
+        mMuted = q <= 0f;
+        mFill.set(q);
+        ensureFrame();
+    }
+
     // animate the capsule out
     public void show() {
         mShowing = true;
+        if (mDraining) {
+            // came back mid splat, pick the goo up from where it is
+            mOpen.snap(mLiquid.reach);
+            mContour.snap(Math.min(mLiquid.spread, 1f));
+            mLiquid.cancelExit();
+        }
+        mDraining = false;
         requestFocus();
         mOpen.set(1f);
         mContour.set(1f);
@@ -236,6 +284,8 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
     // animate it back in
     public void dismiss() {
         mShowing = false;
+        if (!mDraining) mLiquid.beginExit(System.nanoTime(), mOpen.value);
+        mDraining = true;
         mOpen.set(0f);
         mContour.set(0f);
         ensureFrame();
@@ -265,8 +315,18 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
         mLastFrameNanos = frameTimeNanos;
         dt = Math.min(dt, MAX_DT);
 
-        mOpen.step(dt, SPRING_STIFFNESS, SPRING_DAMPING);
-        mContour.step(dt, 240f, 0.65f);
+        boolean splatting = false;
+        if (mDraining) {
+            mExitT = mLiquid.exitT(frameTimeNanos);
+            splatting = mExitT < 1f;
+            if (!splatting) {
+                // splat finished, park the springs so onDraw bails
+                mOpen.snap(0f);
+                mContour.snap(0f);
+            }
+        } else {
+            PetalLiquid.stepOpen(mOpen, mContour, dt);
+        }
         mFill.step(dt, 900f, FILL_DAMPING);
 
         long elapsedMs = (frameTimeNanos - mShakeStartNanos) / 1_000_000L;
@@ -278,7 +338,7 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
 
         invalidate();
 
-        boolean animating = !mOpen.resting() || !mContour.resting()
+        boolean animating = splatting || !mOpen.resting() || !mContour.resting()
                 || !mFill.resting()
                 || (frameTimeNanos - mShakeStartNanos) < SHAKE_MS * 1_000_000L;
         if (animating) {
@@ -298,7 +358,8 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
 
     @Override
     protected void onDraw(Canvas canvas) {
-        if (!mShowing && mOpen.resting() && mContour.resting() && mOpen.value < 0.002f) {
+        if (!mShowing && !(mDraining && mExitT < 1f) && mOpen.resting() && mContour.resting()
+                && mOpen.value < 0.002f) {
             return; // nothing to draw
         }
 
@@ -312,21 +373,26 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
         PetalUtils.applyOrientationTransform(canvas, mRotation,
                 getWidth(), getHeight());
 
-        float o = PetalUtils.clamp(mOpen.value, 0f, 1.15f);
-        float sx = PetalUtils.lerp(0f, 1f, o);
-        float contour = PetalUtils.clamp(mContour.value, 0f, 1.15f);
-        float sy = 1f + 0.18f * (contour - o);
-        float opacity = PetalUtils.clamp(o * 2.4f, 0f, 1f);
-
         // the window already handles the anchor
         float cy = spaceH * 0.5f;
         float w = CW * mDensity;
         float h = CH * mDensity;
+        if (mDraining) {
+            // window only fits ~1.3x height incl the wobble, past that the smear gets chopped flat
+            mLiquid.solveExit(mExitT, w, 1.28f);
+        } else {
+            mLiquid.solve(mOpen, mContour, false, w, h);
+        }
+        float o = mLiquid.reach;
+        float sx = o;
+        float sy = mLiquid.spread;
+        float opacity = mLiquid.opacity;
+        float bulge = mLiquid.bulge;
         float edgeX = edgeLeft ? 0f : spaceW;
         float capsuleLeft = edgeLeft ? 0f : edgeX - w;
         float rad = Math.min(RAD * mDensity, w / 2f);
-        float jointDepth = JOINT * mDensity * contour;
-        float xTail = (JOINT * 0.5f + 10f) * mDensity * contour;
+        float jointDepth = JOINT * mDensity * mLiquid.joint;
+        float xTail = (JOINT * 0.5f + 10f) * mDensity * mLiquid.joint;
 
         canvas.save();
         canvas.translate(0f, mShakeDp * mDensity);
@@ -337,9 +403,11 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
         mBodyPaint.setAlpha((int) (255f * opacity));
         mBodyPaint.setShadowLayer(24f * mDensity, 0f, 10f * mDensity, 0x6B000000);
         Path body = PetalUtils.jointPath(edgeLeft, cy, w * sx, h * sy,
-                Math.min(rad, w * sx / 2f), jointDepth, xTail, edgeX);
+                Math.min(rad, w * sx / 2f), jointDepth, xTail, edgeX, bulge);
+        // glass box has to cover the fat nose too or it shows bare
         if (!mDialogGlass.draw(canvas, body, edgeLeft, edgeX, cy,
-                w * sx, h * sy, Math.min(rad, w * sx / 2f), opacity)) {
+                w * sx + Math.max(0f, bulge) * 0.5f, h * sy, Math.min(rad, w * sx / 2f),
+                opacity)) {
             canvas.drawPath(body, mBodyPaint);
         }
         mBodyPaint.clearShadowLayer();
@@ -533,6 +601,7 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
         float fraction = fractionForScreenPoint(event.getX(), event.getY());
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
+                Log.d(TAG, "down showing=" + mShowing + " draining=" + mDraining);
                 mScrubbing = true;
                 mHoldCycled = false;
                 mHoldX = event.getX();
@@ -555,15 +624,18 @@ public class PetalVolumeOverlayView extends View implements Choreographer.FrameC
                 mScrubListener.onScrub(fraction);
                 return true;
             case MotionEvent.ACTION_CANCEL:
+                Log.d(TAG, "cancel mid scrub, someone stole it");
                 removeCallbacks(mStreamHoldRunnable);
                 mHoldCycled = false;
                 mScrubbing = false;
+                mScrubEndUptime = android.os.SystemClock.uptimeMillis();
                 mScrubListener.onScrubEnd();
                 return true;
             case MotionEvent.ACTION_UP:
                 removeCallbacks(mStreamHoldRunnable);
                 mHoldCycled = false;
                 mScrubbing = false;
+                mScrubEndUptime = android.os.SystemClock.uptimeMillis();
                 mScrubListener.onScrub(fraction);
                 mScrubListener.onScrubEnd();
                 return true;

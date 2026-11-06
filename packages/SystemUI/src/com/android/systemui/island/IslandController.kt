@@ -43,6 +43,8 @@ import com.android.systemui.island.presenter.NotificationPayload
 import com.android.systemui.island.presenter.NotificationPresenter
 import com.android.systemui.island.presenter.SystemChipPayload
 import com.android.systemui.island.presenter.SystemChipPresenter
+import com.android.systemui.island.presenter.TorchPayload
+import com.android.systemui.island.presenter.TorchPresenter
 import com.android.systemui.island.settings.IslandSettings
 import com.android.systemui.island.signal.ExtraKeySignalSource
 import com.android.systemui.island.signal.CalendarSignalSource
@@ -96,6 +98,8 @@ class IslandController @Inject constructor(
     private var window: IslandWindow? = null
     // park the blobs as soon as the shade starts moving
     private var qsOpen = false
+    // notifs that landed while qs was up stay on screen until they collapse
+    private val shownOverQs = mutableSetOf<IslandView>()
     private val coverageDrawListener = ViewTreeObserver.OnPreDrawListener {
         refreshStatusBarCoverage()
         true
@@ -209,8 +213,11 @@ class IslandController @Inject constructor(
         // QQS shows on the first swipe, not just when full QS opens
         scope.launch {
             shadeInteractor.anyExpansion.collect { expansion ->
-                qsOpen = expansion > 0f
-                applyBlobHidden(qsOpen)
+                val open = expansion > 0f
+                if (open == qsOpen) return@collect
+                qsOpen = open
+                if (!open) shownOverQs.clear()
+                applyBlobHidden(open)
             }
         }
     }
@@ -284,8 +291,13 @@ class IslandController @Inject constructor(
                     presenter.setHost(host)
                     view.visibility = View.VISIBLE
                     view.show(signal, presenter, form)
-                    // a blob that pops up while qs is open needs to stay parked
-                    view.slideAway(qsOpen, animate = false)
+                    // a notif over qs shows in full, anything else stays parked
+                    if (qsOpen && signal.kind == SignalKind.NOTIFICATION) {
+                        shownOverQs.add(view)
+                    } else {
+                        shownOverQs.remove(view)
+                    }
+                    view.slideAway(qsOpen && view !in shownOverQs, animate = false)
                     refreshStatusBarCoverage()
                     // relayout can move the blob, recheck after
                     view.doOnLayout { refreshStatusBarCoverage() }
@@ -310,10 +322,13 @@ class IslandController @Inject constructor(
 
                 override fun onCollapse() {
                     view.collapse()
+                    // the notif has been seen, tuck the leftover pill back under qs
+                    if (shownOverQs.remove(view) && qsOpen) view.slideAway(true)
                     refreshStatusBarCoverage()
                 }
 
                 override fun onDismiss() {
+                    shownOverQs.remove(view)
                     view.dismiss()
                     refreshStatusBarCoverage()
                     // dissolve takes a moment, check again when it's done
@@ -368,7 +383,9 @@ class IslandController @Inject constructor(
                     }
                 }
 
-                override fun onUserExpand(island: IslandView) = machine.userExpand()
+                override fun onUserExpand(island: IslandView) {
+                    if (island.canExpand()) machine.userExpand()
+                }
 
                 override fun onUserCollapse(island: IslandView) = machine.userCollapse()
 
@@ -400,7 +417,10 @@ class IslandController @Inject constructor(
                 val payload = signal.payload as? CallPayload ?: return null
                 CallPresenter(context, geometry, payload)
             }
-            SignalKind.TORCH,
+            SignalKind.TORCH -> {
+                val payload = signal.payload as? TorchPayload ?: return null
+                TorchPresenter(context, geometry, payload)
+            }
             SignalKind.CHARGING,
             SignalKind.VOLUME,
             SignalKind.SCREEN_RECORDING,
@@ -420,8 +440,8 @@ class IslandController @Inject constructor(
     // shove both blobs off-screen while qs is showing
     private fun applyBlobHidden(hidden: Boolean, animate: Boolean = true) {
         val root = window?.rootView ?: return
-        root.leftIsland.slideAway(hidden, animate)
-        root.rightIsland.slideAway(hidden, animate)
+        root.leftIsland.slideAway(hidden && root.leftIsland !in shownOverQs, animate)
+        root.rightIsland.slideAway(hidden && root.rightIsland !in shownOverQs, animate)
     }
 
     // hide the bar icons the blob is sitting on, at the blob's own progress

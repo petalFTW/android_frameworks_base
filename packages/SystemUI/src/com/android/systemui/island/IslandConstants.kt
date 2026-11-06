@@ -22,13 +22,12 @@ object IslandConstants {
     const val METABALL_K_MAX_DP = 22f
     const val METABALL_BREAK_DISTANCE_DP = 64f
     const val DROPLET_BASE_RADIUS_DP = 14f
-    const val DROPLET_EMERGE_RADIUS_DP = 14f
-    const val DROPLET_EMERGE_MIN_DP = 10f
     const val DRAG_COMMIT_THRESHOLD_DP = 56f
     const val RUBBER_BAND_FACTOR = 0.55f
 
     // Timing (ms)
-    const val DUR_EMERGE = 420L
+    const val DUR_EMERGE = 360L
+    const val DUR_DRAIN = 280L
     const val DUR_EXPAND = 380L
     const val DUR_COLLAPSE = 260L
     const val DUR_DISSOLVE = 220L

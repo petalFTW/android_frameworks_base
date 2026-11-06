@@ -115,6 +115,7 @@ import com.android.systemui.scene.domain.interactor.SceneInteractor;
 import com.android.systemui.scene.shared.flag.SceneContainerFlag;
 import com.android.systemui.settings.DisplayTracker;
 import com.android.systemui.settings.UserTracker;
+import com.android.systemui.shade.HomeShadeTransitionBridge;
 import com.android.systemui.shade.ShadeViewController;
 import com.android.systemui.shade.display.StatusBarTouchShadeDisplayPolicy;
 import com.android.systemui.shade.domain.interactor.ShadeInteractor;
@@ -170,6 +171,7 @@ public class LauncherProxyService implements CallbackController<LauncherProxyLis
     private final ShellInterface mShellInterface;
     private final Lazy<ShadeViewController> mShadeViewControllerLazy;
     private final PerDisplayRepository<SysUiState> mPerDisplaySysUiStateRepository;
+    private final HomeShadeTransitionBridge mHomeShadeTransitionBridge;
     private final DisplayRepository mDisplayRepository;
     private final HeadlessSystemUserMode mHeadlessSystemUserMode;
     private SysUiState mDefaultDisplaySysUIState;
@@ -683,6 +685,7 @@ public class LauncherProxyService implements CallbackController<LauncherProxyLis
             try {
                 Log.d(TAG_OPS, "LauncherProxyService connected, initializing launcher proxy");
                 mLauncherProxy.onInitialize(params);
+                mHomeShadeTransitionBridge.start(mLauncherProxy);
             } catch (RemoteException e) {
                 mCurrentBoundedUserId = -1;
                 Log.e(TAG_OPS, "Failed to call onInitialize()", e);
@@ -716,6 +719,7 @@ public class LauncherProxyService implements CallbackController<LauncherProxyLis
 
         @Override
         public void onServiceDisconnected(ComponentName name) {
+            mHomeShadeTransitionBridge.stop();
             Log.w(TAG_OPS, "Service disconnected");
             // Do nothing
             mCurrentBoundedUserId = -1;
@@ -785,6 +789,7 @@ public class LauncherProxyService implements CallbackController<LauncherProxyLis
                     notifySystemUiStateFlags(sysUiFlags, displayId);
                 }
             };
+
     @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
     @Inject
     public LauncherProxyService(Context context,
@@ -816,7 +821,8 @@ public class LauncherProxyService implements CallbackController<LauncherProxyLis
             ProcessWrapper processWrapper,
             DisplayRepository displayRepository,
             DesktopState desktopState,
-            HeadlessSystemUserMode headlessSystemUserMode
+            HeadlessSystemUserMode headlessSystemUserMode,
+            HomeShadeTransitionBridge homeShadeTransitionBridge
     ) {
         mHeadlessSystemUserMode = headlessSystemUserMode;
         // b/241601880: This component should only be running for primary users or
@@ -852,6 +858,7 @@ public class LauncherProxyService implements CallbackController<LauncherProxyLis
         mQuickStepIntent = new Intent(ACTION_QUICKSTEP)
                 .setPackage(mRecentsComponentName.getPackageName());
         mPerDisplaySysUiStateRepository = perDisplaySysUiStateRepository;
+        mHomeShadeTransitionBridge = homeShadeTransitionBridge;
         mDisplayRepository = displayRepository;
         mDefaultDisplaySysUIState = perDisplaySysUiStateRepository.get(Display.DEFAULT_DISPLAY);
         mDefaultDisplaySysUIState.addCallback(mSysUiStateCallback);
@@ -1165,6 +1172,7 @@ public class LauncherProxyService implements CallbackController<LauncherProxyLis
     }
 
     private void disconnectFromLauncherService(String disconnectReason) {
+        mHomeShadeTransitionBridge.stop();
         Log.d(TAG_OPS, "disconnectFromLauncherService bound?: " + mBound +
                 " currentProxy: " + mLauncherProxy + " disconnectReason: " + disconnectReason,
                 new Throwable());

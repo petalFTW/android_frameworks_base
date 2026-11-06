@@ -84,15 +84,8 @@ constructor(
         this.scheduler = s
     }
 
-    fun notifyPluggedIn(@IntRange(from = 0, to = 100) batteryLevel: Int) {
-        scheduler.onStatusEvent(
-            BatteryEvent(
-                batteryLevel,
-                batteryInteractor.batteryIconStyle.value,
-                batteryInteractor.showPercentNextToIcon.value,
-            )
-        )
-    }
+    // petal: stock plug-in chip is gone, the charging island covers it
+    fun notifyPluggedIn(@IntRange(from = 0, to = 100) batteryLevel: Int) = Unit
 
     fun notifyPrivacyItemsEmpty() {
         scheduler.removePersistentDot()

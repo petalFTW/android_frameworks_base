@@ -67,6 +67,9 @@ class IslandAnimator(private val view: View) {
         get() = alphaAnimator?.isStarted == true ||
             translationXAnimator?.isStarted == true || translationYAnimator?.isStarted == true
 
+    val isSlidingVertically: Boolean
+        get() = translationYAnimator?.isStarted == true
+
     // called when the size spring stops moving
     var onSettled: (() -> Unit)? = null
 
@@ -170,7 +173,12 @@ class IslandAnimator(private val view: View) {
         alphaAnimator?.start()
     }
 
-    fun animateTranslationX(target: Float, durationMs: Long = 220L, onEnd: (() -> Unit)? = null) {
+    fun animateTranslationX(
+        target: Float,
+        durationMs: Long = 220L,
+        onUpdate: ((Float) -> Unit)? = null,
+        onEnd: (() -> Unit)? = null,
+    ) {
         translationXAnimator?.cancel()
         if (mode == AnimationMode.NONE) {
             view.translationX = target
@@ -180,7 +188,11 @@ class IslandAnimator(private val view: View) {
         translationXAnimator = ValueAnimator.ofFloat(view.translationX, target).apply {
             duration = durationMs
             interpolator = PathInterpolator(0.3f, 0f, 0.8f, 0.15f)
-            addUpdateListener { a -> view.translationX = a.animatedValue as Float }
+            addUpdateListener { a ->
+                val tx = a.animatedValue as Float
+                view.translationX = tx
+                onUpdate?.invoke(tx)
+            }
             addListener(
                 object : AnimatorListenerAdapter() {
                     private var cancelled = false
@@ -232,18 +244,25 @@ class IslandAnimator(private val view: View) {
         if (mode == AnimationMode.NONE) {
             view.translationX = 0f
             view.alpha = 1f
+            view.scaleX = 1f
+            view.scaleY = 1f
             onEnd?.invoke()
             return
         }
         val startTx = view.translationX
         val startAlpha = view.alpha
+        val startSx = view.scaleX
+        val startSy = view.scaleY
         translationXAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
             duration = 280L
-            interpolator = PathInterpolator(0.2f, 0f, 0f, 1f)
+            // little overshoot so the taffy snaps back like goo, not a door
+            interpolator = android.view.animation.OvershootInterpolator(1.6f)
             addUpdateListener { a ->
-                val f = a.animatedFraction
+                val f = a.animatedValue as Float
                 view.translationX = startTx * (1f - f)
-                view.alpha = startAlpha + (1f - startAlpha) * f
+                view.alpha = (startAlpha + (1f - startAlpha) * f).coerceAtMost(1f)
+                view.scaleX = startSx + (1f - startSx) * f
+                view.scaleY = startSy + (1f - startSy) * f
             }
             addListener(
                 object : AnimatorListenerAdapter() {

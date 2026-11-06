@@ -604,6 +604,18 @@ public class CameraMetadataNative implements Parcelable {
         return getBase(key.getNativeKey());
     }
 
+    private static final int TAG_SKIPPED = -1;
+
+    // oplus' camera sdk knows way more tags than the hal does, the hal can't use those anyway
+    private int oplusTagOrSkip(String name) {
+        try {
+            return nativeGetTagFromKeyLocal(mMetadataPtr, name);
+        } catch (IllegalArgumentException e) {
+            if (name.startsWith("com.oplus.")) return TAG_SKIPPED;
+            throw e;
+        }
+    }
+
     private <T> T getBase(Key<T> key) {
         int tag, nativeType;
         byte[] values = null;
@@ -611,7 +623,8 @@ public class CameraMetadataNative implements Parcelable {
             if (key.hasTag()) {
                 tag = key.getTag();
             } else {
-                tag = nativeGetTagFromKeyLocal(mMetadataPtr, key.getName());
+                tag = oplusTagOrSkip(key.getName());
+                if (tag == TAG_SKIPPED) return null;
                 key.cacheTag(tag);
             }
             values = readValues(tag);
@@ -1997,7 +2010,8 @@ public class CameraMetadataNative implements Parcelable {
         if (key.hasTag()) {
             tag = key.getTag();
         } else {
-            tag = nativeGetTagFromKeyLocal(mMetadataPtr, key.getName());
+            tag = oplusTagOrSkip(key.getName());
+            if (tag == TAG_SKIPPED) return;
             key.cacheTag(tag);
         }
         if (value == null) {

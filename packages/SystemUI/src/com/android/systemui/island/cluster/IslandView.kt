@@ -18,11 +18,9 @@ package com.android.systemui.island.cluster
 
 import android.content.Context
 import android.content.res.Configuration
-import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Outline
 import android.graphics.Rect
-import android.graphics.RectF
 import android.os.Build
 import android.view.Gravity
 import android.view.View
@@ -41,8 +39,6 @@ import com.android.systemui.island.presenter.IslandTint
 import com.android.systemui.island.render.IslandMiniNotifSource
 import com.android.systemui.island.render.IslandMiniStatusView
 import com.android.systemui.island.render.LiquidGlassDrawable
-import com.android.systemui.island.render.MetaballPathRenderer
-import com.android.systemui.island.render.MetaballShaderRenderer
 import com.android.systemui.island.render.RefractionShader
 import com.android.systemui.island.settings.AnimationMode
 import com.android.internal.graphics.drawable.BackgroundBlurDrawable
@@ -79,9 +75,6 @@ class IslandView(
     private val miniStatus = IslandMiniStatusView(context, cluster, geometry, miniNotifSource)
     private val animator = IslandAnimator(this)
     private val touchHandler = IslandTouchHandler(this, geometry)
-    private val metaball = MetaballPathRenderer()
-    private val shaderMetaball: MetaballShaderRenderer? =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) MetaballShaderRenderer() else null
 
     private var presenter: IslandPresenter? = null
     private var signal: IslandSignal? = null
@@ -90,6 +83,9 @@ class IslandView(
     private var gestureStartX = 0f
     private var gestureStartY = 0f
 
+    // slid off the top while qs is up
+    private var parked = false
+
     private var emerging = false
     private var emergeP = 0f
     private var emergeAnimator: android.animation.ValueAnimator? = null
@@ -97,6 +93,12 @@ class IslandView(
     // non-zero while sliding out on dismiss; drives the status-bar hand-off
     private var dismissing = false
     private var dismissDistance = 1f
+
+    // timeout exit, the blob gets sucked out through the edge
+    private var draining = false
+    private var drainP = 0f
+    private var drainAnimator: android.animation.ValueAnimator? = null
+    private var drainFromX = 0f
 
     // signals that open as a card emerge bigger
     private var pendingRebloom = false
@@ -112,7 +114,7 @@ class IslandView(
         context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private var blurEnabled = false
     private val blurListener = Consumer<Boolean> {
-        updateBackdropBlur()
+        updateBackdropBlur(animate = false)
     }
 
     private var tintColor = 0xC0101012.toInt()
@@ -134,6 +136,7 @@ class IslandView(
 
     init {
         setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> keepParked() }
         clipChildren = true
         clipToPadding = true
         background = null
@@ -145,11 +148,6 @@ class IslandView(
         clipToOutline = true
         updateBackdropBlur()
         updateGlassStyle()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            runCatching {
-                windowManager.addCrossWindowBlurEnabledListener(context.mainExecutor, blurListener)
-            }
-        }
         glassLayer.background = glass
         addView(
             blurLayer,
@@ -172,7 +170,11 @@ class IslandView(
                 FrameLayout.LayoutParams.MATCH_PARENT,
             ),
         )
-        animator.onSettled = { callbacks?.onFormSettled(this, isExpanded) }
+        animator.onSettled = {
+            // morph done, drop the glass if we ended up as the little chip again
+            updateBackdropBlur()
+            callbacks?.onFormSettled(this, isExpanded)
+        }
     }
 
     override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
@@ -196,32 +198,68 @@ class IslandView(
     override fun onTouchEvent(ev: android.view.MotionEvent): Boolean =
         touchHandler.onTouchEvent(ev) || super.onTouchEvent(ev)
 
-    // blur on or off, tint goes darker when there's no blur
-    private fun updateBackdropBlur() {
-        blurEnabled = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-            windowManager.isCrossWindowBlurEnabled && PetalConfig.getIslandBlurScale(context) > 0f
+    // collapsed chip sits on the black status bar, blur there is invisible but still makes
+    // SF gpu-compose every frame under it. so glass fades in with the card and back out with it.
+    // glassT 0 = flat chip, 1 = full glass. blur, lens and tint all ride it so nothing pops
+    private var glassT = 0f
+    private var glassTarget = -1f
+    private var glassAnim: android.animation.ValueAnimator? = null
+
+    private fun blurAllowed(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+        windowManager.isCrossWindowBlurEnabled && PetalConfig.getIslandBlurScale(context) > 0f
+
+    private fun refractionAllowed(): Boolean =
+        windowManager.isCrossWindowBlurEnabled && PetalConfig.isIslandBubbleEnabled(context)
+
+    private fun updateBackdropBlur(animate: Boolean = true) {
+        blurEnabled = blurAllowed()
+        val target = if (isExpanded && (blurEnabled || refractionAllowed())) 1f else 0f
+        if (!animate || !isAttachedToWindow || !android.animation.ValueAnimator.areAnimatorsEnabled()) {
+            glassAnim?.cancel()
+            glassAnim = null
+            glassTarget = target
+            setGlassT(target)
+            return
+        }
+        if (target == glassTarget) {
+            // already heading there, just repaint with fresh settings
+            if (glassAnim?.isRunning != true) setGlassT(target)
+            return
+        }
+        glassTarget = target
+        glassAnim?.cancel()
+        glassAnim = android.animation.ValueAnimator.ofFloat(glassT, target).apply {
+            duration = GLASS_FADE_MS
+            interpolator = android.view.animation.DecelerateInterpolator(1.4f)
+            addUpdateListener { setGlassT(it.animatedValue as Float) }
+            start()
+        }
+    }
+
+    private fun setGlassT(t: Float) {
+        glassT = t
         val radius = if (blurEnabled) {
             (geometry.dp(IslandConstants.BLUR_BEHIND_RADIUS_DP) *
-                PetalConfig.getIslandBlurScale(context)).toInt()
+                PetalConfig.getIslandBlurScale(context) * t).toInt()
         } else 0
         backdrop?.setBlurRadius(radius)
         updateRefraction()
-        applyTheme()
+        // was applyTheme(), which stomped the album art tint every expand. dumbass
+        applyTint()
         blurLayer.invalidate()
         glassLayer.invalidate()
     }
 
-    fun refreshBackdropBlur() = updateBackdropBlur()
+    fun refreshBackdropBlur() = updateBackdropBlur(animate = false)
 
-    private fun isBackdropRefractionEnabled(): Boolean =
-        windowManager.isCrossWindowBlurEnabled && PetalConfig.isIslandBubbleEnabled(context)
+    private fun isBackdropRefractionEnabled(): Boolean = glassT > 0.01f && refractionAllowed()
 
     // SF grabs the windows behind this glass thing.
     private fun updateRefraction() {
         val popout = PetalConfig.getIslandPopoutScale(context)
         val chroma = PetalConfig.getIslandChromaScale(context)
         val drawable = backdrop ?: return
-        if (emerging || !isBackdropRefractionEnabled()) {
+        if (!isBackdropRefractionEnabled()) {
             refraction.clear(drawable)
             glass.setSlab(0f, 0f)
             return
@@ -229,7 +267,7 @@ class IslandView(
         // Big cards need more lens; live height keeps it from popping.
         val span = (geometry.expandedHeightNotif - geometry.capsuleHeight).coerceAtLeast(1)
         val expandT = ((height - geometry.capsuleHeight).toFloat() / span).coerceIn(0f, 1f)
-        val strength = popout * (1f + expandT * (EXPANDED_REFRACT_MULTIPLIER - 1f))
+        val strength = popout * (1f + expandT * (EXPANDED_REFRACT_MULTIPLIER - 1f)) * glassT
         val density = resources.displayMetrics.density
         glass.setSlab(refraction.bandFor(width, height, density), strength)
         refraction.applyTo(drawable, width, height, density, strength, chroma)
@@ -249,12 +287,15 @@ class IslandView(
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            windowManager.addCrossWindowBlurEnabledListener(context.mainExecutor, blurListener)
+        }
         // Blur this blob, not the whole bloody screen.
         backdrop = viewRootImpl.createBackgroundBlurDrawable().apply {
             setCornerRadius(cornerRadius())
         }
         blurLayer.background = backdrop
-        updateBackdropBlur()
+        updateBackdropBlur(animate = false)
         updateRefraction()
     }
 
@@ -310,9 +351,11 @@ class IslandView(
         animator.cancelAll()
         translationX = 0f
         translationY = 0f
+        parked = false
         specularAnimator?.cancel()
         visibility = View.VISIBLE
         cancelEmergence()
+        cancelDrain()
         destroyPresenter()
         detachMini()
         this.presenter = presenter
@@ -325,7 +368,8 @@ class IslandView(
         glassLayer.visibility = View.VISIBLE
         blurLayer.visibility = View.VISIBLE
         clipToOutline = true
-        updateBackdropBlur()
+        // fresh signal starts as a flat chip, no fade from whatever was here before
+        updateBackdropBlur(animate = false)
 
         // bind collapsed content first so the path has a width to use
         val contentWidth = presenter.bindCollapsed(content)
@@ -338,6 +382,7 @@ class IslandView(
                 isExpanded = this.form == Form.EXPANDED
                 applyCollapsedSize(capsuleW)
                 if (isExpanded) applyExpandedContent()
+                if (isExpanded) updateBackdropBlur()
                 glass.setSpecularProgress(-1f)
             }
             AnimationMode.CLASSIC -> {
@@ -346,6 +391,7 @@ class IslandView(
                 isExpanded = this.form == Form.EXPANDED
                 applyCollapsedSize(capsuleW)
                 if (isExpanded) applyExpandedContent()
+                if (isExpanded) updateBackdropBlur()
                 startSpecularSweep()
             }
             AnimationMode.DYNAMIC -> {
@@ -389,6 +435,7 @@ class IslandView(
     fun expand() {
         if (isExpanded) return
         isExpanded = true
+        updateBackdropBlur()
         content.alpha = 1f
         applyExpandedContent()
         callbacks?.onExpandedStateChanged(this, true)
@@ -404,22 +451,39 @@ class IslandView(
         glass.setSpecularProgress(-1f)
         content.alpha = 1f
         applyCollapsedContent()
+        // still morphing = keeps glass till onSettled, no anim = flat right now
+        updateBackdropBlur()
         callbacks?.onExpandedStateChanged(this, false)
     }
 
     // park the blob off the top while qs is up, drag it back after
     fun slideAway(hidden: Boolean, animate: Boolean = true) {
         if (hidden) touchHandler.cancel()
-        val h = if (height > 0) height else geometry.capsuleHeight
-        val t = if (top > 0) top else geometry.collapsedTopY
-        val target = if (hidden) -(t + h + geometry.dp(24f)).toFloat() else 0f
+        parked = hidden
+        val target = if (hidden) parkedOffset() else 0f
         if (animate) {
-            animator.animateTranslationY(target)
+            // the blob can grow mid-slide, so land on the offset for its final size
+            animator.animateTranslationY(target) { if (parked) translationY = parkedOffset() }
         } else {
-            animator.cancelAll()
+            // only the slide; size and fade-in from show() keep running
+            animator.cancelVerticalMotion()
             translationY = target
         }
         (parent as? View)?.invalidate()
+    }
+
+    // high enough that the whole blob clears the top, using the size it's heading to
+    private fun parkedOffset(): Float {
+        val h = maxOf(height, layoutParams?.height ?: 0, geometry.capsuleHeight)
+        val t = if (top > 0) top else geometry.collapsedTopY
+        return -(t + h + geometry.dp(24f)).toFloat()
+    }
+
+    // a parked blob that expands or nudges down would otherwise peek back in
+    private fun keepParked() {
+        if (!parked || animator.isSlidingVertically) return
+        val target = parkedOffset()
+        if (translationY != target) translationY = target
     }
 
     // slide it off. the hint decides which way
@@ -443,32 +507,114 @@ class IslandView(
             directionHint < 0f -> -1f
             else -> if (cluster == Cluster.LEFT) -1f else 1f
         }
+        // nobody flung it, so it drains home instead of sliding
+        if (directionHint == 0f && animator.mode == AnimationMode.DYNAMIC && width > 0) {
+            startDrain()
+            return
+        }
         val distance = (width + geometry.dp(24f)) * direction
         dismissing = true
         dismissDistance = kotlin.math.abs(distance).coerceAtLeast(1f)
         (parent as? View)?.invalidate()
-        animator.animateTranslationX(distance, 220L) {
-            dismissing = false
-            destroyPresenter()
-            signal = null
-            backdrop?.setBlurRadius(0)
-            backdrop?.let { refraction.clear(it) }
-            blurLayer.visibility = View.GONE
-            glassLayer.visibility = View.GONE
-            visibility = View.GONE
-            translationX = 0f
-            alpha = 1f
-            (parent as? View)?.invalidate()
+        val goo = animator.mode == AnimationMode.DYNAMIC
+        if (goo) {
+            // trailing side stays put, nose gets yanked ahead
+            pivotX = if (direction > 0f) 0f else width.toFloat()
+            pivotY = height / 2f
+        }
+        val startSx = scaleX
+        val startSy = scaleY
+        val stretch: ((Float) -> Unit)? = if (!goo) null else { tx ->
+            val f = (kotlin.math.abs(tx) / dismissDistance).coerceIn(0f, 1f)
+            scaleX = startSx + (1.32f - startSx) * f
+            scaleY = startSy + (0.74f - startSy) * f
+        }
+        animator.animateTranslationX(distance, 220L, onUpdate = stretch) {
+            finishDismiss()
         }
     }
 
+    private fun finishDismiss() {
+        dismissing = false
+        draining = false
+        destroyPresenter()
+        signal = null
+        backdrop?.setBlurRadius(0)
+        backdrop?.alpha = 255
+        backdrop?.let { refraction.clear(it) }
+        blurLayer.visibility = View.GONE
+        glassLayer.visibility = View.GONE
+        blurLayer.alpha = 1f
+        glassLayer.alpha = 1f
+        visibility = View.GONE
+        translationX = 0f
+        scaleX = 1f
+        scaleY = 1f
+        alpha = 1f
+        (parent as? View)?.invalidate()
+    }
+
+    private fun startDrain() {
+        dismissing = true
+        draining = true
+        drainP = 0f
+        drainFromX = translationX
+        dismissDistance = 1f
+        (parent as? View)?.invalidate()
+        drainAnimator = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = IslandConstants.DUR_DRAIN
+            interpolator = android.view.animation.LinearInterpolator()
+            addUpdateListener { a -> applyDrainProgress(a.animatedValue as Float) }
+            addListener(
+                object : android.animation.AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: android.animation.Animator) {
+                        drainAnimator = null
+                        finishDismiss()
+                    }
+                },
+            )
+        }
+        drainAnimator?.start()
+    }
+
+    // real glass the whole way, the lens only works on the actual view
+    private fun applyDrainProgress(q: Float) {
+        drainP = q
+        val e = ((q - 0.12f) / 0.88f).coerceIn(0f, 1f)
+        val f = e * e * e
+        translationX = drainFromX + (offscreenX() - drainFromX) * f
+        val settle = kotlin.math.sin(Math.PI.toFloat() * (q / 0.24f).coerceIn(0f, 1f))
+        applyJelly(0.1f * e * e - 0.035f * settle)
+        (parent as? View)?.invalidate()
+    }
+
+    // kill a running drain, put the layers back how show() expects them
+    private fun cancelDrain() {
+        drainAnimator?.let { a ->
+            a.removeAllUpdateListeners()
+            a.removeAllListeners()
+            a.cancel()
+        }
+        drainAnimator = null
+        draining = false
+        drainP = 0f
+        glassLayer.alpha = 1f
+        blurLayer.alpha = 1f
+        backdrop?.alpha = 255
+        scaleX = 1f
+        scaleY = 1f
+    }
+
     fun presenterForSignal(): IslandPresenter? = presenter
+
+    fun canExpand(): Boolean = presenter?.canExpand() != false
 
     // 0..1 presence, so the bar icons fade with this thing.
     fun presenceProgress(): Float {
         if (visibility != View.VISIBLE) return 0f
         return when {
             emerging -> emergeP.coerceIn(0f, 1f)
+            draining -> 1f - smoothstep(0.1f, 0.6f, drainP)
             dismissing -> (1f - (kotlin.math.abs(translationX) / dismissDistance))
                 .coerceIn(0f, 1f)
             else -> alpha.coerceIn(0f, 1f)
@@ -571,6 +717,14 @@ class IslandView(
         // fades from fully opaque to 0.6 by the dismiss distance
         val dismissPx = geometry.dp(DISMISS_THRESHOLD_DP).toFloat()
         alpha = (1f - (kotlin.math.abs(rubberBanded) / dismissPx) * 0.4f).coerceIn(0.6f, 1f)
+        if (animator.mode == AnimationMode.DYNAMIC) {
+            // taffy pull, the side you're dragging away from stays anchored
+            val pull = (kotlin.math.abs(rubberBanded) / dismissPx).coerceIn(0f, 1.5f)
+            pivotX = if (rubberBanded > 0f) 0f else width.toFloat()
+            pivotY = height / 2f
+            scaleX = 1f + 0.10f * pull
+            scaleY = 1f - 0.07f * pull
+        }
         (parent as? View)?.invalidate()
     }
 
@@ -615,25 +769,29 @@ class IslandView(
             a.cancel()
         }
         emergeAnimator = null
+        // only undo the jelly if it was ours, a drag stretch has to survive into the fling
+        if (emerging) {
+            scaleX = 1f
+            scaleY = 1f
+        }
         emerging = false
         pendingRebloom = false
     }
 
     private fun startEmergence() {
         emerging = true
-        updateRefraction()
         emergeP = 0f
         background = null
-        glassLayer.visibility = View.GONE
-        blurLayer.visibility = View.GONE
-        clipToOutline = false
-        content.alpha = 0f
+        glassLayer.visibility = View.VISIBLE
+        blurLayer.visibility = View.VISIBLE
+        clipToOutline = true
+        setGlassCornerRadius(emergeCornerRadius)
         applyEmergeProgress(0f)
-        // cards take longer to emerge, makes it look wet
-        val dur = if (pendingRebloom) 520L else IslandConstants.DUR_EMERGE
+        val dur = if (pendingRebloom) 420L else IslandConstants.DUR_EMERGE
         emergeAnimator = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
             duration = dur
-            interpolator = android.view.animation.PathInterpolator(0.2f, 0f, 0f, 1f)
+            // springOut does the easing
+            interpolator = android.view.animation.LinearInterpolator()
             addUpdateListener { a -> applyEmergeProgress(a.animatedValue as Float) }
             addListener(
                 object : android.animation.AnimatorListenerAdapter() {
@@ -646,25 +804,23 @@ class IslandView(
         emergeAnimator?.start()
     }
 
+    // comes in past the corner, stretched while it's quick, little squash on landing
     private fun applyEmergeProgress(p: Float) {
         emergeP = p
-        // slide out from the edge to the resting position
-        val margin = geometry.expandedSideMargin.toFloat()
-        val settle = easeOutCubic(p)
-        translationX =
-            if (cluster == Cluster.LEFT) -(1f - settle) * margin else (1f - settle) * margin
-        // content shows up near the end, later for cards
-        content.alpha = if (pendingRebloom) {
-            smoothstep(0.45f, 0.90f, p)
-        } else {
-            smoothstep(0.35f, 0.82f, p)
-        }
-        invalidate()
+        val g = springOut(p, 0.74f, 10.5f)
+        translationX = offscreenX() * (1f - g)
+        val fast = kotlin.math.sin(Math.PI.toFloat() * (p / 0.42f).coerceIn(0f, 1f))
+        val land = kotlin.math.sin(Math.PI.toFloat() * ((p - 0.36f) / 0.44f).coerceIn(0f, 1f))
+        applyJelly(0.1f * fast - 0.05f * land)
+        content.alpha = smoothstep(0.12f, 0.55f, p)
+        (parent as? View)?.invalidate()
     }
 
     private fun finishEmergence() {
         emerging = false
         translationX = 0f
+        scaleX = 1f
+        scaleY = 1f
         content.alpha = 1f
         glassLayer.visibility = View.VISIBLE
         blurLayer.visibility = View.VISIBLE
@@ -679,69 +835,37 @@ class IslandView(
             isExpanded = true
             callbacks?.onExpandedStateChanged(this, true)
         }
+        updateBackdropBlur()
         invalidateOutline()
         // no spring here, so fire the settle callback by hand
         callbacks?.onFormSettled(this, isExpanded)
     }
 
-    override fun onDraw(canvas: Canvas) {
-        if (emerging) {
-            drawEmergence(canvas)
-        } else {
-            super.onDraw(canvas)
-        }
+    // lp is the size we're heading to, width is stale on the first frame of show()
+    private fun offscreenX(): Float {
+        val w = maxOf(width, layoutParams?.width ?: 0)
+        val out = (geometry.expandedSideMargin + w + geometry.dp(8f)).toFloat()
+        return if (cluster == Cluster.LEFT) -out else out
     }
 
-    private fun drawEmergence(canvas: Canvas) {
-        val p = emergeP
-        val w = width.toFloat().coerceAtLeast(1f)
-        val h = height.toFloat().coerceAtLeast(1f)
-        val r = emergeCornerRadius
-        val cy = h / 2f
-        val leading = if (cluster == Cluster.LEFT) 0f else w
-        val dir = if (cluster == Cluster.LEFT) -1f else 1f
-
-        val kMax = geometry.dp(IslandConstants.METABALL_K_MAX_DP.toFloat()).toFloat()
-        val rBase = geometry.dp(IslandConstants.DROPLET_EMERGE_RADIUS_DP)
-        val rMin = geometry.dp(IslandConstants.DROPLET_EMERGE_MIN_DP)
-        val travelEnd = 0.55f
-        val dropR: Float
-        val k: Float
-        if (p < travelEnd) {
-            val t = easeOutCubic(p / travelEnd)
-            dropR = rMin + (rBase - rMin) * t
-            k = kMax
-        } else {
-            val t = (p - travelEnd) / (1f - travelEnd)
-            val st = smoothstep(0f, 1f, t)
-            dropR = rBase * (1f - st)
-            k = kMax * (1f - st)
-        }
-        // push it past the edge a little so it looks squeezed
-        val dropCx = leading + dir * dropR * 0.55f
-        val box = RectF(0f, 0f, w, h)
-        val shader = shaderMetaball
-        if (shader != null) {
-            shader.draw(canvas, box, r, dropCx, cy, dropR, k, tintColor, rimTopColor)
-        } else {
-            metaball.draw(
-                canvas,
-                box,
-                r,
-                dropCx,
-                cy,
-                dropR,
-                k,
-                tintColor,
-                rimTopColor,
-                geometry.dp(IslandConstants.RIM_WIDTH_DP.toFloat()).toFloat(),
-            )
-        }
+    // +stretch long and thin, -squash short and fat. pinned at the inner end, so the
+    // outer end does the moving. big cards get less, 10% of a card is a lot of pixels
+    private fun applyJelly(amount: Float) {
+        val w = maxOf(width, layoutParams?.width ?: 0).coerceAtLeast(1)
+        pivotX = if (cluster == Cluster.LEFT) w.toFloat() else 0f
+        pivotY = maxOf(height, layoutParams?.height ?: 0) / 2f
+        val sx = 1f + amount * minOf(geometry.capsuleMaxWidth.toFloat() / w, 1f)
+        scaleX = sx
+        scaleY = 1f / sx
     }
 
-    private fun easeOutCubic(t: Float): Float {
-        val u = 1f - t
-        return 1f - u * u * u
+    // closed form wobbly spring 0->1, t is 0..1 of the anim, pinned to 1 at the very end
+    private fun springOut(t: Float, zeta: Float, omega: Float): Float {
+        if (t <= 0f) return 0f
+        val wd = omega * kotlin.math.sqrt(1f - zeta * zeta)
+        val e = kotlin.math.exp(-zeta * omega * t)
+        val v = 1f - e * (kotlin.math.cos(wd * t) + zeta * omega / wd * kotlin.math.sin(wd * t))
+        return v + (1f - v) * smoothstep(0.86f, 1f, t)
     }
 
     private fun smoothstep(e0: Float, e1: Float, x: Float): Float {
@@ -759,7 +883,9 @@ class IslandView(
 
     // mini status goes in the top outer corner
     private fun attachMini() {
-        if (presenter is com.android.systemui.island.presenter.MediaPresenter) {
+        if (presenter is com.android.systemui.island.presenter.MediaPresenter ||
+            presenter?.showsMiniStatus() == false
+        ) {
             detachMini()
             return
         }
@@ -794,8 +920,8 @@ class IslandView(
         presenter?.bindExpanded(content)
         attachMini()
         val screenW = geometry.screenWidth
-        val targetW = (screenW - geometry.expandedSideMargin * 2)
-            .coerceAtMost(geometry.expandedMaxWidth)
+        val targetW = presenter?.expandedWidthPx()?.takeIf { it > 0 }
+            ?: (screenW - geometry.expandedSideMargin * 2).coerceAtMost(geometry.expandedMaxWidth)
         val targetH = presenter?.expandedHeightPx()?.takeIf { it > 0 }
             ?: geometry.expandedHeightNotif
         animator.animateSize(targetW, targetH, expanding = true)
@@ -835,7 +961,7 @@ class IslandView(
 
     private fun applyTint(tint: IslandTint) {
         accentColor = tint.accent
-        tintColor = tint.background ?: themeBackground()
+        tintColor = tint.background?.let { flatten(it) } ?: themeBackground()
         rimTopColor = withAlpha(tint.accent, 0x2E)
         glass.setTintColor(tintColor)
         glass.setRim(
@@ -863,15 +989,43 @@ class IslandView(
         glassLayer.invalidate()
     }
 
-    // Keep the lens visible even when the user turns the blur radius down to zero.
-    private fun themeBackground(): Int =
-        when {
-            !blurEnabled && !isBackdropRefractionEnabled() ->
-                if (dark) 0xF2101012.toInt() else 0xF7F3F3F6.toInt()
-            // lean on the backdrop blur, the tint only has to carry contrast
-            dark -> 0xA8101012.toInt()
-            else -> 0xC2F3F3F6.toInt()
+    // flat chip tint and glass tint, blended by glassT so expand/collapse crossfades
+    private fun themeBackground(): Int {
+        // blur fully off in settings = nothing behind to fake, stay properly solid
+        if (!blurEnabled && !refractionAllowed()) {
+            return if (dark) 0xF2101012.toInt() else 0xF7F3F3F6.toInt()
         }
+        // chip = smoked glass, no blur. hwc blends alpha for free, it's the blur that costs.
+        // keeps it close to the card's look so the crossfade isn't doing all the work
+        val smoked = if (dark) SMOKED_DARK else SMOKED_LIGHT
+        // lean on the backdrop blur, the tint only has to carry contrast
+        val glassy = if (dark) 0xA8101012.toInt() else 0xC2F3F3F6.toInt()
+        return blendArgb(smoked, glassy, glassT)
+    }
+
+    // presenter tints are made for blur and can be really see-through. floor them at smoked
+    // when there's no blur behind, or album art tints turn the chip into a window
+    private fun flatten(color: Int): Int {
+        val a = color ushr 24
+        val glassOn = blurEnabled || refractionAllowed()
+        val floor = when {
+            !glassOn -> 0xF2
+            dark -> SMOKED_DARK ushr 24
+            else -> SMOKED_LIGHT ushr 24
+        }
+        val solid = maxOf(a, floor)
+        val alpha = (solid + (a - solid) * glassT).toInt().coerceIn(0, 255)
+        return (alpha shl 24) or (color and 0x00FFFFFF)
+    }
+
+    private fun blendArgb(from: Int, to: Int, t: Float): Int {
+        fun ch(shift: Int): Int {
+            val a = (from ushr shift) and 0xFF
+            val b = (to ushr shift) and 0xFF
+            return (a + (b - a) * t).toInt().coerceIn(0, 255) shl shift
+        }
+        return ch(24) or ch(16) or ch(8) or ch(0)
+    }
 
     private fun startSpecularSweep() {
         specularAnimator?.cancel()
@@ -1000,6 +1154,9 @@ class IslandView(
     override fun onDetachedFromWindow() {
         touchHandler.cancel()
         cancelEmergence()
+        cancelDrain()
+        glassAnim?.cancel()
+        glassAnim = null
         specularAnimator?.cancel()
         specularAnimator = null
         glass.setSpecularProgress(-1f)
@@ -1035,6 +1192,11 @@ class IslandView(
         private const val FLING_VELOCITY_THRESHOLD = 1200f
         // expanded cards get this multiple of the bubble refraction slider
         private const val EXPANDED_REFRACT_MULTIPLIER = 1.2f
+        // roughly the morph length so the glass lands with the shape
+        private const val GLASS_FADE_MS = 260L
+        // collapsed chip tint, ~77% dark / ~84% light. tweak here if it reads too see-through
+        private const val SMOKED_DARK = 0xC4101012.toInt()
+        private const val SMOKED_LIGHT = 0xD6F3F3F6.toInt()
 
         fun layoutParams(gravity: Int): FrameLayout.LayoutParams =
             FrameLayout.LayoutParams(

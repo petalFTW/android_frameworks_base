@@ -2234,7 +2234,9 @@ public class NotificationStackScrollLayoutController implements Dumpable {
                     || ev.getActionMasked() == MotionEvent.ACTION_UP;
             mView.handleEmptySpaceClick(ev);
             boolean longPressWantsIt = false;
-            if (guts != null && mLongPressedView != null) {
+            // work peek has no guts, without this the UP vanished and every touch died after
+            if (mLongPressedView != null
+                    && (guts != null || mSwipeHelper.isRedactionPeeking())) {
                 longPressWantsIt = mSwipeHelper.onTouchEvent(ev);
             }
             boolean expandWantsIt = false;

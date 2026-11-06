@@ -18,6 +18,10 @@ package com.android.systemui.petalos.depth
 
 import android.animation.ValueAnimator
 import android.content.Context
+import android.content.BroadcastReceiver
+import android.content.Intent
+import android.content.IntentFilter
+import android.database.ContentObserver
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
@@ -27,6 +31,7 @@ import android.graphics.RectF
 import android.graphics.Shader
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.text.format.DateFormat
 import android.util.Log
 import android.view.View
@@ -54,9 +59,9 @@ class PetalDepthClockView(context: Context) : View(context) {
 
         // clock trails the subject on purpose
         const val PARALLAX_RATE = 0.45f
-        private const val TICK_MS = 1000L
         private const val TAG = "PetalBouncerClock"
-        private const val DEBUG_BOUNCER = true
+        private val DEBUG_BOUNCER = android.os.Build.IS_DEBUGGABLE &&
+            Log.isLoggable(TAG, Log.DEBUG)
 
         internal fun compactStyleFor(style: Int): Int? = when (style) {
             DepthClockMaterials.FROST_SQUARE -> DepthClockMaterials.FROST
@@ -381,11 +386,12 @@ class PetalDepthClockView(context: Context) : View(context) {
     private var tiltX = 0f
     private var tiltY = 0f
 
-    private val ticker = object : Runnable {
-        override fun run() {
-            updateTime()
-            handler.postDelayed(this, TICK_MS)
-        }
+    private var ticking = false
+    private val timeReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) = updateTime()
+    }
+    private val timeFormatObserver = object : ContentObserver(handler) {
+        override fun onChange(selfChange: Boolean) = updateTime()
     }
 
     init {
@@ -473,13 +479,26 @@ class PetalDepthClockView(context: Context) : View(context) {
     }
 
     fun startTicking() {
+        if (ticking) return
+        ticking = true
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_TIME_TICK)
+            addAction(Intent.ACTION_TIME_CHANGED)
+            addAction(Intent.ACTION_TIMEZONE_CHANGED)
+            addAction(Intent.ACTION_LOCALE_CHANGED)
+        }
+        context.registerReceiver(timeReceiver, filter, null, handler,
+            Context.RECEIVER_NOT_EXPORTED)
+        context.contentResolver.registerContentObserver(
+            Settings.System.getUriFor(Settings.System.TIME_12_24), false, timeFormatObserver)
         updateTime()
-        handler.removeCallbacks(ticker)
-        handler.post(ticker)
     }
 
     fun stopTicking() {
-        handler.removeCallbacks(ticker)
+        if (!ticking) return
+        ticking = false
+        context.unregisterReceiver(timeReceiver)
+        context.contentResolver.unregisterContentObserver(timeFormatObserver)
     }
 
     private fun updateTime(invalidateView: Boolean = true) {
@@ -497,7 +516,10 @@ class PetalDepthClockView(context: Context) : View(context) {
         dateText = DateFormat.format(
             context.getString(R.string.petal_depth_clock_date_format), calendar
         ).toString()
-        if (invalidateView) invalidate()
+        if (invalidateView) {
+            invalidate()
+            bouncerHost?.get()?.invalidate()
+        }
     }
 
     private fun updateColors() {

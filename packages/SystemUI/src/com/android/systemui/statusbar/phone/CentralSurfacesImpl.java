@@ -1478,6 +1478,9 @@ public class CentralSurfacesImpl implements CoreStartable, CentralSurfaces {
         filter.addAction(Intent.ACTION_SCREEN_OFF);
         filter.addAction(Intent.ACTION_SCREEN_ON);
         filter.addAction(android.os.PowerManager.ACTION_POWER_SAVE_WHITELIST_CHANGED);
+        filter.addAction(Intent.ACTION_USER_PRESENT);
+        filter.addAction(android.os.PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED);
+        filter.addAction(android.os.PowerManager.ACTION_DEVICE_LIGHT_IDLE_MODE_CHANGED);
         filter.addAction(lineageos.content.Intent.ACTION_SCREEN_CAMERA_GESTURE);
         mBroadcastDispatcher.registerReceiver(mBroadcastReceiver, filter, null, UserHandle.ALL);
     }
@@ -1996,18 +1999,43 @@ public class CentralSurfacesImpl implements CoreStartable, CentralSurfaces {
         }
     };
 
+    // only poke petalpower about the first doze entry per screen-off, not every light idle cycle
+    private boolean mIdleRelayedSinceScreenOff;
+    private long mIdleScreenOffAt;
+
     private void relayIdlePowerEvent(String action) {
         final String target;
         if (Intent.ACTION_SCREEN_OFF.equals(action)) {
+            mIdleRelayedSinceScreenOff = false;
+            mIdleScreenOffAt = android.os.SystemClock.elapsedRealtime();
             target = "org.petalos.power.action.SCREEN_OFF";
         } else if (Intent.ACTION_SCREEN_ON.equals(action)) {
             target = "org.petalos.power.action.SCREEN_ON";
+        } else if (Intent.ACTION_USER_PRESENT.equals(action)) {
+            target = "org.petalos.power.action.USER_PRESENT";
+        } else if (android.os.PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED.equals(action)
+                || android.os.PowerManager.ACTION_DEVICE_LIGHT_IDLE_MODE_CHANGED.equals(action)) {
+            final android.os.PowerManager pm = mContext.getSystemService(
+                    android.os.PowerManager.class);
+            if (mIdleRelayedSinceScreenOff || pm == null || pm.isInteractive()
+                    || !(pm.isDeviceIdleMode() || pm.isDeviceLightIdleMode())) return;
+            // light doze lands at ~2min, grace is 10. burning the one relay that early meant
+            // petalpower skipped it and sat on the slow alarm. wait till grace is actually up
+            final long graceMs = Math.max(0, Math.min(120, Settings.System.getInt(
+                    mContext.getContentResolver(), "petal_idle_power_grace_minutes", 10)))
+                    * 60_000L;
+            if (android.os.SystemClock.elapsedRealtime() - mIdleScreenOffAt < graceMs) return;
+            mIdleRelayedSinceScreenOff = true;
+            target = "org.petalos.power.action.IDLE_ENTERED";
         } else if (android.os.PowerManager.ACTION_POWER_SAVE_WHITELIST_CHANGED.equals(action)) {
             target = "org.petalos.power.action.RECONCILE_IDLE_POLICY";
         } else {
             return;
         }
-        // Framework screen broadcasts are registered-only; wake the manifest helper explicitly.
+        // feature off = don't thaw petalpower for nothing. turning it off restores via the hub
+        if (Settings.System.getInt(mContext.getContentResolver(),
+                "petal_idle_power_enabled", 1) == 0) return;
+        // screen broadcasts are registered-only, so poke the manifest receiver directly
         try {
             mContext.sendBroadcastAsUser(new Intent(target).setClassName(
                     "org.petalos.power", "org.petalos.power.IdlePowerReceiver"), UserHandle.ALL);

@@ -12,6 +12,7 @@ import com.android.app.animation.Interpolators;
 import com.android.systemui.keyguard.ui.view.FingerprintBlobView;
 import com.android.systemui.res.R;
 import com.android.systemui.scene.shared.flag.SceneContainerFlag;
+import com.android.systemui.statusbar.notification.SourceType;
 import com.android.systemui.statusbar.notification.row.ExpandableNotificationRow;
 
 import java.util.ArrayList;
@@ -20,10 +21,15 @@ import java.util.Map;
 
 // Real cards, just tucked under each other instead of that bloody pill.
 final class PetalNotificationCollection {
+    // Every card in the pile is a whole card; neighbour-based corner flattening doesn't apply.
+    private static final SourceType COLLECTION = SourceType.from("PetalNotificationCollection");
+    private static final float PEEK_DP = 8f;
     private final NotificationStackScrollLayout mHost;
     private final ArrayList<ExpandableNotificationRow> mRows = new ArrayList<>();
     private final Map<View, Integer> mAccessibility = new IdentityHashMap<>();
     private final ArrayList<ExpandableNotificationRow> mTransformedRows = new ArrayList<>();
+    private final java.util.Set<ExpandableNotificationRow> mFadedRows =
+            java.util.Collections.newSetFromMap(new IdentityHashMap<>());
     private final RectF mTouchBounds = new RectF();
     private final int[] mHostPosition = new int[2];
     private final int[] mPlayerPosition = new int[2];
@@ -205,8 +211,15 @@ final class PetalNotificationCollection {
             row.setScaleY(1f);
             row.getViewState().setScaleX(1f);
             row.getViewState().setScaleY(1f);
+            // Stock never writes clipTopAmount for top-level rows, so the pile's trim would
+            // otherwise survive the unlock and slice cards in the shade.
+            row.getViewState().clipTopAmount = 0;
+            row.setClipTopAmount(0);
+            if (mFadedRows.contains(row)) row.setContentAlpha(1f);
+            row.requestRoundnessReset(COLLECTION, false);
         }
         mTransformedRows.clear();
+        mFadedRows.clear();
         mActive = false;
     }
 
@@ -235,8 +248,9 @@ final class PetalNotificationCollection {
     float getHeight(AmbientState ambient, boolean minimum) {
         if (!refresh(ambient)) return -1f;
         float frontHeight = mRows.get(0).getMinHeight(true);
-        float compact = compactTop(ambient) - ambient.getStackY() + frontHeight
-                + Math.min(2, mRows.size() - 1) * 8f * mDensity;
+        float top = compactTop(ambient);
+        float compact = top - ambient.getStackY() + frontHeight
+                + peekCount(top, frontHeight) * PEEK_DP * mDensity;
         // Unfolding is local scrolling, not a new panel height. Resizing moved the clock too.
         return Math.max(0f, compact);
     }
@@ -256,10 +270,31 @@ final class PetalNotificationCollection {
         } else {
             top = ambient.getStackY();
         }
+        float lowest = top + 4f * mDensity;
         top += 12f * mDensity;
-        if (mSafeTop > 0f) top = Math.max(top, mSafeTop);
+        if (mSafeTop > 0f) {
+            top = Math.max(top, mSafeTop);
+            lowest = Math.max(lowest, mSafeTop);
+        }
+        // A tall lock player leaves less room than one card above the charging line; give up
+        // most of the gap under the player before the card runs over that text.
+        if (mSafeBottom > 0f && !mRows.isEmpty()) {
+            float frontBottom = top + mRows.get(0).getMinHeight(true);
+            if (frontBottom > mSafeBottom) {
+                top = Math.max(top - 8f * mDensity, top - (frontBottom - mSafeBottom));
+                top = Math.max(top, lowest - 4f * mDensity);
+            }
+        }
         if (!moving) mFrozenTop = top;
         return top;
+    }
+
+    // Peeking strips below the front card, dropped when they'd sit on the charging line.
+    private int peekCount(float compactTop, float frontHeight) {
+        int peeks = Math.min(2, mRows.size() - 1);
+        if (mSafeBottom <= 0f) return peeks;
+        float room = mSafeBottom - (compactTop + frontHeight);
+        return Math.max(0, Math.min(peeks, (int) Math.floor(room / (PEEK_DP * mDensity))));
     }
 
     void updateStates(AmbientState ambient) {
@@ -283,6 +318,7 @@ final class PetalNotificationCollection {
         float shade = Math.max(0f, Math.min(1f, ambient.getFractionToShade()));
         mShadeProgress = Math.max(shade, mHost.getQsExpansionFraction());
         float frontHeight = mRows.get(0).getMinHeight(true);
+        int peeks = peekCount(compactTop, frontHeight);
         float bottom = Math.min(mHost.getHeight() - 24f * mDensity,
                 ambient.getInnerHeight() + ambient.getStackY());
         // Don't let the list crawl over the charging line.
@@ -312,8 +348,8 @@ final class PetalNotificationCollection {
             float scale = lerp(1f - Math.min(i, 2) * .09f, 1f, progress);
             int height = Math.round(lerp(row.getMinHeight(true), row.getIntrinsicHeight(),
                     progress));
-            float compactY = compactTop + frontHeight + Math.min(i, 2) * 8f * mDensity
-                    - height * scale;
+            float compactY = compactTop + frontHeight
+                    + Math.min(i, peeks) * PEEK_DP * mDensity - height * scale;
             float y = lerp(compactY, expandedY, progress);
             float clipTop = top;
             float clipBottom = bottom;
@@ -334,11 +370,19 @@ final class PetalNotificationCollection {
                     0f, Math.max(progress, shade)));
             state.height = Math.round(lerp(height, shadeHeight, shade));
             state.inShelf = shade == 1f && shadeInShelf;
-            state.clipTopAmount = Math.round(lerp(
-                    Math.max(0f, (clipTop - y) / scale), shadeClipTop, shade));
+            float clipTopLocal = Math.max(0f, (clipTop - y) / scale);
+            if (i > 0) {
+                // The front card is glass now: trim each card behind to the strip that peeks
+                // out, keeping a corner's worth under the front card's rounded bottom.
+                float frontEdge = compactTop + frontHeight
+                        + (Math.min(i, peeks + 1) - 1) * PEEK_DP * mDensity;
+                float covered = (frontEdge - 24f * mDensity - y) / scale;
+                clipTopLocal = Math.max(clipTopLocal, covered * (1f - progress));
+            }
+            state.clipTopAmount = Math.round(lerp(clipTopLocal, shadeClipTop, shade));
             state.clipBottomAmount = Math.round(lerp(
                     Math.max(0f, (y + height * scale - clipBottom) / scale), shadeClipBottom, shade));
-            state.hidden = shade == 1f ? shadeHidden : (i >= 3 && progress == 0f && shade == 0f)
+            state.hidden = shade == 1f ? shadeHidden : (i > peeks && progress == 0f && shade == 0f)
                     || (shade == 0f && (y >= clipBottom || y + height * scale <= clipTop
                     || state.clipTopAmount + state.clipBottomAmount >= height));
             state.setAlpha(state.hidden ? 0f : lerp(i < 3 ? 1f : progress, shadeAlpha, shade));
@@ -346,6 +390,15 @@ final class PetalNotificationCollection {
                     : ExpandableViewState.LOCATION_MAIN_AREA;
             row.setTopOverlap(0);
             row.setBottomOverlap(0);
+            // Only the front card's text belongs on screen until the pile is fanned out. The
+            // front card is left alone so a swipe-to-dismiss fade isn't overwritten each frame.
+            if (i > 0) {
+                row.setContentAlpha(Math.max(progress, shade));
+                mFadedRows.add(row);
+            } else if (mFadedRows.remove(row)) {
+                row.setContentAlpha(1f);
+            }
+            row.requestRoundness(1f - shade, 1f - shade, COLLECTION);
             boolean behind = !mExpanded && i > 0 && shade == 0f;
             if (behind) {
                 mAccessibility.putIfAbsent(row, row.getImportantForAccessibility());
