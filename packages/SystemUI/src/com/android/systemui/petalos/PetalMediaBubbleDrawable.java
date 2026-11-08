@@ -31,12 +31,21 @@ public final class PetalMediaBubbleDrawable extends Drawable {
     private final float density;
     private final int accent;
     private float sheen = -1f;
+    // slim row fades the disc out to a bare glyph instead of swapping drawables
+    private float fill = 1f;
 
     public PetalMediaBubbleDrawable(boolean primary, boolean dark, float density, int accent) {
         this.primary = primary;
         this.dark = dark;
         this.density = density;
         this.accent = accent;
+    }
+
+    public void setFill(float value) {
+        value = Math.max(0f, Math.min(1f, value));
+        if (fill == value) return;
+        fill = value;
+        invalidateSelf();
     }
 
     public void setSheenProgress(float progress) {
@@ -53,7 +62,7 @@ public final class PetalMediaBubbleDrawable extends Drawable {
     public void draw(Canvas canvas) {
         if (rect.isEmpty()) return;
         // skip buttons get no plate at all: just the glyph
-        if (!primary) return;
+        if (!primary || fill <= 0f) return;
 
         // Wide buttons still get a proper disc.
         float side = Math.min(rect.width(), rect.height());
@@ -61,6 +70,8 @@ public final class PetalMediaBubbleDrawable extends Drawable {
         float top = rect.centerY() - side / 2f;
         float radius = side / 2f;
         scratch.set(left, top, left + side, top + side);
+        // only layers mid-blend, tiny button so who cares
+        int layer = fill < 1f ? canvas.saveLayerAlpha(scratch, Math.round(255 * fill)) : -1;
 
         paint.setStyle(Paint.Style.FILL);
         paint.setShader(null);
@@ -100,6 +111,7 @@ public final class PetalMediaBubbleDrawable extends Drawable {
             canvas.restoreToCount(save);
         }
         paint.setShader(null);
+        if (layer >= 0) canvas.restoreToCount(layer);
     }
 
     @Override public void setAlpha(int alpha) { paint.setAlpha(alpha); invalidateSelf(); }

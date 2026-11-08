@@ -104,9 +104,12 @@ open class SeekBarObserver(private val holder: MediaViewHolder) :
             com.android.systemui.petalos.PetalMediaStyle.Mini &&
             com.android.systemui.petalos.PetalQsSkin.isEnabled(holder.player.context)
         val petal = com.android.systemui.petalos.PetalQsSkin.isEnabled(holder.player.context) || lock
+        // mid-drag blend from MediaViewController, else just the end style
+        val slim = if (lock) 0f else (holder.seekBar.getTag(R.id.media_progress_bar) as? Float)
+            ?: if (mini) 1f else 0f
         if (petal) {
             progressDrawable?.lineAmplitude = 0f
-            progressDrawable?.strokeWidth = (if (mini) 2f else 6f) * holder.player.resources.displayMetrics.density
+            progressDrawable?.strokeWidth = (2f + 4f * (1f - slim)) * holder.player.resources.displayMetrics.density
         }
         holder.petalElapsed.text = if (data.enabled) formatTimeLabel(data.elapsedTime ?: 0) else ""
         holder.petalDuration.text = if (data.enabled) formatTimeLabel(data.duration) else ""
@@ -128,7 +131,7 @@ open class SeekBarObserver(private val holder: MediaViewHolder) :
         playingStateLogger.log("${data.playing}")
         listeningStateLogger.log("${data.listening}")
 
-        holder.seekBar.thumb.alpha = if (data.seekAvailable && !mini) 255 else 0
+        holder.seekBar.thumb.alpha = if (data.seekAvailable) Math.round(255f * (1f - slim)) else 0
         holder.seekBar.isEnabled = data.seekAvailable && !mini
         progressDrawable?.animate =
             data.playing && !data.scrubbing && animationEnabled && data.listening && !petal

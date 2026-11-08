@@ -86,6 +86,9 @@ constructor(
     // morph and the notification stack, so the two players blend rather than swap.
     private var petalStyleMorph: android.animation.ValueAnimator? = null
     private var petalMorphFlow = -1f
+    // 1 = slim row, 0 = big player. disc/track/thumb ride this instead of snapping on frame one
+    private var petalSlimApplied = -1f
+    private var petalMorphSlim = -1f
     private var petalCoverRadiusPx = 0f
     // same recipe as the qs tiles, so the player reads as the same glass
     private val petalCardBackgroundDelegate = lazy {
@@ -689,12 +692,17 @@ constructor(
             val endFlow = petalArtworkFlowStrength(endHostState.petalStyle)
             // Follow the drag both ways; the destination style doesn't get to kill the smear early.
             var artworkFlow = startFlow + (endFlow - startFlow) * progress
+            val endSlim = petalSlimOf(endHostState.petalStyle)
+            var slim = petalSlimOf(startStyle) + (endSlim - petalSlimOf(startStyle)) * progress
             if (morphStyle) {
                 startPetalStyleMorph(petalArtworkFlowStrength(lastPetalStyle), endFlow,
-                    petalCoverRadiusPx, petalCoverRadiusFor(endHostState.petalStyle))
+                    petalCoverRadiusPx, petalCoverRadiusFor(endHostState.petalStyle),
+                    if (petalSlimApplied >= 0f) petalSlimApplied else petalSlimOf(lastPetalStyle),
+                    endSlim)
             }
             if (petalStyleMorph?.isRunning == true && petalMorphFlow >= 0f) {
                 artworkFlow = petalMorphFlow
+                if (petalMorphSlim >= 0f) slim = petalMorphSlim
             }
             val lock = endHostState.petalStyle == com.android.systemui.petalos.PetalMediaStyle.Lockscreen
             petalRibbonBackdrop?.setEnabled(lock)
@@ -720,6 +728,7 @@ constructor(
                 if (oldStyle != endHostState.petalStyle || petalButtonAccent != accent ||
                     transitionLayout?.background !== background) {
                     petalButtonAccent = accent
+                    petalSlimApplied = -1f
                     transitionLayout?.background = background
                     transitionLayout?.apply {
                         outlineProvider = object : android.view.ViewOutlineProvider() {
@@ -777,8 +786,9 @@ constructor(
                     val slimRow = endHostState.petalStyle ==
                         com.android.systemui.petalos.PetalMediaStyle.Mini
                     val play = transitionLayout?.findViewById<android.widget.ImageButton>(R.id.actionPlayPause)
+                    // always a real disc now; applyPetalSlim fades its fill for the slim row
                     play?.background = com.android.systemui.petalos.PetalMediaBubbleDrawable(
-                        !slimRow, true, context.resources.displayMetrics.density, accent)
+                        true, true, context.resources.displayMetrics.density, accent)
                     play?.backgroundTintList = null
                     play?.imageTintList = android.content.res.ColorStateList.valueOf(
                         if (lock) android.graphics.Color.WHITE else if (slimRow) sideColor else
@@ -837,7 +847,11 @@ constructor(
                     transitionLayout?.findViewById<android.widget.TextView>(R.id.header_title)?.setTextColor(android.graphics.Color.WHITE)
                     transitionLayout?.findViewById<android.widget.TextView>(R.id.header_artist)?.setTextColor(0xBFFFFFFF.toInt())
                 }
+                if (lock) petalSlimApplied = -1f else applyPetalSlim(slim)
             } else {
+                petalSlimApplied = -1f
+                transitionLayout?.findViewById<View>(R.id.media_progress_bar)
+                    ?.setTag(R.id.media_progress_bar, null)
                 if (petalButtonAccent != null) {
                     petalCardBackground.stop()
                     transitionLayout?.setBackgroundResource(R.drawable.qs_media_outline_layout_bg)
@@ -1172,7 +1186,7 @@ constructor(
     }
 
     private fun startPetalStyleMorph(fromFlow: Float, toFlow: Float, fromRadius: Float,
-            toRadius: Float) {
+            toRadius: Float, fromSlim: Float, toSlim: Float) {
         petalStyleMorph?.cancel()
         petalStyleMorph = android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
             duration = PETAL_STYLE_MORPH_MS
@@ -1181,6 +1195,8 @@ constructor(
                 val t = animator.animatedValue as Float
                 petalMorphFlow = fromFlow + (toFlow - fromFlow) * t
                 petalCoverRadiusPx = fromRadius + (toRadius - fromRadius) * t
+                petalMorphSlim = fromSlim + (toSlim - fromSlim) * t
+                applyPetalSlim(petalMorphSlim)
                 val layout = transitionLayout ?: return@addUpdateListener
                 layout.findViewById<com.android.systemui.petalos.PetalMediaArtworkView>(
                     R.id.petal_media_cover)?.apply {
@@ -1192,10 +1208,56 @@ constructor(
             addListener(object : android.animation.AnimatorListenerAdapter() {
                 override fun onAnimationEnd(animation: android.animation.Animator) {
                     petalMorphFlow = -1f
+                    petalMorphSlim = -1f
                 }
             })
             start()
         }
+    }
+
+    private fun petalSlimOf(style: com.android.systemui.petalos.PetalMediaStyle) =
+        if (style == com.android.systemui.petalos.PetalMediaStyle.Mini) 1f else 0f
+
+    // the bits ConstraintSet can't tween: disc fill, glyph colour, track weight, padding, thumb
+    private fun applyPetalSlim(slim: Float) {
+        if (petalSlimApplied >= 0f && kotlin.math.abs(slim - petalSlimApplied) < 0.002f) return
+        val layout = transitionLayout ?: return
+        val accent = petalButtonAccent ?: return
+        petalSlimApplied = slim
+        val big = 1f - slim
+        val density = context.resources.displayMetrics.density
+        val sideColor = if (com.android.systemui.petalos.PetalQsSkin.isDark(context)) {
+            0xFFF5F5F8.toInt()
+        } else 0xFF202127.toInt()
+        layout.findViewById<android.widget.ImageButton>(R.id.actionPlayPause)?.apply {
+            (background as? com.android.systemui.petalos.PetalMediaBubbleDrawable)?.setFill(big)
+            imageTintList = android.content.res.ColorStateList.valueOf(
+                android.animation.ArgbEvaluator.getInstance().evaluate(big, sideColor,
+                    com.android.systemui.petalos.PetalQsSkin.glyphOnBackground(accent)) as Int)
+        }
+        layout.findViewById<android.widget.SeekBar>(R.id.media_progress_bar)?.apply {
+            // SeekBarObserver reads this so its ticks don't stomp the blend mid-drag
+            setTag(R.id.media_progress_bar, slim)
+            if (seekHorizontalPadding < 0) seekHorizontalPadding = paddingLeft
+            val vertical = context.resources.getDimensionPixelSize(
+                R.dimen.qs_media_session_enabled_seekbar_vertical_padding)
+            setPadding(kotlin.math.round(seekHorizontalPadding * big).toInt(),
+                kotlin.math.round(vertical * big).toInt(),
+                kotlin.math.round(seekHorizontalPadding * big).toInt(),
+                kotlin.math.round(12f * density * big).toInt())
+            (progressDrawable as? com.android.systemui.media.controls.ui.drawable.SquigglyProgress)
+                ?.strokeWidth = (2f + 4f * big) * density
+            val seekAvailable = seekBarViewModel.progress.value?.seekAvailable == true
+            thumb?.alpha = if (seekAvailable) kotlin.math.round(255f * big).toInt() else 0
+        }
+    }
+
+    // MediaControlPanel rebinds the play button with a fresh full disc; put the blend back on it
+    fun reapplyPetalSlim() {
+        val slim = petalSlimApplied
+        if (slim < 0f) return
+        petalSlimApplied = -1f
+        applyPetalSlim(slim)
     }
 
     private fun isPetalShadeStyle(style: com.android.systemui.petalos.PetalMediaStyle) =

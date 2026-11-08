@@ -1293,6 +1293,10 @@ public class MediaControlPanel {
                 bgDrawable = mediaAction.getBackground();
             }
             button.setBackground(bgDrawable);
+            if (bgDrawable instanceof PetalMediaBubbleDrawable
+                    && button.getId() == R.id.actionPlayPause) {
+                mMediaViewController.reapplyPetalSlim();
+            }
 
             Runnable action = mediaAction.getAction();
             if (action == null) {
