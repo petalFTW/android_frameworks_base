@@ -69,6 +69,7 @@ class PetalDepthController @Inject constructor(
     private val shadeInteractor: ShadeInteractor,
     private val mediaCover: PetalLockScreenMediaCover,
     private val cdPlayer: com.android.systemui.petalos.PetalCdLockScreenController,
+    private val keyguardRepository: com.android.systemui.keyguard.data.repository.KeyguardRepository,
 ) : CoreStartable {
 
     companion object {
@@ -159,6 +160,18 @@ class PetalDepthController @Inject constructor(
     private val stateListener = object : StatusBarStateController.StateListener {
         override fun onStateChanged(newState: Int) = updateVisibility()
         override fun onDozingChanged(isDozing: Boolean) = updateVisibility()
+
+        // the real wake/sleep curve, so aod <-> lock morphs instead of swapping clocks
+        override fun onDozeAmountChanged(linear: Float, eased: Float) = applyDozeAmount(eased)
+    }
+
+    private var dozeAmount = 0f
+
+    private fun applyDozeAmount(amount: Float) {
+        dozeAmount = amount
+        clockView.setDozeAmount(amount)
+        // cutout melts away going to aod, no subject burning into the oled all night
+        if (subjectView.tag == null) subjectView.alpha = 1f - amount
     }
 
     private val keyguardStateListener = object : KeyguardStateController.Callback {
@@ -314,6 +327,11 @@ class PetalDepthController @Inject constructor(
             // this flag is true on the normal lockscreen too
             shadeInteractor.anyExpansion.collect { onShadeExpansionChanged(it > 0f) }
         }
+        scope.launch {
+            keyguardRepository.dozeTimeTick.collect {
+                if (petalClockVisible) clockView.onDozeTimeTick()
+            }
+        }
         // album art hides the subject but not the clock
         mediaCoverActive = mediaCover.isCoverApplied()
         mediaCover.addCoverStateListener { applied ->
@@ -443,9 +461,9 @@ class PetalDepthController @Inject constructor(
             morphOutForUnlock(clockView, lead = false)
             return
         }
-        val onKeyguard =
-            statusBarStateController.state == StatusBarState.KEYGUARD &&
-                !statusBarStateController.isDozing
+        val dozing = statusBarStateController.isDozing
+        // aod counts as keyguard now, the depth clock carries through it
+        val onKeyguard = statusBarStateController.state == StatusBarState.KEYGUARD
         val visible = enabled && subjectView.hasSubject && onKeyguard &&
             !mediaCoverActive && !cdPlayerActive && !keyguardGoingAway
 
@@ -457,14 +475,14 @@ class PetalDepthController @Inject constructor(
             subjectView.tag = null
             subjectView.animate().cancel()
             subjectView.visibility = if (visible) android.view.View.VISIBLE else android.view.View.GONE
-            subjectView.setAlpha(1f)
+            subjectView.setAlpha(1f - dozeAmount)
             subjectView.setScaleX(1f)
             subjectView.setScaleY(1f)
         } else if (visible) {
             // reset the tag or the next unlock won't animate
             subjectView.tag = null
             subjectView.visibility = android.view.View.VISIBLE
-            subjectView.setAlpha(1f)
+            subjectView.setAlpha(1f - dozeAmount)
             subjectView.setScaleX(1f)
             subjectView.setScaleY(1f)
         } else if (!keyguardGoingAway) {
@@ -496,7 +514,10 @@ class PetalDepthController @Inject constructor(
             clockView.setAlpha(1f)
         }
         if (clockVisible) clockView.startTicking() else clockView.stopTicking()
-        if (visible && parallaxEnabled && !keyguardGoingAway) startParallax() else stopParallax()
+        clockView.setDozeAmount(dozeAmount)
+        // no gyro on aod, thats just burning battery to wobble a dim outline
+        if (visible && parallaxEnabled && !keyguardGoingAway && !dozing) startParallax()
+        else stopParallax()
         reassertStockClockHide()
     }
 

@@ -59,6 +59,10 @@ class PetalDepthClockView(context: Context) : View(context) {
 
         // clock trails the subject on purpose
         const val PARALLAX_RATE = 0.45f
+        // aod clock sits a bit smaller, same as the stock faces do
+        private const val AOD_SCALE = 0.86f
+        // max burn-in wander on aod, dp
+        private const val AOD_BURN_IN_DP = 12
         private const val TAG = "PetalBouncerClock"
         private val DEBUG_BOUNCER = android.os.Build.IS_DEBUGGABLE &&
             Log.isLoggable(TAG, Log.DEBUG)
@@ -99,6 +103,15 @@ class PetalDepthClockView(context: Context) : View(context) {
     }
     private val depthPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val datePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    // aod: same glyphs, same spot, just a hairline. no shadows/backdrop, oled says thanks
+    private val ambientPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+    }
+    private var dozeAmount = 0f
+    private var ambientPass = false
+    private var burnInX = 0f
+    private var burnInY = 0f
 
     private var style = STYLE_SOLID
     private var vertical = false
@@ -556,10 +569,68 @@ class PetalDepthClockView(context: Context) : View(context) {
     private val digitSpacing: Float
         get() = fillPaint.textSize * 0.12f
 
+    // 0 = lockscreen, 1 = aod. driven by the stock doze amount so it rides the real wake curve
+    fun setDozeAmount(amount: Float) {
+        val a = amount.coerceIn(0f, 1f)
+        if (a == dozeAmount) return
+        if (dozeAmount == 0f && a > 0f) refreshBurnIn()
+        dozeAmount = a
+        invalidate()
+    }
+
+    // aod alarm tick, TIME_TICK doesnt always make it while the cpu naps
+    fun onDozeTimeTick() {
+        refreshBurnIn()
+        updateTime()
+    }
+
+    // aod date goes hairline too, a solid line of text was the only lit block left
+    private fun drawDate(canvas: Canvas) {
+        if (!ambientPass) {
+            canvas.drawText(dateText, expandedDateX, expandedDateY, datePaint)
+            return
+        }
+        ambientPaint.typeface = datePaint.typeface
+        ambientPaint.textSize = datePaint.textSize
+        ambientPaint.letterSpacing = datePaint.letterSpacing
+        ambientPaint.strokeWidth = (datePaint.textSize * 0.03f)
+            .coerceAtLeast(resources.displayMetrics.density * 0.75f)
+        ambientPaint.color = androidx.core.graphics.ColorUtils.blendARGB(
+            datePaint.color, Color.WHITE, 0.45f)
+        canvas.drawText(dateText, expandedDateX, expandedDateY, ambientPaint)
+    }
+
+    private fun refreshBurnIn() {
+        val amp = (AOD_BURN_IN_DP * resources.displayMetrics.density).toInt()
+        burnInX = com.android.systemui.doze.util.getBurnInOffset(amp * 2, true) - amp.toFloat()
+        burnInY = com.android.systemui.doze.util.getBurnInOffset(amp * 2, false) - amp.toFloat()
+    }
+
+    // both faces drawn in the exact same layout so wake/sleep is a crossfade+shrink, not a swap
+    private fun drawDozing(canvas: Canvas) {
+        val d = dozeAmount
+        val scaleNow = 1f + (AOD_SCALE - 1f) * d
+        val save = canvas.save()
+        canvas.translate(burnInX * d, burnInY * d)
+        if (!expandedBounds.isEmpty) {
+            canvas.scale(scaleNow, scaleNow, expandedBounds.centerX(), expandedBounds.centerY())
+        }
+        if (d < 1f) {
+            val lit = canvas.saveLayerAlpha(null, (255f * (1f - d)).toInt())
+            drawExpandedClock(canvas)
+            canvas.restoreToCount(lit)
+        }
+        val dim = canvas.saveLayerAlpha(null, (255f * d).toInt())
+        ambientPass = true
+        try { drawExpandedClock(canvas) } finally { ambientPass = false }
+        canvas.restoreToCount(dim)
+        canvas.restoreToCount(save)
+    }
+
     override fun onDraw(canvas: Canvas) {
         if (width <= 0 || height <= 0) return
         if (bouncerProgress <= 0f) {
-            drawExpandedClock(canvas)
+            if (dozeAmount > 0f) drawDozing(canvas) else drawExpandedClock(canvas)
             return
         }
         if (bouncerProgress >= 1f) return
@@ -647,7 +718,7 @@ class PetalDepthClockView(context: Context) : View(context) {
             if (canvas != null) {
                 drawStyled(canvas, hour, centerX - hh.centerX(), baseline, style)
                 drawStyled(canvas, minute, centerX - mm.centerX(), baseline + lineStep, style)
-                if (showDate) canvas.drawText(dateText, expandedDateX, expandedDateY, datePaint)
+                if (showDate) drawDate(canvas)
             }
         } else {
             val minuteX = fillPaint.measureText(hour) + digitSpacing
@@ -672,7 +743,7 @@ class PetalDepthClockView(context: Context) : View(context) {
             if (canvas != null) {
                 drawStyled(canvas, hour, startX, baseline, style)
                 drawStyled(canvas, minute, startX + minuteX, baseline, style)
-                if (showDate) canvas.drawText(dateText, expandedDateX, expandedDateY, datePaint)
+                if (showDate) drawDate(canvas)
             }
         }
     }
@@ -691,6 +762,31 @@ class PetalDepthClockView(context: Context) : View(context) {
 
     // draw a single run in the given style
     private fun drawStyled(canvas: Canvas, text: String, x: Float, y: Float, forStyle: Int) {
+        if (ambientPass) {
+            ambientPaint.typeface = fillPaint.typeface
+            ambientPaint.textSize = fillPaint.textSize
+            ambientPaint.letterSpacing = fillPaint.letterSpacing
+            ambientPaint.strokeWidth = (fillPaint.textSize * 0.016f)
+                .coerceAtLeast(resources.displayMetrics.density)
+            // keep the style's colour but pull it light, dark accents vanish on black
+            ambientPaint.color = androidx.core.graphics.ColorUtils.blendARGB(
+                fillPaint.color, Color.WHITE, 0.45f)
+            if (forStyle == STYLE_VOGUE) {
+                // vogue lays digits out by hand with tracking, match it or the morph jumps
+                val spacing = fillPaint.textSize * 0.18f
+                val plain = fillPaint.measureText(text)
+                val total = if (text.length > 1) plain + spacing * (text.length - 1) else plain
+                var cx = x + (plain - total) / 2f
+                for (ch in text) {
+                    val glyph = ch.toString()
+                    canvas.drawText(glyph, cx, y, ambientPaint)
+                    cx += fillPaint.measureText(glyph) + spacing
+                }
+            } else {
+                canvas.drawText(text, x, y, ambientPaint)
+            }
+            return
+        }
         if (materials.draw(canvas, text, x, y, forStyle, fillPaint,
                 if (forStyle == org.petalos.config.DepthClockMaterials.LIQUID)
                     liquidBackdrop ?: backdrop else backdrop, width, height)) return
