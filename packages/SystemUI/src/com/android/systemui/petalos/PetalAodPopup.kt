@@ -78,7 +78,16 @@ class PetalAodPopup @Inject constructor(
     private var pulsing = false
 
     private val listener = object : NotifCollectionListener {
-        override fun onEntryAdded(entry: NotificationEntry) {
+        override fun onEntryAdded(entry: NotificationEntry) = post(entry)
+
+        // whatsapp & co update the SAME notif per message and that pulses too.
+        // we only listened to adds so message 2+ got the stock lineage pulse
+        override fun onEntryUpdated(entry: NotificationEntry) {
+            if ((entry.sbn.notification.flags and Notification.FLAG_ONLY_ALERT_ONCE) != 0) return
+            post(entry)
+        }
+
+        private fun post(entry: NotificationEntry) {
             handler.post {
                 // never let this take systemui down
                 try { maybeQueue(entry) } catch (e: RuntimeException) {
@@ -121,7 +130,8 @@ class PetalAodPopup @Inject constructor(
         val n = sbn.notification
         if (sbn.packageName == "android" || sbn.packageName == context.packageName) return
         if ((n.flags and Notification.FLAG_ONGOING_EVENT) != 0) return
-        if (sbn.isGroup && n.isGroupSummary) return
+        // summaries stay in: GROUP_ALERT_SUMMARY apps pulse on the summary and mute the kids,
+        // skipping them = stock aod for every "3 new messages". decision below sorts who alerts
         if (n.category == Notification.CATEGORY_CALL || n.fullScreenIntent != null) return
         if (n.extras.getParcelable(
                 Notification.EXTRA_MEDIA_SESSION, android.media.session.MediaSession.Token::class.java
@@ -239,7 +249,27 @@ class PetalAodPopup @Inject constructor(
     private fun dp(v: Float) =
         TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v, context.resources.displayMetrics).toInt()
 
-    private fun buildCard(entry: NotificationEntry): View {
+    // summary text is useless ("2 new messages"), show the newest kid instead
+    private fun contentEntry(entry: NotificationEntry): NotificationEntry {
+        val sbn = entry.sbn
+        if (!sbn.isGroup || !sbn.notification.isGroupSummary) return entry
+        return notifPipeline.allNotifs
+            .filter { it.sbn.groupKey == sbn.groupKey && !it.sbn.notification.isGroupSummary }
+            .maxByOrNull { it.sbn.notification.`when`.takeIf { w -> w > 0 } ?: it.sbn.postTime }
+            ?: entry
+    }
+
+    // messaging style keeps the real latest line in EXTRA_MESSAGES, EXTRA_TEXT is often stale
+    private fun latestMessage(extras: android.os.Bundle): Pair<CharSequence?, CharSequence?>? {
+        val raw = extras.getParcelableArray(Notification.EXTRA_MESSAGES, android.os.Parcelable::class.java)
+            ?: return null
+        val last = Notification.MessagingStyle.Message.getMessagesFromBundleArray(raw).lastOrNull()
+            ?: return null
+        return last.senderPerson?.name to last.text
+    }
+
+    private fun buildCard(original: NotificationEntry): View {
+        val entry = contentEntry(original)
         val sbn = entry.sbn
         val n = sbn.notification
         val styled = styled()
@@ -255,11 +285,14 @@ class PetalAodPopup @Inject constructor(
         // redacted = public version if the app gave one, else a generic line
         val pub = if (hidden) n.publicVersion else null
         val src = pub?.extras ?: n.extras
-        val title = if (hidden && pub == null) appLabel else src.getCharSequence(Notification.EXTRA_TITLE)
+        val message = if (hidden) null else latestMessage(src)
+        val title = if (hidden && pub == null) appLabel
+            else message?.first ?: src.getCharSequence(Notification.EXTRA_CONVERSATION_TITLE)
+                ?: src.getCharSequence(Notification.EXTRA_TITLE)
         val body = if (hidden && pub == null) {
             context.getString(com.android.internal.R.string.notification_hidden_text)
         } else {
-            src.getCharSequence(Notification.EXTRA_TEXT)
+            message?.second ?: src.getCharSequence(Notification.EXTRA_TEXT)
                 ?: src.getCharSequence(Notification.EXTRA_BIG_TEXT)
         }
 
