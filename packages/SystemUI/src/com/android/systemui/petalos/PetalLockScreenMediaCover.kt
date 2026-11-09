@@ -80,8 +80,13 @@ class PetalLockScreenMediaCover @Inject constructor(
         coverStateListeners.forEach { it.onCoverStateChanged(coverApplied) }
     }
 
-    // the controller we attached the callback to
-    private var trackedController: MediaController? = null
+    // every active session gets watched, not just whoever happened to be playing.
+    // music apps go active while still BUFFERING (petalmusic waits up to 2.5s on its 2x art)
+    // so the old "track the playing one" lost them and never looked again
+    private val watched = HashMap<android.media.session.MediaSession.Token, Pair<MediaController, MediaController.Callback>>()
+
+    // metadata hash a decode is already chewing on, so state spam doesnt restart it forever
+    private var pendingMetaHash = 0
 
     // hash of what's already up, avoids redraws
     private var appliedMetaHash = 0
@@ -104,20 +109,15 @@ class PetalLockScreenMediaCover @Inject constructor(
             onSessionsChanged(controllers.orEmpty())
         }
 
-    // skips don't change the session list, so watch the controller
-    private val mediaCallback = object : MediaController.Callback() {
-        override fun onMetadataChanged(metadata: MediaMetadata?) {
-            val controller = trackedController ?: return
-            if (controller.playbackState?.state == PlaybackState.STATE_PLAYING) {
-                applyCoverArt(controller)
-            }
-        }
+    // skips and buffering->playing dont change the session list, so watch each controller
+    private fun callbackFor(controller: MediaController) = object : MediaController.Callback() {
+        override fun onMetadataChanged(metadata: MediaMetadata?) = evaluate(restoreIfIdle = false)
 
-        override fun onPlaybackStateChanged(state: PlaybackState?) {
-            val controller = trackedController ?: return
-            if (state?.state == PlaybackState.STATE_PLAYING) {
-                applyCoverArt(controller)
-            }
+        override fun onPlaybackStateChanged(state: PlaybackState?) = evaluate(restoreIfIdle = false)
+
+        override fun onSessionDestroyed() {
+            controller.unregisterCallback(this)
+            watched.remove(controller.sessionToken)
         }
     }
 
@@ -165,8 +165,8 @@ class PetalLockScreenMediaCover @Inject constructor(
                 )
             }
             sessionManager.removeOnActiveSessionsChangedListener(sessionListener)
-            trackedController?.unregisterCallback(mediaCallback)
-            trackedController = null
+            unwatchAll()
+            pendingMetaHash = 0
             restoreWallpaperAsync()
         }
     }
@@ -181,20 +181,32 @@ class PetalLockScreenMediaCover @Inject constructor(
 
     private fun onSessionsChanged(controllers: List<MediaController>) {
         if (!enabled) return
-        val playing = controllers.firstOrNull {
+        val tokens = controllers.map { it.sessionToken }.toSet()
+        watched.keys.filter { it !in tokens }.forEach { token ->
+            watched.remove(token)?.let { (c, cb) -> c.unregisterCallback(cb) }
+        }
+        for (controller in controllers) {
+            if (controller.sessionToken in watched) continue
+            val cb = callbackFor(controller)
+            controller.registerCallback(cb, handler)
+            watched[controller.sessionToken] = controller to cb
+        }
+        evaluate(restoreIfIdle = true)
+    }
+
+    private fun unwatchAll() {
+        watched.values.forEach { (c, cb) -> c.unregisterCallback(cb) }
+        watched.clear()
+    }
+
+    // pause keeps the sleeve up, only a session list change with nobody playing restores
+    private fun evaluate(restoreIfIdle: Boolean) {
+        if (!enabled) return
+        val playing = watched.values.map { it.first }.firstOrNull {
             it.playbackState?.state == PlaybackState.STATE_PLAYING
         }
-        // track the chosen one so skips refresh art
-        if (trackedController != playing) {
-            trackedController?.unregisterCallback(mediaCallback)
-            trackedController = playing
-            playing?.registerCallback(mediaCallback)
-        }
-        if (playing != null) {
-            applyCoverArt(playing)
-        } else {
-            restoreWallpaperAsync()
-        }
+        if (playing != null) applyCoverArt(playing)
+        else if (restoreIfIdle) restoreWallpaperAsync()
     }
 
     private fun applyCoverArt(controller: MediaController) {
@@ -203,26 +215,34 @@ class PetalLockScreenMediaCover @Inject constructor(
             restoreWallpaperAsync()
             return
         }
-        // same art still showing, bail
-        if (coverApplied && metadata.hashCode() == appliedMetaHash) return
+        // hashCode skips bitmaps, so the late bitmap republish counts as the same track. good
+        val metaHash = metadata.hashCode()
+        if (coverApplied && metaHash == appliedMetaHash) return
+        if (metaHash == pendingMetaHash) return
         val embedded = metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
             ?: metadata.getBitmap(MediaMetadata.METADATA_KEY_ART)
-        if (embedded != null) {
-            applyAsync { setLockWallpaper(embedded, metadata.hashCode()) }
-            return
-        }
         val uri = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)?.let { Uri.parse(it) }
             ?: metadata.getString(MediaMetadata.METADATA_KEY_ART_URI)?.let { Uri.parse(it) }
         if (uri == null) {
-            restoreWallpaperAsync()
+            if (embedded != null) applyAsync { setLockWallpaper(embedded, metaHash) }
+            else restoreWallpaperAsync()
             return
         }
-        val metaHash = metadata.hashCode()
+        // uri first: the session bitmap gets squashed to ~320dp by the framework and
+        // looks like arse fullscreen. the big 2x jpeg only comes through the uri
+        pendingMetaHash = metaHash
         val gen = applyGeneration.incrementAndGet()
-        // decode on another thread, and drop it if it's stale
         Thread {
+            // https / no-grant uris dont open from here, fall back to whatever bitmap the
+            // session has by now (media3 sends it a beat after the uri)
             val bitmap = decodeArtwork(uri)
+                ?: runCatching { controller.metadata }.getOrNull()?.let {
+                    it.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
+                        ?: it.getBitmap(MediaMetadata.METADATA_KEY_ART)
+                }
+                ?: embedded
             mainExecutor.execute {
+                if (pendingMetaHash == metaHash) pendingMetaHash = 0
                 if (enabled && gen == applyGeneration.get()) {
                     applyAsync {
                         if (bitmap != null) setLockWallpaper(bitmap, metaHash)
