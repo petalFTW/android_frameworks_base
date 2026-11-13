@@ -13999,6 +13999,12 @@ public class ActivityManagerService extends IActivityManager.Stub
                     if (GmsCompat.isEnabledFor(aInfo)) {
                         return false;
                     }
+                    // ext packageId comes thru as 0 sometimes and gms dies at birth. one user anyway
+                    if (!aInfo.isPrivilegedApp()
+                            && ("com.google.android.gms".equals(aInfo.packageName)
+                                    || "com.android.vending".equals(aInfo.packageName))) {
+                        return false;
+                    }
 
                     ComponentName comp = new ComponentName(aInfo.packageName, className);
                     String msg = "Permission Denial: Component " + comp.flattenToShortString()

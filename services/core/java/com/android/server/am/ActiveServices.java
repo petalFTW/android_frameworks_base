@@ -2991,6 +2991,10 @@ public final class ActiveServices {
                     reason = REASON_PACKAGE_INSTALLER;
                 }
             }
+            if (reason == REASON_DENIED && isSandboxedPlay(callerUid, packageName)) {
+                // store's download service is systemExempted, without this every app install crashes it
+                reason = REASON_ALLOWLISTED_PACKAGE;
+            }
 
             switch (reason) {
                 case REASON_SYSTEM_UID:
@@ -3014,6 +3018,19 @@ public final class ActiveServices {
                     return PERMISSION_DENIED;
             }
         }
+    }
+
+    private boolean isSandboxedPlay(int callerUid, String packageName) {
+        if (!"com.android.vending".equals(packageName)
+                && !"com.google.android.gms".equals(packageName)) {
+            return false;
+        }
+        final com.android.server.pm.pkg.PackageStateInternal ps =
+                mAm.getPackageManagerInternal().getPackageStateInternal(packageName);
+        return ps != null && ps.getAppId() == UserHandle.getAppId(callerUid)
+                && !ps.isPrivileged()
+                && com.android.server.pm.PetalServicesStubs.isProviderSigned(
+                        packageName, ps.getSigningDetails());
     }
 
     private void initSystemExemptedFgsTypePermission() {

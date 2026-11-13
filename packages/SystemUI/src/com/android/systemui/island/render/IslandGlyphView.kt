@@ -31,7 +31,7 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
 
-enum class IslandGlyph { CHARGING, TORCH }
+enum class IslandGlyph { CHARGING, TORCH, DOLBY }
 
 // little animated icon for the system chips. drawn on a 24 unit grid, scales to any size
 class IslandGlyphView(
@@ -66,6 +66,21 @@ class IslandGlyphView(
         lineTo(9f, 14f)
         close()
     }
+    // flat edges out, bowls facing in, like the badge on the box
+    private val dolbyLeft = Path().apply {
+        moveTo(2f, 5f)
+        lineTo(4.5f, 5f)
+        arcTo(-2.5f, 5f, 11.5f, 19f, -90f, 180f, false)
+        lineTo(2f, 19f)
+        close()
+    }
+    private val dolbyRight = Path().apply {
+        moveTo(22f, 5f)
+        lineTo(19.5f, 5f)
+        arcTo(12.5f, 5f, 26.5f, 19f, -90f, -180f, false)
+        lineTo(22f, 19f)
+        close()
+    }
     private val startMs = SystemClock.uptimeMillis()
 
     init {
@@ -85,6 +100,7 @@ class IslandGlyphView(
         when (glyph) {
             IslandGlyph.CHARGING -> drawCharging(canvas, ms)
             IslandGlyph.TORCH -> drawTorch(canvas, ms)
+            IslandGlyph.DOLBY -> drawDolby(canvas, ms)
         }
         canvas.restore()
         // onDraw only runs while we're on screen, so this stops by itself. 30fps is plenty
@@ -121,6 +137,24 @@ class IslandGlyphView(
         }
     }
 
+    // double d. halves slide in from the middle and snap together, then it just breathes
+    private fun drawDolby(canvas: Canvas, ms: Long) {
+        val slide = min(ms / 260f, 1f)
+        val eased = 1f - (1f - slide) * (1f - slide) * (1f - slide)
+        val spread = 3.5f * (1f - eased)
+        val breathe = if (ms < 260L) 1f
+            else 0.78f + 0.22f * cos(2f * PI.toFloat() * ((ms - 260L) % DOLBY_LOOP_MS) / DOLBY_LOOP_MS)
+        fill.color = withAlpha(accent, eased * breathe)
+        canvas.save()
+        canvas.translate(-spread, 0f)
+        canvas.drawPath(dolbyLeft, fill)
+        canvas.restore()
+        canvas.save()
+        canvas.translate(spread, 0f)
+        canvas.drawPath(dolbyRight, fill)
+        canvas.restore()
+    }
+
     // centre ray goes first, the sides follow
     private fun lag(i: Int): Int = if (i == 1) 0 else 1
 
@@ -136,5 +170,6 @@ class IslandGlyphView(
         const val FRAME_MS = 33L
         const val CHARGE_LOOP_MS = 1500L
         const val TORCH_LOOP_MS = 1600L
+        const val DOLBY_LOOP_MS = 1800L
     }
 }

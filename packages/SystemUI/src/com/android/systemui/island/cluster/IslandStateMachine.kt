@@ -102,6 +102,17 @@ class IslandStateMachine(
             armDwell(signal)
             return true
         }
+        // already waiting in line? swap the payload in place, else the stale one
+        // (e.g. a call still saying Unknown) is what shows up later
+        val queued = queue.indexOfFirst { it.id == signal.id }
+        if (queued >= 0) {
+            // bumped up (call waiting rings over ongoing)? drop the old copy, let it fight normally
+            if (signal.priority <= queue[queued].priority) {
+                queue[queued] = signal
+                return true
+            }
+            queue.removeAt(queued)
+        }
         if (cur.id.startsWith("calendar:") && !dismissalHeld) {
             queue.removeAll { it.id == cur.id || it.id == signal.id }
             if (queue.size >= 3) queue.removeLast()

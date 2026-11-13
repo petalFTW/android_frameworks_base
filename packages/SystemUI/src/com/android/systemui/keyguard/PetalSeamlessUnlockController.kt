@@ -40,6 +40,7 @@ constructor(
     @Application private val context: Context,
     private val keyguardViewController: KeyguardViewController,
     private val fingerprintPropertyInteractor: FingerprintPropertyInteractor,
+    private val mediaCover: com.android.systemui.petalos.PetalLockScreenMediaCover,
 ) {
     private var animator: ValueAnimator? = null
     private var fadingView: View? = null
@@ -117,8 +118,11 @@ constructor(
             closingValid.forEach { wallpaper ->
                 val shared =
                     openingValid.any { it.leash.isSameSurface(wallpaper.leash) }
-                // app unlocks have no opening wallpaper; the lock still has to fade out
-                val alpha = if (shared) 1f else 1f - t
+                // app unlocks have no opening wallpaper; the lock still has to fade out.
+                // album art on the lock wallpaper looks nothing like home, slow fade = home sat on
+                // top of the cover for a whole second. dump it with the keyguard instead
+                val fadeT = if (mediaCover.isCoverApplied()) (t / COVER_FADE_T).coerceAtMost(1f) else t
+                val alpha = if (shared) 1f else 1f - fadeT
                 applySurface(transaction, wallpaper, wScale, alpha.coerceIn(0f, 1f))
                 // put the lock wallpaper above home
                 openingValid.firstOrNull { o -> !o.leash.isSameSurface(wallpaper.leash) }
@@ -262,6 +266,7 @@ constructor(
         /** lock ui is gone by this point in the animation */
         private const val KEYGUARD_FADE_FRACTION = 0.625f
         private const val ZOOM_PEAK_T = 0.22f
+        private const val COVER_FADE_T = 0.2f
         private const val WALLPAPER_PEAK_SCALE = 1.1f
         private const val LAUNCHER_DIP_SCALE = 0.96f
     }

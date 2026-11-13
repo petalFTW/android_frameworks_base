@@ -26,6 +26,24 @@ class ExtraKeySignalSource @Inject constructor(
         override fun onReceive(context: Context, intent: Intent) {
             if (!settings.enabled.value) return
             val action = intent.getStringExtra("action") ?: return
+            // dolby device switch, used to be a toast. right side like media, it's an audio thing
+            if (action == "DOLBY_PROFILE") {
+                val label = intent.getStringExtra("label")?.takeIf { it.isNotBlank() } ?: return
+                router.emit(IslandSignal(
+                    id = "dolby_profile",
+                    kind = SignalKind.EXTRA_KEY,
+                    cluster = Cluster.RIGHT,
+                    priority = 85,
+                    initialForm = Form.CAPSULE,
+                    ttlMs = 2600L,
+                    payload = SystemChipPayload(
+                        label = label,
+                        accent = 0xFFB9A5FF.toInt(),
+                        glyph = com.android.systemui.island.render.IslandGlyph.DOLBY,
+                    ),
+                ))
+                return
+            }
             val visual = when (action) {
                 "MENU" -> R.string.petal_key_menu to R.drawable.ic_menu
                 "APP_SWITCH" -> R.string.petal_key_app_switch to R.drawable.petal_key_recents

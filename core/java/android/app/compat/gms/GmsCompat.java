@@ -158,10 +158,20 @@ public final class GmsCompat {
     /** @hide */
     public static boolean isMicrogProvider(@NonNull Context context) {
         // ask about the real cert, never the spoofed PackageInfo signatures
-        return context.getPackageManager().hasSigningCertificate(PackageId.GMS_CORE_NAME,
-                com.android.internal.util.HexDump.hexStringToByteArray(
-                        com.android.internal.gmscompat.MicrogCompat.SIGNER_SHA256),
-                PackageManager.CERT_INPUT_SHA256);
+        final PackageManager pm = context.getPackageManager();
+        // Accept the official microG release key, or this ROM's own releasekey for local builds.
+        return pm.hasSigningCertificate(PackageId.GMS_CORE_NAME,
+                        com.android.internal.util.HexDump.hexStringToByteArray(
+                                com.android.internal.gmscompat.MicrogCompat.SIGNER_SHA256),
+                        PackageManager.CERT_INPUT_SHA256)
+                || pm.hasSigningCertificate(PackageId.GMS_CORE_NAME,
+                        com.android.internal.util.HexDump.hexStringToByteArray(
+                                com.android.internal.gmscompat.MicrogCompat.PETAL_SIGNER_SHA256),
+                        PackageManager.CERT_INPUT_SHA256)
+                || pm.hasSigningCertificate(PackageId.GMS_CORE_NAME,
+                        com.android.internal.util.HexDump.hexStringToByteArray(
+                                com.android.internal.gmscompat.MicrogCompat.PETAL_PLATFORM_SHA256),
+                        PackageManager.CERT_INPUT_SHA256);
     }
 
     /** @hide */

@@ -86,7 +86,7 @@ class CallPresenter(
         val gap = geometry.dp(8f)
         val padStart = geometry.capsulePaddingStart
         val padEnd = geometry.capsulePaddingEnd
-        val label = payload.name.ifBlank { "Unknown" }
+        val label = payload.name.ifBlank { payload.subtitle }
 
         val row = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -152,7 +152,7 @@ class CallPresenter(
         }
         val name = TextView(context).apply {
             setTextColor(Color.WHITE)
-            text = payload.name.ifBlank { "Incoming call" }
+            text = payload.name.ifBlank { payload.subtitle }
             keepIdentityWhenContentRedacted()
             setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 16f)
             typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD)

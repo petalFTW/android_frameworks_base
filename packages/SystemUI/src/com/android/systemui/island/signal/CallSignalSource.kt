@@ -95,8 +95,9 @@ class CallSignalSource @Inject constructor(
         val dialerEntry = callNotifications.values.lastOrNull {
             it.sbn.packageName == defaultDialer || it.sbn.packageName == DIALER_PKG
         }
+        // some calls come from a non-default dialer, take whatever call notif we've got
         val entry = if (callState != TelephonyManager.CALL_STATE_IDLE) {
-            dialerEntry
+            dialerEntry ?: callNotifications.values.lastOrNull()
         } else {
             callNotifications.values.lastOrNull()
         }
@@ -157,7 +158,9 @@ class CallSignalSource @Inject constructor(
                 pm.getApplicationLabel(pm.getApplicationInfo(it, 0)).toString()
             }.getOrNull()
         }
-        val name = resolveCallerName(extras, person, appLabel)
+        // telephony often says RINGING before the dialer posts, leave it blank so the
+        // presenter shows "Incoming call" til the notif lands and re-emits w/ the name
+        val name = if (entry == null) "" else resolveCallerName(extras, person, appLabel)
         val subtitle = if (incoming) "Incoming call" else "Ongoing call"
         return CallPayload(
             sourceNotification = entry?.sbn,

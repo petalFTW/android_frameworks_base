@@ -409,7 +409,7 @@ class PetalDepthClockView(context: Context) : View(context) {
 
     init {
         id = R.id.petal_depth_clock
-        elevation = 90f
+        elevation = 0f
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         visibility = GONE
         twentyFourHour = DateFormat.is24HourFormat(context)
@@ -477,6 +477,14 @@ class PetalDepthClockView(context: Context) : View(context) {
 
     fun setDateEnabled(enabled: Boolean) {
         showDate = enabled
+        invalidate()
+    }
+
+    private var colonEnabled = true
+
+    fun setColonEnabled(enabled: Boolean) {
+        if (colonEnabled == enabled) return
+        colonEnabled = enabled
         invalidate()
     }
 
@@ -564,6 +572,20 @@ class PetalDepthClockView(context: Context) : View(context) {
             endToEnd = androidx.constraintlayout.widget.ConstraintLayout.LayoutParams.PARENT_ID
         }
         cl.addView(this, lp)
+        translationZ = PetalDepthSubjectView.DEPTH_Z_CLOCK
+    }
+
+    // display size + where we sit on it. home lays out against the display, so we do too
+    private val frameLoc = IntArray(2)
+    private var frameW = 0f
+    private var frameH = 0f
+
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        super.onLayout(changed, left, top, right, bottom)
+        val b = org.petalos.config.PetalConfig.displayBounds(context)
+        getLocationOnScreen(frameLoc)
+        frameW = b.width().toFloat()
+        frameH = b.height().toFloat()
     }
 
     private val digitSpacing: Float
@@ -660,21 +682,23 @@ class PetalDepthClockView(context: Context) : View(context) {
         val square = org.petalos.config.DepthClockMaterials.isSquare(style)
         // square styles stack, hours over minutes
         val stack = vertical || square
-        val useColon = !stack
+        val useColon = !stack && colonEnabled
         val hour = if (useColon) "$rawHour:" else rawHour
         val minute = rawMinute
 
         // size digits to fill the width
         val probe = Paint(fillPaint).apply { textSize = 100f }
         val unitWidth = if (stack) probe.measureText("00") else probe.measureText("00:00")
-        val targetWidth = width * (when {
+        val fw = if (frameW > 0f) frameW else width.toFloat()
+        val fh = if (frameH > 0f) frameH else height.toFloat()
+        val targetWidth = fw * (when {
             square -> 0.92f
             stack -> 0.62f
             else -> 0.78f
         }) * scale
         val textSize = 100f * targetWidth / unitWidth.coerceAtLeast(1f)
         // cap the height so it fits
-        val heightCap = height * 0.5f * scale / (when {
+        val heightCap = fh * 0.5f * scale / (when {
             square -> 2.1f
             stack -> 2.3f
             else -> 1.4f
@@ -697,13 +721,14 @@ class PetalDepthClockView(context: Context) : View(context) {
 
         val hh = textBounds(hour)
         val mm = textBounds(minute)
-        val centerX = width * anchorX + dx
+        val centerX = fw * anchorX - frameLoc[0] + dx
+        val anchorY = fh * anchor - frameLoc[1]
         if (stack) {
             val lineStep = finalTextSize * 1.25f
             val dateOffset = hh.top - datePaint.textSize * 0.5f - datePaint.fontMetrics.bottom
             val groupTop = if (showDate) minOf(hh.top, dateOffset + datePaint.fontMetrics.top) else hh.top
             val groupBottom = lineStep + mm.bottom
-            val desiredBaseline = height * anchor - (hh.top + lineStep + mm.bottom) / 2f + dy
+            val desiredBaseline = anchorY - (hh.top + lineStep + mm.bottom) / 2f + dy
             val baseline = if (contentBottom == Int.MAX_VALUE) desiredBaseline else
                 desiredBaseline.coerceIn(safeTop - groupTop,
                     maxOf(safeTop - groupTop, bottom - groupBottom))
@@ -725,7 +750,7 @@ class PetalDepthClockView(context: Context) : View(context) {
             val left = minOf(hh.left, minuteX + mm.left)
             val right = maxOf(hh.right, minuteX + mm.right)
             val startX = centerX - (left + right) / 2f
-            val desiredBaseline = height * anchor -
+            val desiredBaseline = anchorY -
                 (minOf(hh.top, mm.top) + maxOf(hh.bottom, mm.bottom)) / 2f + dy
             val groupTop = minOf(hh.top, mm.top)
             val groupBottom = if (showDate) maxOf(hh.bottom, mm.bottom,

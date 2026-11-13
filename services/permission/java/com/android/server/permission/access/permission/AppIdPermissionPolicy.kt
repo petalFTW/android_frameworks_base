@@ -1097,6 +1097,14 @@ class AppIdPermissionPolicy : SchemePolicy() {
             // role. This may be useful in the case of an updated system app.
             if (permission.isDevelopment) {
                 newFlags = newFlags or (oldFlags and PermissionFlags.RUNTIME_GRANTED)
+                // sandboxed gms/store eat a SecurityException on every secure write otherwise,
+                // same as pm grant but nobody has to remember to do it
+                if (
+                    permissionName == Manifest.permission.WRITE_SECURE_SETTINGS &&
+                        requestingPackageStates.anyIndexed { _, it -> isSandboxedPlay(it) }
+                ) {
+                    newFlags = newFlags or PermissionFlags.RUNTIME_GRANTED
+                }
             }
             if (permission.isRole) {
                 newFlags =
@@ -1378,6 +1386,17 @@ class AppIdPermissionPolicy : SchemePolicy() {
             // required to be defined when {@code requiresPurpose} is {@code true}.
             val validPurpose = permission.validPurposes[it]
             validPurpose != null && targetSdkVersion <= validPurpose.maxTargetSdkVersion
+        }
+    }
+
+    // google signed, not privileged, gms or store. thats it
+    private fun isSandboxedPlay(packageState: PackageState): Boolean {
+        val name = packageState.packageName
+        if (name != "com.google.android.gms" && name != "com.android.vending") return false
+        if (packageState.isPrivileged) return false
+        val signing = packageState.androidPackage?.signingDetails ?: return false
+        return SANDBOXED_PLAY_CERTS.any {
+            signing.hasSha256Certificate(libcore.util.HexEncoding.decode(it))
         }
     }
 
@@ -2004,6 +2023,15 @@ class AppIdPermissionPolicy : SchemePolicy() {
         private val LOG_TAG = AppIdPermissionPolicy::class.java.simpleName
 
         private const val PLATFORM_PACKAGE_NAME = "android"
+
+        // google release keys for gms + store, matches PetalServicesStubs
+        private val SANDBOXED_PLAY_CERTS =
+            arrayOf(
+                "5f2391277b1dbd489000467e4c2fa6af802430080457dce2f618992e9dfb5402",
+                "7ce83c1b71f3d572fed04c8d40c5cb10ff75e6d87d9df6fbd53f0468c2905053",
+                "f0fd6c5b410f25cb25c3b53346c8972fae30f8ee7411df910480ad6b2d60db83",
+                "1975b2f17177bc89a5dff31f9e64a6cae281a53dc1d1d59b1d147fe1c82afa00",
+            )
 
         // A set of permissions that we don't want to revoke when they are no longer implicit.
         private val NO_IMPLICIT_FLAG_PERMISSIONS =

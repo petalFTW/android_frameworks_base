@@ -1852,7 +1852,14 @@ final class InstallPackageHelper {
                         // If the owning package is the system itself, we log but allow
                         // install to proceed; we fail the install on all other permission
                         // redefinitions.
-                        if (!sourcePackageName.equals("android")) {
+                        // gmscompat owns the gsf/c2dm normal perms on purpose, so the real gsf just
+                        // drops its copy instead of failing install with a dupe perm
+                        final boolean gmsCompatOwned = "app.grapheneos.gmscompat".equals(
+                                sourcePackageName)
+                                && ("com.google.android.gsf".equals(parsedPackage.getPackageName())
+                                        || "com.google.android.gms".equals(
+                                                parsedPackage.getPackageName()));
+                        if (!sourcePackageName.equals("android") && !gmsCompatOwned) {
                             throw new PrepareFailure(INSTALL_FAILED_DUPLICATE_PERMISSION,
                                     "Package "
                                             + parsedPackage.getPackageName()

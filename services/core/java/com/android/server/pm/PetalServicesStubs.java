@@ -6,7 +6,7 @@ import android.os.Bundle;
 import com.android.server.pm.pkg.AndroidPackage;
 
 // only the inert ROM shells get this escape hatch, never a running provider
-final class PetalServicesStubs {
+public final class PetalServicesStubs {
     private static final String MARKER = "org.petalos.services.PLACEHOLDER";
     private static final String[] GOOGLE_CERTS = {
             "7ce83c1b71f3d572fed04c8d40c5cb10ff75e6d87d9df6fbd53f0468c2905053",
@@ -30,6 +30,7 @@ final class PetalServicesStubs {
         switch (pkg.getPackageName()) {
             case "com.google.android.gms": module = "PetalGmsStub"; break;
             case "com.android.vending": module = "PetalPlayStoreStub"; break;
+            case "com.google.android.gsf": module = "PetalGsfStub"; break;
             default: return false;
         }
         String path = pkg.getBaseApkPath();
@@ -41,7 +42,7 @@ final class PetalServicesStubs {
         return metadata != null && metadata.getBoolean(MARKER, false);
     }
 
-    private static boolean isProviderSigned(String packageName, SigningDetails signer) {
+    public static boolean isProviderSigned(String packageName, SigningDetails signer) {
         if (signer == null || signer == SigningDetails.UNKNOWN) return false;
         if (ComputerEngine.isOfficialMicrogSignature(signer)) return true;
         if ("com.google.android.gms".equals(packageName) && signer.hasSha256Certificate(

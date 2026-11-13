@@ -92,7 +92,22 @@ class IslandController @Inject constructor(
     private val chargingSignalSource: ChargingSignalSource,
     private val extraKeySignalSource: ExtraKeySignalSource,
     private val miniNotifSource: com.android.systemui.island.render.IslandMiniNotifSource,
+    private val statusBarStateController: com.android.systemui.plugins.statusbar.StatusBarStateController,
 ) : CoreStartable {
+
+    // showOnAod existed and nothing ever read it, so every island blob sat on the aod. now it does
+    private val dozeListener =
+        object : com.android.systemui.plugins.statusbar.StatusBarStateController.StateListener {
+            override fun onDozingChanged(isDozing: Boolean) = applyDozeVisibility()
+            override fun onDozeAmountChanged(linear: Float, eased: Float) = applyDozeVisibility(eased)
+        }
+
+    private fun applyDozeVisibility(amount: Float = if (statusBarStateController.isDozing) 1f else 0f) {
+        val root = window?.rootView ?: return
+        val hide = !settings.showOnAod()
+        root.alpha = if (hide) 1f - amount.coerceIn(0f, 1f) else 1f
+        root.visibility = if (hide && amount >= 0.999f) View.INVISIBLE else View.VISIBLE
+    }
 
     private lateinit var geometry: IslandGeometry
     private var window: IslandWindow? = null
@@ -197,6 +212,7 @@ class IslandController @Inject constructor(
         )
         shadeExpansionStateManager.addStateListener(shadeStateListener)
         keyguardStateController.addCallback(keyguardStateCallback)
+        statusBarStateController.addCallback(dozeListener)
         scope.launch {
             settings.enabled.collect { enabled -> onEnabledChanged(enabled) }
         }
@@ -243,6 +259,7 @@ class IslandController @Inject constructor(
                 w.addToWindow()
                 w.rootView.viewTreeObserver.addOnPreDrawListener(coverageDrawListener)
                 applyTheme()
+                applyDozeVisibility()
                 notificationSignalSource.start()
                 calendarSignalSource.start()
                 mediaSignalSource.start()

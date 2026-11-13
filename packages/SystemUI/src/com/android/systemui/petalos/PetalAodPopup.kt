@@ -116,8 +116,8 @@ class PetalAodPopup @Inject constructor(
 
     private fun enabled() = Settings.Secure.getInt(context.contentResolver, KEY_ENABLED, 1) != 0
 
-    // 0 = pure black, 1 = follow the notification look
-    private fun styled() = Settings.Secure.getInt(context.contentResolver, KEY_STYLE, 1) == 1
+    // 0 = pure black (default, no card), 1 = follow the notification look
+    private fun styled() = Settings.Secure.getInt(context.contentResolver, KEY_STYLE, 0) == 1
 
     // just remembers the notif. the actual pulse comes from DozeTriggers, which does the prox check
     private fun maybeQueue(entry: NotificationEntry) {
@@ -194,9 +194,20 @@ class PetalAodPopup @Inject constructor(
         c.animate().alpha(1f).setDuration(FADE_MS).start()
     }
 
+    // sits where the user parked lockscreen notifs in depth studio, centre if they never touched it
     private fun cardLp() =
         FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            .apply { gravity = Gravity.CENTER }
+            .apply {
+                val pct = if (org.petalos.config.PetalConfig.isDepthEnabled(context))
+                    org.petalos.config.PetalConfig.getDepthNotificationStartPct(context)
+                else org.petalos.config.DepthNotificationPlacement.AUTOMATIC
+                if (pct == org.petalos.config.DepthNotificationPlacement.AUTOMATIC) {
+                    gravity = Gravity.CENTER
+                } else {
+                    gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                    topMargin = context.resources.displayMetrics.heightPixels * pct / 100
+                }
+            }
 
     private fun fadeOutAndRemove() {
         val c = card ?: run { teardown(); return }

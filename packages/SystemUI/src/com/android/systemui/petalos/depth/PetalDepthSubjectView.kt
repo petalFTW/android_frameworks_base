@@ -29,8 +29,11 @@ import com.android.systemui.res.R
 class PetalDepthSubjectView(context: Context) : View(context) {
 
     companion object {
-        // stay above every other view
-        const val LAYER_ELEVATION = 100f
+        // was 100 "stay above everything", which also meant above the fingerprint icon. elevation
+        // beats child order + translationZ, so the depth layers sit flat and z sorts them under
+        const val LAYER_ELEVATION = 0f
+        const val DEPTH_Z_SUBJECT = -1f
+        const val DEPTH_Z_CLOCK = -2f
     }
 
     private val paint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
@@ -98,5 +101,8 @@ class PetalDepthSubjectView(context: Context) : View(context) {
             endToEnd = androidx.constraintlayout.widget.ConstraintLayout.LayoutParams.PARENT_ID
         }
         cl.addView(this, lp)
+        // sections re-add their views on top whenever the blueprint rebuilds, so child order is
+        // a coin toss. negative z = always under the fingerprint icon and shortcuts, no matter what
+        translationZ = DEPTH_Z_SUBJECT
     }
 }

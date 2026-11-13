@@ -86,13 +86,15 @@ class PetalLockScreenMediaCover @Inject constructor(
     private val watched = HashMap<android.media.session.MediaSession.Token, Pair<MediaController, MediaController.Callback>>()
 
     // metadata hash a decode is already chewing on, so state spam doesnt restart it forever
-    private var pendingMetaHash = 0
+    private var pendingArtKey: String? = null
 
     // hash of what's already up, avoids redraws
-    private var appliedMetaHash = 0
+    private var appliedArtKey: String? = null
 
-    // last cover we wrote, so a track change can crossfade into the next one
-    private var lastCover: Bitmap? = null
+    // last cover we wrote. depth clock borrows it so frost/liquid show the sleeve, not the old wallpaper
+    @Volatile private var lastCover: Bitmap? = null
+
+    fun currentCover(): Bitmap? = if (coverApplied) lastCover else null
 
     // one io thread or strictmode yells
     private val applyExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
@@ -166,7 +168,7 @@ class PetalLockScreenMediaCover @Inject constructor(
             }
             sessionManager.removeOnActiveSessionsChangedListener(sessionListener)
             unwatchAll()
-            pendingMetaHash = 0
+            pendingArtKey = null
             restoreWallpaperAsync()
         }
     }
@@ -216,21 +218,25 @@ class PetalLockScreenMediaCover @Inject constructor(
             return
         }
         // hashCode skips bitmaps, so the late bitmap republish counts as the same track. good
-        val metaHash = metadata.hashCode()
-        if (coverApplied && metaHash == appliedMetaHash) return
-        if (metaHash == pendingMetaHash) return
         val embedded = metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART)
             ?: metadata.getBitmap(MediaMetadata.METADATA_KEY_ART)
-        val uri = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)?.let { Uri.parse(it) }
-            ?: metadata.getString(MediaMetadata.METADATA_KEY_ART_URI)?.let { Uri.parse(it) }
+        val uriString = metadata.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)
+            ?: metadata.getString(MediaMetadata.METADATA_KEY_ART_URI)
+        val uri = uriString?.let { Uri.parse(it) }
+        // key on the ART, not the whole metadata. media3 reposts duration/state fields every
+        // time you touch the controls, the old full hash changed each time -> redecode +
+        // 4 crossfade writes of a 2x jpeg = that lockscreen strobe
+        val metaHash = uriString?.let { "uri:$it" } ?: embedded?.let { bitmapKey(it) }
+        if (metaHash != null && coverApplied && metaHash == appliedArtKey) return
+        if (metaHash != null && metaHash == pendingArtKey) return
         if (uri == null) {
-            if (embedded != null) applyAsync { setLockWallpaper(embedded, metaHash) }
+            if (embedded != null && metaHash != null) applyAsync { setLockWallpaper(embedded, metaHash) }
             else restoreWallpaperAsync()
             return
         }
         // uri first: the session bitmap gets squashed to ~320dp by the framework and
         // looks like arse fullscreen. the big 2x jpeg only comes through the uri
-        pendingMetaHash = metaHash
+        pendingArtKey = metaHash
         val gen = applyGeneration.incrementAndGet()
         Thread {
             // https / no-grant uris dont open from here, fall back to whatever bitmap the
@@ -242,10 +248,10 @@ class PetalLockScreenMediaCover @Inject constructor(
                 }
                 ?: embedded
             mainExecutor.execute {
-                if (pendingMetaHash == metaHash) pendingMetaHash = 0
+                if (pendingArtKey == metaHash) pendingArtKey = null
                 if (enabled && gen == applyGeneration.get()) {
                     applyAsync {
-                        if (bitmap != null) setLockWallpaper(bitmap, metaHash)
+                        if (bitmap != null && metaHash != null) setLockWallpaper(bitmap, metaHash)
                         else restoreWallpaper()
                     }
                 }
@@ -265,7 +271,21 @@ class PetalLockScreenMediaCover @Inject constructor(
         applyAsync { restoreWallpaper() }
     }
 
-    private fun setLockWallpaper(bitmap: Bitmap, metaHash: Int) {
+    // binder hands us a fresh bitmap object every repost, so fingerprint a few pixels instead
+    private fun bitmapKey(b: Bitmap): String {
+        if (b.isRecycled || b.width <= 0 || b.height <= 0) return "bmp:dead"
+        // hardware bitmaps throw on getPixel, fall back to size only
+        val h = runCatching {
+            var acc = 17
+            for (y in 0 until 8) for (x in 0 until 8) {
+                acc = 31 * acc + b.getPixel(x * (b.width - 1) / 7, y * (b.height - 1) / 7)
+            }
+            acc
+        }.getOrDefault(0)
+        return "bmp:${b.width}x${b.height}:$h"
+    }
+
+    private fun setLockWallpaper(bitmap: Bitmap, metaHash: String) {
         runCatching {
             if (!coverApplied) {
                 // the backup is the original, never read live art for this
@@ -281,44 +301,22 @@ class PetalLockScreenMediaCover @Inject constructor(
                 }
             }
             val scaled = scaleToScreen(bitmap)
+            // same pixels already up (2x copy reposted under a new uri etc), dont rewrite it
+            val already = lastCover
+            if (coverApplied && already != null && already.sameAs(scaled)) {
+                appliedArtKey = metaHash
+                return
+            }
             // full-frame rect stops the service recentering
             val frame = Rect(0, 0, scaled.width, scaled.height)
-            val previous = lastCover
-            if (previous != null &&
-                previous.width == scaled.width &&
-                previous.height == scaled.height
-            ) {
-                // crossfade the incoming sleeve in over the outgoing one
-                fadeTo(scaled, frame)
-            } else {
-                wallpaperManager.setBitmap(scaled, frame, true, WallpaperManager.FLAG_LOCK)
-            }
+            // ONE write. the old "crossfade" was 4 full wallpaper writes back to back and every
+            // single one made keyguard redraw from scratch = strobe on every track change
+            wallpaperManager.setBitmap(scaled, frame, true, WallpaperManager.FLAG_LOCK)
             lastCover = scaled
             coverApplied = true
-            appliedMetaHash = metaHash
+            appliedArtKey = metaHash
         }.onFailure { Log.w(TAG, "Failed to set lock screen cover art", it) }
         mainExecutor.execute { notifyCoverStateChanged() }
-    }
-
-    // write a few blended frames so the lock wallpaper fades, not snaps
-    private fun fadeTo(target: Bitmap, frame: Rect) {
-        val from = lastCover ?: return
-        for (i in 1..FADE_STEPS) {
-            val t = i / FADE_STEPS.toFloat()
-            val blended = blend(from, target, t)
-            wallpaperManager.setBitmap(blended, frame, true, WallpaperManager.FLAG_LOCK)
-        }
-    }
-
-    private fun blend(from: Bitmap, to: Bitmap, t: Float): Bitmap {
-        val out = Bitmap.createBitmap(to.width, to.height, Bitmap.Config.ARGB_8888)
-        val canvas = android.graphics.Canvas(out)
-        canvas.drawBitmap(from, 0f, 0f, null)
-        val paint = android.graphics.Paint().apply {
-            alpha = (t * 255f).toInt().coerceIn(0, 255)
-        }
-        canvas.drawBitmap(to, 0f, 0f, paint)
-        return out
     }
 
     private fun restoreWallpaper() {
@@ -326,7 +324,7 @@ class PetalLockScreenMediaCover @Inject constructor(
         val hasBackup = backup.exists()
         if (!coverApplied && !hasBackup) return
         coverApplied = false
-        appliedMetaHash = 0
+        appliedArtKey = null
         lastCover = null
         val original = originalWallpaper ?: loadBackupBitmap()
         originalWallpaper = null
@@ -422,7 +420,5 @@ class PetalLockScreenMediaCover @Inject constructor(
     companion object {
         private const val TAG = "PetalLockMediaCover"
 
-        /** blended frames written when the cover changes, for the crossfade. */
-        private const val FADE_STEPS = 4
     }
 }
